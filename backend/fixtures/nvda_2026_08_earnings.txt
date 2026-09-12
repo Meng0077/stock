@@ -1,0 +1,21 @@
+【真实历史资料 / historical / 官方财报中文摘要 / 非实时行情】
+公司：NVIDIA Corporation（NASDAQ: NVDA）
+发布日期：2026-08-26
+报告期：2027 财年第二季度，截至 2026-07-26；不是 8 月单月业绩。
+来源：NVIDIA 投资者关系网站，NVIDIA Announces Financial Results for Second Quarter Fiscal 2027
+来源链接：https://investor.nvidia.com/news/press-release-details/2026/NVIDIA-Announces-Financial-Results-for-Second-Quarter-Fiscal-2027/default.aspx
+查阅日期：2026-09-10
+说明：以下为官方新闻稿部分数据的中文摘要，不是完整财报或逐字翻译。
+
+【已披露事实】
+[E1] 本季度营收为 962.21 亿美元，同比增长 106%，环比增长 18%。
+[E2] GAAP 毛利率为 75.0%，去年同期为 72.4%。
+[E3] GAAP 净利润为 596.88 亿美元，同比增长 126%；GAAP 稀释每股收益为 2.46 美元。
+[E4] 非 GAAP 稀释每股收益为 2.22 美元。GAAP 与非 GAAP 是不同口径，不应混用。
+
+【管理层预期，尚未实现】
+[E5] 公司预计下一季度营收为 1,080 亿美元，上下浮动 2%；该指引未假设来自中国的数据中心计算业务收入。
+
+【分析任务】
+仅依据上述 E1–E5，只概括营收和毛利率，并注明证据
+不要使用外部知识补充数字，不要编造行情或引用，不要根据本摘要直接给出买卖建议。
