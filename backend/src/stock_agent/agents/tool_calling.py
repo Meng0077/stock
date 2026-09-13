@@ -61,6 +61,7 @@ def execute_tool_and_return(
     run_id: str,
     tool_calls_executed: int,
     max_tools: int,
+    allowed_ids: set[str] | None = None,
 ) -> int:
     """执行本轮工具调用，将 assistant/tool 消息和安全事件写入本次运行状态。"""
     tool_calls = message.tool_calls or []
@@ -106,6 +107,11 @@ def execute_tool_and_return(
                 else:
                     response = {"ok": True, "data": result}
 
+        evidence_id = None
+        if response["ok"] and allowed_ids is not None:
+            evidence_id = f"E{len(allowed_ids) + 1}"
+            response["evidence_id"] = evidence_id
+
         if response["ok"]:
             events.append({
                 "type": "tool_succeeded",
@@ -131,5 +137,7 @@ def execute_tool_and_return(
             "tool_call_id": call.id,
             "content": json.dumps(response, ensure_ascii=False),
         })
+        if evidence_id is not None and allowed_ids is not None:
+            allowed_ids.add(evidence_id)
 
     return tool_calls_executed

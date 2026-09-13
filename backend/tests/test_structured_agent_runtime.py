@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 import importlib.util
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -55,8 +56,8 @@ def test_two_runs_keep_tool_messages_and_events_separate():
     agent = load_agent()
     initial_messages = deepcopy(agent.messages)
     final_json = (
-        '{"status":"insufficient_information","facts":[],"inferences":[],'
-        '"missing_information":["仍需核对证据"],"data_mode":"fixture"}'
+        '{"status":"completed","facts":[{"text":"已取得报价","evidence_ids":["E1"]}],'
+        '"inferences":[],"missing_information":[],"data_mode":"fixture"}'
     )
 
     def make_client(call_id):
@@ -101,7 +102,30 @@ def test_two_runs_keep_tool_messages_and_events_separate():
     assert len(first_requests[0]) == len(second_requests[0]) == len(initial_messages)
     assert first_requests[1][-1]["tool_call_id"] == "first-call"
     assert second_requests[1][-1]["tool_call_id"] == "second-call"
+    assert json.loads(first_requests[1][-1]["content"])["evidence_id"] == "E1"
+    assert json.loads(second_requests[1][-1]["content"])["evidence_id"] == "E1"
     assert {event["run_id"] for event in first_events} != {event["run_id"] for event in second_events}
+
+
+def test_final_answer_rejects_evidence_not_provided_in_this_run(capsys):
+    agent = load_agent()
+    final_json = (
+        '{"status":"completed","facts":[{"text":"已取得报价","evidence_ids":["E99"]}],'
+        '"inferences":[],"missing_information":[],"data_mode":"fixture"}'
+    )
+    response = SimpleNamespace(
+        choices=[SimpleNamespace(
+            message=CompletionMessage(role="assistant", content=final_json),
+            finish_reason="stop",
+        )],
+        usage=None,
+    )
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=lambda **kwargs: response))
+    )
+
+    assert agent.model_loop(client, "offline", "fake-key") == 1
+    assert "证据校验失败" in capsys.readouterr().err
 
 
 def test_main_returns_model_loop_status_and_closes_client(monkeypatch):

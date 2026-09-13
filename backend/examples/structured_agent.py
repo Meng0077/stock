@@ -15,6 +15,10 @@ TODO 6：完整正文先经过 Pydantic 校验，再检查证据 ID 和 data_mod
 工具调用与结构化输出若需分开请求，最终生成请求也计入模型轮数预算。
 TODO 7：分别标记离线样例与真实模型结果，记录所用输出方式和验证结果。
 
+Task 3：证据归属校验（详见 docs/day04/03_evidence_validation.md）。
+已实现：每次运行独立收集成功工具结果的 evidence_id；Pydantic 解析后
+检查引用归属与 fixture 模式，证据错误单独处理。
+
 后续任务 TODO：复用 D03 工具注册表与循环约束；格式修复最多一次；管理
 异步客户端、单工具超时、总时限、取消与清理；使用安全错误对象和事件记录。
 TODO：在 __main__ 下启动；导入本文件不得请求网络。
@@ -38,6 +42,7 @@ from dotenv import load_dotenv
 import os
 import uuid
 
+from stock_agent.agents.evidence_validation import EvidenceValidationError, validate_evidence
 from stock_agent.agents.tool_calling import (
     ToolCallProtocolError,
     build_tool_definitions,
@@ -79,6 +84,8 @@ def model_loop(client, model, api_key, max_round = MAX_MODEL_ROUNDS, max_tool = 
     if events is None:
         events = []
     run_messages = deepcopy(messages)
+    allowed_ids: set[str] = set()
+    expected_data_mode = "fixture"
     round = 0
     tool_calls_executed = 0
     run_id = str(uuid.uuid4())
@@ -125,6 +132,7 @@ def model_loop(client, model, api_key, max_round = MAX_MODEL_ROUNDS, max_tool = 
                     run_id=run_id,
                     tool_calls_executed=tool_calls_executed,
                     max_tools=max_tool,
+                    allowed_ids=allowed_ids,
                 )
             except ToolCallProtocolError as error:
                 print(f"工具调用协议错误：{error}", file=sys.stderr)
@@ -142,6 +150,11 @@ def model_loop(client, model, api_key, max_round = MAX_MODEL_ROUNDS, max_tool = 
                 result = ResearchOutput.model_validate_json(content)
             except ValidationError:
                 print("模型输出不符合 ResearchOutput", file=sys.stderr)
+                return 1
+            try:
+                validate_evidence(result, allowed_ids, expected_data_mode)
+            except EvidenceValidationError as error:
+                print(f"证据校验失败：{error}", file=sys.stderr)
                 return 1
             return 0
     return 1

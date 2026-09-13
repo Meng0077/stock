@@ -49,6 +49,39 @@ def test_tool_return_uses_only_the_given_run_state():
     assert {event["run_id"] for event in first_events} == {"first-run"}
     assert {event["run_id"] for event in second_events} == {"second-run"}
     assert json.loads(first_messages[-1]["content"])["ok"] is True
+    assert "evidence_id" not in json.loads(first_messages[-1]["content"])
+
+
+def test_evidence_ids_are_unique_and_only_assigned_to_successful_results():
+    calls = [
+        CompletionMessageToolCall(
+            id=call_id,
+            type="function",
+            function=Function(name=name, arguments=arguments),
+        )
+        for call_id, name, arguments in [
+            ("quote", "get_quote", '{"company_id":"NVDA"}'),
+            ("bad", "get_quote", "not-json"),
+            ("profile", "get_company_profile", '{"company_id":"NVDA"}'),
+        ]
+    ]
+    messages, events, allowed_ids = [], [], set()
+
+    count = execute_tool_and_return(
+        CompletionMessage(role="assistant", tool_calls=calls),
+        messages=messages,
+        events=events,
+        run_id="run-id",
+        tool_calls_executed=0,
+        max_tools=3,
+        allowed_ids=allowed_ids,
+    )
+
+    tool_messages = [message for message in messages if message["role"] == "tool"]
+    results = [json.loads(message["content"]) for message in tool_messages]
+    assert count == 2
+    assert [result.get("evidence_id") for result in results] == ["E1", None, "E2"]
+    assert allowed_ids == {"E1", "E2"}
 
 
 def test_duplicate_tool_ids_leave_run_state_untouched():
