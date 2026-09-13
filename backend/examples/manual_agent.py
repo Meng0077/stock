@@ -61,6 +61,8 @@ import sys
 from hello_model  import explain_api_error
 import argparse
 import json
+import time
+import uuid
 from typing import Literal
 from pydantic import ValidationError
 
@@ -130,7 +132,11 @@ def validate_tool_call_ids(tool_calls) -> None:
         ids_seen.add(call.id)
         
 # TODO：第 6 步，执行和回传。
-def execute_tool_and_return(message, tool_calls_executed: int, max_tools: int = MAX_TOOL_CALLS) -> int:
+def execute_tool_and_return(message, tool_calls_executed: int, max_tools: int = MAX_TOOL_CALLS, events=None, run_id=None) -> int:
+    if events is None:
+        events = []
+    if run_id is None:
+        run_id = str(uuid.uuid4())
     messages.append(message.model_dump(exclude_none=True, include={"role", "content", "tool_calls"}))
 
     def count_execution() -> None:
@@ -141,6 +147,13 @@ def execute_tool_and_return(message, tool_calls_executed: int, max_tools: int = 
         response = None
         
         call = message.tool_calls[idx]
+        event_tool_name = call.function.name if call.function.name in TOOL_REGISTRY else "unknown_tool"
+        events.append({
+            "type": "tool_requested",
+            "run_id": run_id,
+            "tool_call_id": call.id,
+            "tool": event_tool_name,
+        })
         try:
             args = json.loads(call.function.arguments)
         except json.JSONDecodeError:
@@ -170,74 +183,150 @@ def execute_tool_and_return(message, tool_calls_executed: int, max_tools: int = 
                         response = {"ok": False, "error": {"code": "tool_rejected", "message": "该工具目前只支持 NVDA 的本地教学数据。"}}
                     else:
                         response = {"ok": True, "data": result}
+        if response["ok"]:
+            events.append({
+                "type": "tool_succeeded",
+                "run_id": run_id,
+                "tool_call_id": call.id,
+                "tool": event_tool_name,
+                "company_id": response["data"]["company_id"],
+                "fixture_result": response["data"],
+                "tool_calls_executed": tool_calls_executed,
+            })
+        else:
+            events.append({
+                "type": "tool_failed",
+                "run_id": run_id,
+                "tool_call_id": call.id,
+                "tool": event_tool_name,
+                "tool_calls_executed": tool_calls_executed,
+                "code": response["error"]["code"],
+            })
+
         messages.append({
             "role": "tool",
             "tool_call_id": call.id,
             "content": json.dumps(response, ensure_ascii=False)
         })
+
     return tool_calls_executed
 
 # TODO：第 7 步，有限循环。
 # TODO：第 8 步，事件记录及 main 入口。
 
-def model_loop(client: ZhipuAiClient, model: str, api_key: str, max_rounds: int = MAX_MODEL_ROUNDS, max_tools: int = MAX_TOOL_CALLS) :
+def run_finished_events(events, round, tools, finally_status, token=None, run_id=None):
+    events.append({
+        "type": "run_finished",
+        "run_id": run_id,
+        "round": round,
+        "tools": tools,
+        "finally_status": finally_status,
+        "token": token if token is not None else "unavailable"
+    })
+
+
+def model_loop(client: ZhipuAiClient, model: str, api_key: str, max_rounds: int = MAX_MODEL_ROUNDS, max_tools: int = MAX_TOOL_CALLS, events=None) :
     """模型循环，限制轮数和工具调用次数。"""
+    if events is None:
+        events = []
+    run_id = str(uuid.uuid4())
     rounds = 0
     tool_calls_executed = 0
     
     response = None
     while rounds < max_rounds:
         rounds += 1
-        response = client.chat.completions.create(
-            model=model,
-            messages=messages,
-            tools=build_tool_definitions(),
-            thinking={"type": "disabled"},
-            max_tokens=1200,
-            # stream=False,
-        )
+        curEvent = {
+            "type": "model_request",
+            "run_id": run_id,
+            "round": rounds,
+            "token_usage": "unavailable",
+        }
+        events.append(curEvent)
+        request_started = time.perf_counter()
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                tools=build_tool_definitions(),
+                thinking={"type": "disabled"},
+                max_tokens=1200,
+                # stream=False,
+            )
+        except Exception:
+            run_finished_events(events, rounds, tool_calls_executed, "model_request_failed", run_id=run_id)
+            raise
+        finally:
+            curEvent["elapsed_ms"] = round((time.perf_counter() - request_started) * 1000, 3)
+
+        if response.usage is not None:
+            usage = {}
+            for field in ("prompt_tokens", "completion_tokens", "total_tokens"):
+                value = getattr(response.usage, field, None)
+                usage[field] = value if value is not None else "unavailable"
+            curEvent["token_usage"] = usage
                 
         if not response.choices:
             # 处理空响应
+            # curEvent.reason = "response_no_choices"
+            run_finished_events(events, rounds, tool_calls_executed, "response_no_choices", run_id=run_id)
             return 1
         choice = response.choices[0]
         message = choice.message
         if message.tool_calls:
             if rounds >= max_rounds:
                 print("模型请求了工具调用，但已达到最大轮数，结束循环。")
+                run_finished_events(events, rounds, tool_calls_executed, "over_max_rounds", run_id=run_id)
                 return 1
             if tool_calls_executed >= max_tools:
                 print("模型请求了工具调用，但已达到最大工具调用次数，结束循环。")
+                run_finished_events(events, rounds, tool_calls_executed, "tool_calls_executed", run_id=run_id)
                 return 1
             print("模型请求了工具调用：")
-            validate_tool_call_ids(message.tool_calls)
-            tool_calls_executed = execute_tool_and_return(message, tool_calls_executed, max_tools)
+            try:
+                validate_tool_call_ids(message.tool_calls)
+            except ToolCallProtocolError as error:
+                run_finished_events(events, rounds, tool_calls_executed, error.code, run_id=run_id)
+                raise
+            tool_calls_executed = execute_tool_and_return(message, tool_calls_executed, max_tools, events, run_id)
             if tool_calls_executed >= max_tools:
                 print("工具调用次数已达上限，结束循环。")
+                run_finished_events(events, rounds, tool_calls_executed, "tool_calls_executed", run_id=run_id)
                 return 1
             continue
         elif message.content and message.content.strip():
             if choice.finish_reason != "stop":
                 print("回答未正常结束，可能已达到输出上限，请勿当作完整分析。", file=sys.stderr)
+                # curEvent.reason = "somehow"
+                run_finished_events(events, rounds, tool_calls_executed, choice.finish_reason, run_id=run_id)
                 return 1
             print(message.content.replace(api_key, "[REDACTED]"))
             print("\nToken 用量：")
+
             if response.usage is None:
                 print("供应商未返回用量（不表示用量为零）。")
             else:
                 for field in ("prompt_tokens", "completion_tokens", "total_tokens"):
                     print(f"  {field}: {getattr(response.usage, field, None)}")
+            run_finished_events(events, rounds, tool_calls_executed, "success", getattr(response.usage, "total_tokens", None), run_id)
+
             return 0
         else:
             print("响应错误：模型没有返回工具调用或可用正文。", file=sys.stderr)
+            run_finished_events(events, rounds, tool_calls_executed, "no_content_or_tools", run_id=run_id)
             return 1
+    run_finished_events(events, rounds, tool_calls_executed, "model_round_budget_exhausted", run_id=run_id)
     return 1
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--preview", action="store_true", help="只显示模型输入，不发送请求")
+    parser.add_argument("--question", help="本次要询问的内容；不传则使用示例问题")
+    parser.add_argument("--record-events", type=Path, help="把本次真实调用的脱敏事件保存为 JSON")
     # parser.add_argument("--model", help="临时覆盖模型名称，可用于验证错误模型配置")
     args = parser.parse_args()
+    if args.question is not None:
+        messages[1]["content"] = args.question
     
     if args.preview:
         print("=== 模型输入 ===")
@@ -262,26 +351,34 @@ def main() -> int:
         print("配置错误：请填写 backend/.env 中的 ZHIPU_API_KEY 和 MODEL_NAME。", file=sys.stderr)
         return 1
     client = None
+    events = []
+    status = 1
     try:
         # 2. 发送一次请求：关闭自动重试和深度思考，限制输出长度。
         client = ZhipuAiClient(api_key=api_key, timeout=timeout, max_retries=0)
-        return model_loop(client, model, api_key)
+        status = model_loop(client, model, api_key, events=events)
     except APITimeoutError:
         print("请求超时：请检查网络或增加超时配置；远端请求可能仍在执行。", file=sys.stderr)
-        return 1
     except APIStatusError as error:
         print(explain_api_error(error), file=sys.stderr)
-        return 1
     except ToolCallProtocolError as error:
         print(f"协议错误：{error}", file=sys.stderr)
-        return 1
     except Exception:
         print("调用失败：请检查网络和依赖版本；原始异常已隐藏以保护密钥。", file=sys.stderr)
-        return 1
     finally:
+        if args.record_events is not None and events:
+            try:
+                args.record_events.write_text(
+                    json.dumps({"source": "real_api", "events": events}, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+            except OSError:
+                print("事件记录保存失败；请检查输出路径。", file=sys.stderr)
+                status = 1
         if client is not None:
             client.close()
-    
+    return status
+
 if __name__ == "__main__":
     raise SystemExit(main())
     # 仅显示工具声明，避免误调用模型。

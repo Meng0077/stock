@@ -1,0 +1,57 @@
+{
+  "source": "real_api",
+  "events": [
+    {
+      "type": "model_request",
+      "run_id": "8966aee1-2bb8-4f75-8d81-f521f25df2d4",
+      "round": 1,
+      "token_usage": {
+        "prompt_tokens": 384,
+        "completion_tokens": 24,
+        "total_tokens": 408
+      },
+      "elapsed_ms": 605.636
+    },
+    {
+      "type": "tool_requested",
+      "run_id": "8966aee1-2bb8-4f75-8d81-f521f25df2d4",
+      "tool_call_id": "call_-7263606669035171001",
+      "tool": "get_company_profile"
+    },
+    {
+      "type": "tool_succeeded",
+      "run_id": "8966aee1-2bb8-4f75-8d81-f521f25df2d4",
+      "tool_call_id": "call_-7263606669035171001",
+      "tool": "get_company_profile",
+      "company_id": "NVDA",
+      "fixture_result": {
+        "company_id": "NVDA",
+        "company_name": "NVIDIA（英伟达）",
+        "description": "教学用简化公司介绍：提供 GPU 及相关计算平台，用于图形处理和人工智能计算。",
+        "data_mode": "fixture",
+        "source": "本地教学模拟数据",
+        "as_of": "2026-09-11T09:00:00+08:00"
+      },
+      "tool_calls_executed": 1
+    },
+    {
+      "type": "model_request",
+      "run_id": "8966aee1-2bb8-4f75-8d81-f521f25df2d4",
+      "round": 2,
+      "token_usage": {
+        "prompt_tokens": 504,
+        "completion_tokens": 94,
+        "total_tokens": 598
+      },
+      "elapsed_ms": 1363.047
+    },
+    {
+      "type": "run_finished",
+      "run_id": "8966aee1-2bb8-4f75-8d81-f521f25df2d4",
+      "round": 2,
+      "tools": 1,
+      "finally_status": "success",
+      "token": 598
+    }
+  ]
+}

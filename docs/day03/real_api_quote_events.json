@@ -1,0 +1,58 @@
+{
+  "source": "real_api",
+  "events": [
+    {
+      "type": "model_request",
+      "run_id": "cc9d23a9-5f63-4ed9-b3bf-b88ed35d7231",
+      "round": 1,
+      "token_usage": {
+        "prompt_tokens": 383,
+        "completion_tokens": 22,
+        "total_tokens": 405
+      },
+      "elapsed_ms": 865.901
+    },
+    {
+      "type": "tool_requested",
+      "run_id": "cc9d23a9-5f63-4ed9-b3bf-b88ed35d7231",
+      "tool_call_id": "call_-7263643124717578425",
+      "tool": "get_quote"
+    },
+    {
+      "type": "tool_succeeded",
+      "run_id": "cc9d23a9-5f63-4ed9-b3bf-b88ed35d7231",
+      "tool_call_id": "call_-7263643124717578425",
+      "tool": "get_quote",
+      "company_id": "NVDA",
+      "fixture_result": {
+        "company_id": "NVDA",
+        "price": 100.0,
+        "currency": "USD",
+        "quoted_at": "2026-09-11T09:00:00+08:00",
+        "data_mode": "fixture",
+        "source": "本地教学模拟数据",
+        "note": "固定虚构报价，仅用于验证工具调用；报价时间也是预设的教学时间。"
+      },
+      "tool_calls_executed": 1
+    },
+    {
+      "type": "model_request",
+      "run_id": "cc9d23a9-5f63-4ed9-b3bf-b88ed35d7231",
+      "round": 2,
+      "token_usage": {
+        "prompt_tokens": 499,
+        "completion_tokens": 85,
+        "total_tokens": 584
+      },
+      "elapsed_ms": 1530.88
+    },
+    {
+      "type": "run_finished",
+      "run_id": "cc9d23a9-5f63-4ed9-b3bf-b88ed35d7231",
+      "round": 2,
+      "tools": 1,
+      "finally_status": "success",
+      "token": 584
+    }
+  ]
+}

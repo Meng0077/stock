@@ -1,0 +1,74 @@
+{
+  "source": "offline_simulation",
+  "scenario": "two_tools_then_final_answer",
+  "status": 0,
+  "events": [
+    {
+      "type": "model_request",
+      "run_id": "0fc701ab-b879-4174-9b33-9dd2123ce1b0",
+      "round": 1,
+      "token_usage": "unavailable",
+      "elapsed_ms": 0.493
+    },
+    {
+      "type": "tool_requested",
+      "run_id": "0fc701ab-b879-4174-9b33-9dd2123ce1b0",
+      "tool_call_id": "offline_quote",
+      "tool": "get_quote"
+    },
+    {
+      "type": "tool_succeeded",
+      "run_id": "0fc701ab-b879-4174-9b33-9dd2123ce1b0",
+      "tool_call_id": "offline_quote",
+      "tool": "get_quote",
+      "company_id": "NVDA",
+      "fixture_result": {
+        "company_id": "NVDA",
+        "price": 100.0,
+        "currency": "USD",
+        "quoted_at": "2026-09-11T09:00:00+08:00",
+        "data_mode": "fixture",
+        "source": "本地教学模拟数据",
+        "note": "固定虚构报价，仅用于验证工具调用；报价时间也是预设的教学时间。"
+      },
+      "tool_calls_executed": 1
+    },
+    {
+      "type": "tool_requested",
+      "run_id": "0fc701ab-b879-4174-9b33-9dd2123ce1b0",
+      "tool_call_id": "offline_profile",
+      "tool": "get_company_profile"
+    },
+    {
+      "type": "tool_succeeded",
+      "run_id": "0fc701ab-b879-4174-9b33-9dd2123ce1b0",
+      "tool_call_id": "offline_profile",
+      "tool": "get_company_profile",
+      "company_id": "NVDA",
+      "fixture_result": {
+        "company_id": "NVDA",
+        "company_name": "NVIDIA（英伟达）",
+        "description": "教学用简化公司介绍：提供 GPU 及相关计算平台，用于图形处理和人工智能计算。",
+        "data_mode": "fixture",
+        "source": "本地教学模拟数据",
+        "as_of": "2026-09-11T09:00:00+08:00"
+      },
+      "tool_calls_executed": 2
+    },
+    {
+      "type": "model_request",
+      "run_id": "0fc701ab-b879-4174-9b33-9dd2123ce1b0",
+      "round": 2,
+      "token_usage": "unavailable",
+      "elapsed_ms": 0.181
+    },
+    {
+      "type": "run_finished",
+      "run_id": "0fc701ab-b879-4174-9b33-9dd2123ce1b0",
+      "round": 2,
+      "tools": 2,
+      "finally_status": "success",
+      "token": "unavailable"
+    }
+  ]
+}

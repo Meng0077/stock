@@ -1,0 +1,20 @@
+{
+  "source": "real_api",
+  "events": [
+    {
+      "type": "model_request",
+      "run_id": "f7624e70-71e6-4ad7-aaa8-386520a4f6d7",
+      "round": 1,
+      "token_usage": "unavailable",
+      "elapsed_ms": 166.499
+    },
+    {
+      "type": "run_finished",
+      "run_id": "f7624e70-71e6-4ad7-aaa8-386520a4f6d7",
+      "round": 1,
+      "tools": 0,
+      "finally_status": "model_request_failed",
+      "token": "unavailable"
+    }
+  ]
+}
