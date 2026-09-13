@@ -1,30 +1,14 @@
 """D04 整合练习占位，按 docs/day04.md 实现。
 
 Task 2：请求与解析结构化输出（详见 docs/day04/02_structured_output.md）。
+TODO 2.2：验证真实模型能否在同一请求中组合工具调用与 JSON 模式；
+若不能，单独请求最终结果，并将该请求计入模型轮数预算。
+TODO 2.3：记录完整工具往返的真实模型结果，与离线样例分开标记。
 
-离线解析样例已放在 backend/tests/test_research_output.py：合法 JSON、非法 JSON、
-合法但缺字段，以及代码围栏包裹的文本。
-TODO 2 文档和本地 SDK 已核对：结果与来源见 docs/day04/02_structured_output.md；
-真实模型响应留待 TODO 7 验证。
-TODO 3：按已核对的官方文档使用 response_format={"type": "json_object"}
-构造请求，在提示中说明字段，并保留 ResearchOutput 的应用层校验。
-TODO 4 已实现：--preview 展示输入与 schema；不读取或打印密钥，不调用 API。
-TODO 5：检查响应是否无 choices、空正文、拒答或长度截断；这些情况都不能
-作为完整研究结果，也不应靠随意修补文本通过解析。
-TODO 6：完整正文先经过 Pydantic 校验，再检查证据 ID 和 data_mode；
-工具调用与结构化输出若需分开请求，最终生成请求也计入模型轮数预算。
-TODO 7：分别标记离线样例与真实模型结果，记录所用输出方式和验证结果。
-
-Task 3：证据归属校验（详见 docs/day04/03_evidence_validation.md）。
-已实现：每次运行独立收集成功工具结果的 evidence_id；Pydantic 解析后
-检查引用归属与 fixture 模式，证据错误单独处理。
-
-后续任务 TODO：复用 D03 工具注册表与循环约束；格式修复最多一次；管理
-异步客户端、单工具超时、总时限、取消与清理；使用安全错误对象和事件记录。
-TODO：在 __main__ 下启动；导入本文件不得请求网络。
+后续任务 TODO：管理异步客户端、单工具超时、总时限、取消与清理；
+使用安全错误对象和事件记录。
 
 运行约定：PYTHONPATH=backend/src python backend/examples/structured_agent.py --preview
-预览命令已实现；真实模型流程仍需完成后续验收。
 """
 
 
@@ -56,6 +40,14 @@ BACKEND = Path(__file__).resolve().parents[1]
 SYSTEM_PROMPT = "你是股票分析助手。仅依据用户提供的资料回答，区分事实、推断和缺失信息。"
 MAX_MODEL_ROUNDS=3
 MAX_TOOL_CALLS=4
+REFUSAL_PREFIXES = ("抱歉", "很抱歉", "对不起", "sorry", "i can't", "i cannot")
+
+
+def is_refusal_text(content: str | None) -> bool:
+    """识别没有结构化拒答字段时常见的纯文本拒答开头。"""
+    if not isinstance(content, str):
+        return False
+    return content.strip().casefold().startswith(REFUSAL_PREFIXES)
 
 
 messages = [
@@ -89,6 +81,7 @@ def model_loop(client, model, api_key, max_round = MAX_MODEL_ROUNDS, max_tool = 
     round = 0
     tool_calls_executed = 0
     run_id = str(uuid.uuid4())
+    repair_used = False
 
     while round < max_round:
         round += 1
@@ -116,8 +109,18 @@ def model_loop(client, model, api_key, max_round = MAX_MODEL_ROUNDS, max_tool = 
             print("模型没有返回结果")
             return 1
 
-        message = choices[0].message
+        choice = choices[0]
+        message = choice.message
+        if choice.finish_reason not in ("stop", "tool_calls"):
+            print("模型响应未正常完成", file=sys.stderr)
+            return 1
+        if getattr(message, "refusal", None) or is_refusal_text(message.content):
+            print("模型拒答", file=sys.stderr)
+            return 1
         if message.tool_calls:
+            if repair_used:
+                print('修复请求不该调用工具')
+                return 1
             if round >= max_round:
                 print("模型请求了工具调用，但已达到最大轮数，结束循环。")
                 return 1
@@ -141,15 +144,34 @@ def model_loop(client, model, api_key, max_round = MAX_MODEL_ROUNDS, max_tool = 
                 print("模型请求了工具调用，但已达到最大工具调用次数，结束循环。")
                 return 1
             continue
-        elif choices[0].finish_reason != "stop" or not message.content or not  message.content.strip():
+        elif choice.finish_reason != "stop" or not message.content or not message.content.strip():
             print("未正常完成 或 响应错误：模型没有返回工具调用或可用正文")
             return 1
         else:
             content = message.content
             try:
                 result = ResearchOutput.model_validate_json(content)
-            except ValidationError:
+            except ValidationError as error:
                 print("模型输出不符合 ResearchOutput", file=sys.stderr)
+
+                if not repair_used:
+                    repair_used = True
+                    errors = error.errors(
+                        include_input=False,
+                        include_context=False,
+                        include_url=False,
+                    )
+                    run_messages.append({
+                        "role": "user",
+                        "content":  json.dumps({
+                            "instruction": "仅修正上一条回答的 JSON 格式和字段；不要编造事实或证据。只输出 JSON 对象。",
+                            "original_answer": content,
+                            "schema": ResearchOutput.model_json_schema(),
+                            "errors": errors,
+                        }, ensure_ascii=False)
+                    })
+                    continue
+
                 return 1
             try:
                 validate_evidence(result, allowed_ids, expected_data_mode)

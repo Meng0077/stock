@@ -44,3 +44,9 @@ usage: prompt_tokens=424, completion_tokens=58, total_tokens=482
 ```
 
 `response` 是 SDK 的完成对象；应在检查 `choices`、结束原因和正文后，将 `message.content` 字符串交给 Pydantic。`data_mode` 是本次提示给模型的模式，完整流程仍需由程序与实际资料核对。
+
+## Task 2 后续验证（2026-09-13）
+
+- 离线响应边界已补齐：无 `choices`、空正文、截断，以及显式拒答标记或常见纯文本拒答，均直接失败且不进入格式修复。截断的工具调用也不会执行。当前锁定的 `zai-sdk==0.2.3` 消息类型没有独立的 `refusal` 字段，因此纯文本拒答采用常见开头识别，不能保证覆盖所有自然语言表达。
+- 用已配置的 `glm-4.7-flash` 和 `zai-sdk==0.2.3` 两次尝试 `tools` 与 `response_format={"type":"json_object"}` 同轮请求；两次均在首轮返回 `APIReachLimitError`（HTTP 429），没有拿到 `choices`，也没有执行工具。**这不能证明两种参数可组合，也不能证明不可组合。**
+- 因限额阻断，完整的“模型请求工具 → 本地 fixture 工具结果 → 结构化最终回答”尚未完成真实验收；Task 2.2、2.3 保留待验证。离线假客户端测试不替代真实服务结果。
