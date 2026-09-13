@@ -2,6 +2,8 @@
 
 实现位置：backend/src/stock_agent/schemas/research_output.py。
 
+本任务只定义 D04 的研究回答模型。新版计划后续另建行情、决策、用户组合和风险模型；不要为了最终投资建议提前把它们塞进 ResearchOutput。
+
 ## 你来完成
 
 使用 Pydantic 定义 EvidenceClaim 和 ResearchOutput：

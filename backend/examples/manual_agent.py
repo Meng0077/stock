@@ -51,7 +51,12 @@
 """
 import math
 
-from stock_agent.tools.registry import TOOL_REGISTRY, execute_tool
+from stock_agent.agents.tool_calling import (
+    ToolCallProtocolError,
+    build_tool_definitions,
+    execute_tool_and_return,
+)
+from stock_agent.tools.registry import TOOL_REGISTRY
 from pathlib import Path
 from zai import ZhipuAiClient
 from zai.core import APIStatusError, APITimeoutError
@@ -63,8 +68,6 @@ import argparse
 import json
 import time
 import uuid
-from typing import Literal
-from pydantic import ValidationError
 
 
 MAX_MODEL_ROUNDS=3
@@ -88,128 +91,6 @@ messages = [
 ]
 
 
-
-# build_tool_definitions：构造工具声明
-def build_tool_definitions():
-    """构造工具声明，返回列表。"""
-    descriptions = {
-        "get_quote": "只读工具；当前仅支持 NVDA，返回本地 fixture 教学模拟报价，不是真实行情。",
-        "get_company_profile": "只读工具；当前仅支持 NVDA，返回本地 fixture 公司名称和业务简介。",
-    }
-    tool_definitions = []
-    for key, info in TOOL_REGISTRY.items():
-        tool_definitions.append({
-            "type": "function",
-            "function": {
-                "name": key,
-                "description": descriptions[key],
-                "parameters": info["params_model"].model_json_schema(),
-            }
-        })
-    return tool_definitions
-
-class ToolCallProtocolError(ValueError):
-    """工具调用协议错误；只保存固定错误码和安全提示。"""
-
-    _MESSAGES = {
-        "missing_tool_call_id": "工具调用 ID 不能为空",
-        "duplicate_tool_call_id": "同一条消息中存在重复的工具调用 ID",
-    }
-
-    def __init__(self, code: Literal["missing_tool_call_id", "duplicate_tool_call_id"]):
-        self.code = code
-        super().__init__(self._MESSAGES[code])
-
-
-# 第 5 步：先检查整条消息的调用 ID，参数留到逐个回传时解析。
-def validate_tool_call_ids(tool_calls) -> None:
-    ids_seen = set()
-    for call in tool_calls:
-        if not isinstance(call.id, str) or not call.id.strip():
-            raise ToolCallProtocolError("missing_tool_call_id")
-        if call.id in ids_seen:
-            raise ToolCallProtocolError("duplicate_tool_call_id")
-        ids_seen.add(call.id)
-        
-# TODO：第 6 步，执行和回传。
-def execute_tool_and_return(message, tool_calls_executed: int, max_tools: int = MAX_TOOL_CALLS, events=None, run_id=None) -> int:
-    if events is None:
-        events = []
-    if run_id is None:
-        run_id = str(uuid.uuid4())
-    messages.append(message.model_dump(exclude_none=True, include={"role", "content", "tool_calls"}))
-
-    def count_execution() -> None:
-        nonlocal tool_calls_executed
-        tool_calls_executed += 1
-
-    for idx in range(len(message.tool_calls)):
-        response = None
-        
-        call = message.tool_calls[idx]
-        event_tool_name = call.function.name if call.function.name in TOOL_REGISTRY else "unknown_tool"
-        events.append({
-            "type": "tool_requested",
-            "run_id": run_id,
-            "tool_call_id": call.id,
-            "tool": event_tool_name,
-        })
-        try:
-            args = json.loads(call.function.arguments)
-        except json.JSONDecodeError:
-            response = {"ok": False, "error": {"code": "invalid_json", "message": "工具参数不是有效的 JSON。"}}
-        else:
-            if not isinstance(args, dict):
-                response = {"ok": False, "error": {"code": "invalid_arguments", "message": "工具参数必须是 JSON 对象。"}}
-            elif call.function.name not in TOOL_REGISTRY:
-                response = {"ok": False, "error": {"code": "unknown_tool", "message": "请求的工具不在白名单中。"}}
-            else:
-                
-                if tool_calls_executed >= max_tools:
-                    response = {
-                        "ok": False,
-                        # 成预算耗尽错误结果
-                        "error": {
-                            "code": "tool_call_budget_exhausted",
-                            "message": f"工具调用次数已达上限 {max_tools}，无法执行第 {idx + 1} 次调用。"
-                        }
-                    }
-                else:
-                    try:
-                        result = execute_tool(call.function.name, args, before_execute=count_execution)
-                    except ValidationError:
-                        response = {"ok": False, "error": {"code": "invalid_arguments", "message": "工具参数不符合要求。"}}
-                    except ValueError:
-                        response = {"ok": False, "error": {"code": "tool_rejected", "message": "该工具目前只支持 NVDA 的本地教学数据。"}}
-                    else:
-                        response = {"ok": True, "data": result}
-        if response["ok"]:
-            events.append({
-                "type": "tool_succeeded",
-                "run_id": run_id,
-                "tool_call_id": call.id,
-                "tool": event_tool_name,
-                "company_id": response["data"]["company_id"],
-                "fixture_result": response["data"],
-                "tool_calls_executed": tool_calls_executed,
-            })
-        else:
-            events.append({
-                "type": "tool_failed",
-                "run_id": run_id,
-                "tool_call_id": call.id,
-                "tool": event_tool_name,
-                "tool_calls_executed": tool_calls_executed,
-                "code": response["error"]["code"],
-            })
-
-        messages.append({
-            "role": "tool",
-            "tool_call_id": call.id,
-            "content": json.dumps(response, ensure_ascii=False)
-        })
-
-    return tool_calls_executed
 
 # TODO：第 7 步，有限循环。
 # TODO：第 8 步，事件记录及 main 入口。
@@ -284,11 +165,17 @@ def model_loop(client: ZhipuAiClient, model: str, api_key: str, max_rounds: int 
                 return 1
             print("模型请求了工具调用：")
             try:
-                validate_tool_call_ids(message.tool_calls)
+                tool_calls_executed = execute_tool_and_return(
+                    message,
+                    messages=messages,
+                    events=events,
+                    run_id=run_id,
+                    tool_calls_executed=tool_calls_executed,
+                    max_tools=max_tools,
+                )
             except ToolCallProtocolError as error:
                 run_finished_events(events, rounds, tool_calls_executed, error.code, run_id=run_id)
                 raise
-            tool_calls_executed = execute_tool_and_return(message, tool_calls_executed, max_tools, events, run_id)
             if tool_calls_executed >= max_tools:
                 print("工具调用次数已达上限，结束循环。")
                 run_finished_events(events, rounds, tool_calls_executed, "tool_calls_executed", run_id=run_id)
