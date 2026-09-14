@@ -1,5 +1,6 @@
 """D04 入口与工具协议的离线失败路径。"""
 
+import asyncio
 from copy import deepcopy
 import importlib.util
 import json
@@ -37,15 +38,15 @@ def test_duplicate_tool_id_stops_without_retry_or_mutating_template(capsys):
     )
     request_count = 0
 
-    def create(**kwargs):
+    async def create(**kwargs):
         nonlocal request_count
         request_count += 1
         return response
 
-    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+    client = SimpleNamespace(create=create)
     events = []
 
-    assert agent.model_loop(client, "offline", "fake-key", events=events) == 1
+    assert asyncio.run(agent.model_loop(client, "offline", "fake-key", events=events)) == 1
     assert request_count == 1
     assert events == []
     assert agent.messages == initial_messages
@@ -84,19 +85,19 @@ def test_two_runs_keep_tool_messages_and_events_separate():
         ]
         requests = []
 
-        def create(**kwargs):
+        async def create(**kwargs):
             requests.append(deepcopy(kwargs["messages"]))
             return responses[len(requests) - 1]
 
-        client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+        client = SimpleNamespace(create=create)
         return client, requests
 
     first_client, first_requests = make_client("first-call")
     second_client, second_requests = make_client("second-call")
     first_events, second_events = [], []
 
-    assert agent.model_loop(first_client, "offline", "fake-key", events=first_events) == 0
-    assert agent.model_loop(second_client, "offline", "fake-key", events=second_events) == 0
+    assert asyncio.run(agent.model_loop(first_client, "offline", "fake-key", events=first_events)) == 0
+    assert asyncio.run(agent.model_loop(second_client, "offline", "fake-key", events=second_events)) == 0
 
     assert agent.messages == initial_messages
     assert len(first_requests[0]) == len(second_requests[0]) == len(initial_messages)
@@ -120,11 +121,12 @@ def test_final_answer_rejects_evidence_not_provided_in_this_run(capsys):
         )],
         usage=None,
     )
-    client = SimpleNamespace(
-        chat=SimpleNamespace(completions=SimpleNamespace(create=lambda **kwargs: response))
-    )
+    async def create(**kwargs):
+        return response
 
-    assert agent.model_loop(client, "offline", "fake-key") == 1
+    client = SimpleNamespace(create=create)
+
+    assert asyncio.run(agent.model_loop(client, "offline", "fake-key")) == 1
     assert "证据校验失败" in capsys.readouterr().err
 
 
@@ -135,11 +137,20 @@ def test_main_returns_model_loop_status_and_closes_client(monkeypatch):
     monkeypatch.setenv("MODEL_NAME", "offline")
     monkeypatch.setenv("MODEL_TIMEOUT_SECONDS", "30")
     closed = []
-    fake_client = SimpleNamespace(close=lambda: closed.append(True))
-    monkeypatch.setattr(agent, "ZhipuAiClient", lambda **kwargs: fake_client)
-    monkeypatch.setattr(agent, "model_loop", lambda *args: 1)
+    class FakeClient:
+        async def __aenter__(self):
+            return self
 
-    assert agent.main([]) == 1
+        async def __aexit__(self, exc_type, exc_value, traceback):
+            closed.append(True)
+
+    async def fake_model_loop(*args, **kwargs):
+        return 1
+
+    monkeypatch.setattr(agent, "BigModelAsyncClient", lambda **kwargs: FakeClient())
+    monkeypatch.setattr(agent, "model_loop", fake_model_loop)
+
+    assert asyncio.run(agent.main([])) == 1
     assert closed == [True]
 
 
@@ -153,7 +164,7 @@ def test_client_creation_failure_is_safe_and_returns_failure(monkeypatch, capsys
     def fail_client(**kwargs):
         raise RuntimeError("sensitive-provider-detail")
 
-    monkeypatch.setattr(agent, "ZhipuAiClient", fail_client)
+    monkeypatch.setattr(agent, "BigModelAsyncClient", fail_client)
 
-    assert agent.main([]) == 1
+    assert asyncio.run(agent.main([])) == 1
     assert "sensitive-provider-detail" not in capsys.readouterr().err

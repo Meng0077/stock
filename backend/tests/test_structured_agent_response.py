@@ -1,5 +1,6 @@
 """D04 Task 2：不完整响应和拒答不能进入格式修复。"""
 
+import asyncio
 import importlib.util
 from pathlib import Path
 from types import SimpleNamespace
@@ -25,12 +26,12 @@ def load_agent():
 def run_once(choice, *, events=None):
     calls = []
 
-    def create(**kwargs):
+    async def create(**kwargs):
         calls.append(kwargs)
         return SimpleNamespace(choices=[] if choice is None else [choice], usage=None)
 
-    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
-    result = load_agent().model_loop(client, "offline", "fake-key", events=events)
+    client = SimpleNamespace(create=create)
+    result = asyncio.run(load_agent().model_loop(client, "offline", "fake-key", events=events))
     return result, calls
 
 

@@ -45,6 +45,7 @@ from stock_agent.tools.company import get_company_profile
 from stock_agent.tools.quote import get_quote
 from stock_agent.schemas.tool_params import CompanyToolParams
 from collections.abc import Callable
+import inspect
 
 # TODO：定义 TOOL_REGISTRY。
 TOOL_REGISTRY = {
@@ -60,7 +61,7 @@ TOOL_REGISTRY = {
 }
 
 # TODO：实现 execute_tool。
-def execute_tool(
+async def execute_tool(
     tool_name: str,
     arguments: dict,
     before_execute: Callable[[], None] | None = None,
@@ -72,4 +73,7 @@ def execute_tool(
     request = tool["params_model"].model_validate(arguments)
     if before_execute is not None:
         before_execute()
-    return tool["handler"](request.company_id)
+    result = tool["handler"](request.company_id)
+    if inspect.isawaitable(result):
+        return await result
+    return result

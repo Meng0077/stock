@@ -1,5 +1,6 @@
 """预览必须在读取密钥或创建模型客户端之前结束。"""
 
+import asyncio
 import importlib.util
 import json
 from pathlib import Path
@@ -17,10 +18,10 @@ def test_preview_is_offline_and_shows_request_contract(monkeypatch, capsys):
         pytest.fail("--preview 不应读取 .env 或创建模型客户端")
 
     monkeypatch.setattr(agent, "load_dotenv", unexpected_call)
-    monkeypatch.setattr(agent, "ZhipuAiClient", unexpected_call)
+    monkeypatch.setattr(agent, "BigModelAsyncClient", unexpected_call)
     monkeypatch.setenv("ZHIPU_API_KEY", "PREVIEW_TEST_SECRET")
 
-    assert agent.main(["--preview"]) == 0
+    assert asyncio.run(agent.main(["--preview"])) == 0
 
     preview = json.loads(capsys.readouterr().out)
     assert preview["response_format"] == {"type": "json_object"}

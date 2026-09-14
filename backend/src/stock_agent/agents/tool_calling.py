@@ -1,5 +1,6 @@
 """手写 Agent 共用的工具声明、协议检查和工具结果回传。"""
 
+import asyncio
 import json
 from collections.abc import Sequence
 from typing import Any, Literal
@@ -8,6 +9,8 @@ from pydantic import ValidationError
 from zai.types.chat.chat_completion import CompletionMessage, CompletionMessageToolCall
 
 from stock_agent.tools.registry import TOOL_REGISTRY, execute_tool
+
+TOOL_TIMEOUT_SECONDS = 5
 
 
 def build_tool_definitions() -> list[dict[str, Any]]:
@@ -53,7 +56,7 @@ def validate_tool_call_ids(tool_calls: Sequence[CompletionMessageToolCall]) -> N
         ids_seen.add(call.id)
 
 
-def execute_tool_and_return(
+async def execute_tool_and_return(
     message: CompletionMessage,
     *,
     messages: list[dict[str, Any]],
@@ -99,7 +102,15 @@ def execute_tool_and_return(
                 }
             else:
                 try:
-                    result = execute_tool(call.function.name, args, before_execute=count_execution)
+                    async with asyncio.timeout(TOOL_TIMEOUT_SECONDS) as tool_limit:
+                        result = await execute_tool(call.function.name, args, before_execute=count_execution)
+                except TimeoutError:
+                    if not tool_limit.expired():
+                        raise
+                    response = {
+                        "ok": False,
+                        "error": {"code": "tool_timeout", "message": "工具调用超时。"},
+                    }
                 except ValidationError:
                     response = {"ok": False, "error": {"code": "invalid_arguments", "message": "工具参数不符合要求。"}}
                 except ValueError:
