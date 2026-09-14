@@ -66,7 +66,9 @@ def test_model_request_timeout_stops_without_retry(capsys):
 
     assert result == 1
     assert len(calls) == 1
-    assert [event["type"] for event in events] == ["model_timeout"]
+    assert [event["type"] for event in events] == ["model_timeout", "run_finished"]
+    assert events[-1]["error"]["code"] == "model_timeout"
+    assert events[-1]["run_id"] == events[0]["run_id"]
     assert "模型请求超时" in capsys.readouterr().err
 
 
@@ -177,7 +179,147 @@ def test_http_status_error_is_reported_without_exposing_key(monkeypatch, capsys)
 
     monkeypatch.setattr(agent, "BigModelAsyncClient", fake_client)
 
-    assert asyncio.run(agent.main([])) == 1
+    events = []
+    assert asyncio.run(agent.main([], events=events)) == 1
     error = capsys.readouterr().err
     assert "模型服务返回错误状态" in error
     assert "PRIVATE_TEST_KEY" not in error
+    assert events[-1]["error"]["code"] == "model_error"
+    assert "PRIVATE_TEST_KEY" not in json.dumps(events)
+
+
+def test_main_cancellation_closes_client_records_event_and_stops_work(monkeypatch):
+    agent = load_agent()
+    monkeypatch.setattr(agent, "load_dotenv", lambda *args, **kwargs: None)
+    monkeypatch.setenv("ZHIPU_API_KEY", "fake-key")
+    monkeypatch.setenv("MODEL_NAME", "offline")
+    monkeypatch.setenv("MODEL_TIMEOUT_SECONDS", "30")
+
+    started = asyncio.Event()
+    timeline = []
+
+    class RecordedEvents(list):
+        def append(self, event):
+            timeline.append(event["type"])
+            super().append(event)
+
+    events = RecordedEvents()
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_value, traceback):
+            timeline.append("client_closed")
+
+    async def fake_model_loop(*args, **kwargs):
+        timeline.append("model_started")
+        started.set()
+        await asyncio.sleep(60)
+        timeline.append("next_request")
+        return 0
+
+    monkeypatch.setattr(agent, "BigModelAsyncClient", lambda **kwargs: FakeClient())
+    monkeypatch.setattr(agent, "model_loop", fake_model_loop)
+
+    async def run():
+        task = asyncio.create_task(agent.main([], events=events))
+        await started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert task.cancelled()
+        assert asyncio.all_tasks() == {asyncio.current_task()}
+
+    asyncio.run(run())
+    assert events[0] == {"type": "cancelled"}
+    assert events[1]["type"] == "run_finished"
+    assert events[1]["status"] == "cancelled"
+    assert events[1]["error"]["code"] == "cancelled"
+    assert timeline == ["model_started", "client_closed", "cancelled", "run_finished"]
+
+
+def test_main_total_timeout_records_total_timeout_after_client_closes(monkeypatch):
+    agent = load_agent()
+    monkeypatch.setattr(agent, "load_dotenv", lambda *args, **kwargs: None)
+    monkeypatch.setenv("ZHIPU_API_KEY", "fake-key")
+    monkeypatch.setenv("MODEL_NAME", "offline")
+    monkeypatch.setenv("MODEL_TIMEOUT_SECONDS", "30")
+    monkeypatch.setattr(agent, "TASK_TIMEOUT_SECONDS", 0.005)
+    closed = []
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_value, traceback):
+            closed.append(True)
+
+    async def wait_forever(*args, **kwargs):
+        await asyncio.sleep(60)
+
+    monkeypatch.setattr(agent, "BigModelAsyncClient", lambda **kwargs: FakeClient())
+    monkeypatch.setattr(agent, "model_loop", wait_forever)
+    events = []
+
+    assert asyncio.run(agent.main([], events=events)) == 1
+    assert closed == [True]
+    assert len(events) == 1
+    assert events[0]["status"] == "failed"
+    assert events[0]["error"]["code"] == "total_timeout"
+
+
+def test_unrelated_timeout_is_not_labeled_total_timeout(monkeypatch):
+    agent = load_agent()
+    monkeypatch.setattr(agent, "load_dotenv", lambda *args, **kwargs: None)
+    monkeypatch.setenv("ZHIPU_API_KEY", "fake-key")
+    monkeypatch.setenv("MODEL_NAME", "offline")
+    monkeypatch.setenv("MODEL_TIMEOUT_SECONDS", "30")
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_value, traceback):
+            pass
+
+    async def failing_loop(*args, **kwargs):
+        raise TimeoutError("PRIVATE_PROVIDER_ERROR")
+
+    monkeypatch.setattr(agent, "BigModelAsyncClient", lambda **kwargs: FakeClient())
+    monkeypatch.setattr(agent, "model_loop", failing_loop)
+    events = []
+
+    assert asyncio.run(agent.main([], events=events)) == 1
+    assert events[0]["error"]["code"] == "model_error"
+    assert "PRIVATE_PROVIDER_ERROR" not in json.dumps(events)
+
+
+def test_client_close_error_replaces_success_terminal_event(monkeypatch):
+    agent = load_agent()
+    monkeypatch.setattr(agent, "load_dotenv", lambda *args, **kwargs: None)
+    monkeypatch.setenv("ZHIPU_API_KEY", "fake-key")
+    monkeypatch.setenv("MODEL_NAME", "offline")
+    monkeypatch.setenv("MODEL_TIMEOUT_SECONDS", "30")
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_value, traceback):
+            raise RuntimeError("PRIVATE_PROVIDER_ERROR")
+
+    async def completed_loop(*args, events, **kwargs):
+        agent.record_run_finished(events, "same-run", "completed")
+        return 0
+
+    monkeypatch.setattr(agent, "BigModelAsyncClient", lambda **kwargs: FakeClient())
+    monkeypatch.setattr(agent, "model_loop", completed_loop)
+    events = []
+
+    assert asyncio.run(agent.main([], events=events)) == 1
+    assert len(events) == 1
+    assert events[0]["run_id"] == "same-run"
+    assert events[0]["status"] == "failed"
+    assert events[0]["error"]["code"] == "model_error"
+    assert "PRIVATE_PROVIDER_ERROR" not in json.dumps(events)

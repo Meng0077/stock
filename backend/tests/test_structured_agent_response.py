@@ -58,10 +58,12 @@ def test_plain_text_refusal_fails_without_repair(capsys):
         finish_reason="stop",
     )
 
-    result, calls = run_once(choice)
+    events = []
+    result, calls = run_once(choice, events=events)
 
     assert result == 1
     assert len(calls) == 1
+    assert events[0]["error"]["code"] == "model_refusal"
     assert "模型拒答" in capsys.readouterr().err
 
 
@@ -93,4 +95,6 @@ def test_truncated_tool_call_is_not_executed():
 
     assert result == 1
     assert len(calls) == 1
-    assert events == []
+    assert len(events) == 1
+    assert events[0]["type"] == "run_finished"
+    assert events[0]["error"]["code"] == "incomplete_response"

@@ -10,7 +10,9 @@ Task 5：模型请求、工具调用和整个任务分别限时；请求次数�
 Task 6：当前安装的 SDK 无原生 asyncio 客户端，使用 httpx.AsyncClient；
 真实模型的工具调用与 JSON 模式组合仍待 API 限额恢复后验证。
 
-后续任务 TODO：管理异步客户端、取消与清理，使用安全错误对象和事件记录。
+Task 7 后续：将离线取消与清理演示接入一次真实 Agent 任务；取消信号
+必须传播，客户端关闭后不能继续请求模型、调用工具或格式修复。
+Task 8：按下方 TODO 统一安全错误对象与运行终态事件。
 
 运行约定：PYTHONPATH=backend/src python backend/examples/structured_agent.py --preview
 """
@@ -32,12 +34,14 @@ import os
 import uuid
 
 from stock_agent.agents.evidence_validation import EvidenceValidationError, validate_evidence
+from stock_agent.agents.preview import format_preview
 from stock_agent.agents.tool_calling import (
     ToolCallProtocolError,
     build_tool_definitions,
     execute_tool_and_return,
 )
 from stock_agent.schemas.research_output import ResearchOutput
+from stock_agent.schemas.errors import ErrorCode, make_public_error
 
 
 
@@ -103,6 +107,30 @@ messages = [
     },
 ]
 
+
+def build_preview() -> dict[str, object]:
+    """构造离线请求预览；无入参，返回消息、工具和输出格式声明。"""
+    return {
+        "messages": deepcopy(messages),
+        "tools": build_tool_definitions(),
+        "response_format": {"type": "json_object"},
+        "research_output_schema": ResearchOutput.model_json_schema(),
+    }
+
+
+def record_run_finished(
+    events: list[dict[str, object]], run_id: str, status: str,
+    code: ErrorCode | None = None,
+) -> None:
+    """输入事件列表、运行 ID、状态和可选错误码；写入终态，返回 None。"""
+    event: dict[str, object] = {
+        "type": "run_finished", "run_id": run_id, "status": status,
+    }
+    if code is not None:
+        event["error"] = make_public_error(code).model_dump()
+    events.append(event)
+
+
 async def model_loop(
     client, model, api_key, max_round=MAX_MODEL_ROUNDS, max_tool=MAX_TOOL_CALLS,
     events=None, model_timeout=30.0,
@@ -116,6 +144,10 @@ async def model_loop(
     tool_calls_executed = 0
     run_id = str(uuid.uuid4())
     repair_used = False
+
+    def finish(status: str, code: ErrorCode | None = None) -> int:
+        record_run_finished(events, run_id, status, code)
+        return 0 if code is None else 1
 
     while round < max_round:
         round += 1
@@ -133,11 +165,11 @@ async def model_loop(
                 raise
             events.append({"type": "model_timeout", "run_id": run_id, "round": round})
             print("模型请求超时。", file=sys.stderr)
-            return 1
+            return finish("failed", "model_timeout")
         except httpx.TimeoutException:
             events.append({"type": "model_timeout", "run_id": run_id, "round": round})
             print("模型请求超时。", file=sys.stderr)
-            return 1
+            return finish("failed", "model_timeout")
 
         if getattr(response, "usage", None) is not None:
             usage = {}
@@ -154,26 +186,26 @@ async def model_loop(
         choices = response.choices
         if not choices:
             print("模型没有返回结果")
-            return 1
+            return finish("failed", "incomplete_response")
 
         choice = choices[0]
         message = choice.message
         if choice.finish_reason not in ("stop", "tool_calls"):
             print("模型响应未正常完成", file=sys.stderr)
-            return 1
+            return finish("failed", "incomplete_response")
         if getattr(message, "refusal", None) or is_refusal_text(message.content):
             print("模型拒答", file=sys.stderr)
-            return 1
+            return finish("failed", "model_refusal")
         if message.tool_calls:
             if repair_used:
                 print('修复请求不该调用工具')
-                return 1
+                return finish("failed", "invalid_tool_call")
             if round >= max_round:
                 print("模型请求了工具调用，但已达到最大轮数，结束循环。")
-                return 1
+                return finish("failed", "budget_exhausted")
             if tool_calls_executed >= max_tool:
                 print("模型请求了工具调用，但已达到最大工具调用次数，结束循环。")
-                return 1
+                return finish("failed", "budget_exhausted")
             try:
                 tool_calls_executed = await execute_tool_and_return(
                     message,
@@ -186,14 +218,14 @@ async def model_loop(
                 )
             except ToolCallProtocolError as error:
                 print(f"工具调用协议错误：{error}", file=sys.stderr)
-                return 1
+                return finish("failed", "invalid_tool_call")
             if tool_calls_executed >= max_tool:
                 print("模型请求了工具调用，但已达到最大工具调用次数，结束循环。")
-                return 1
+                return finish("failed", "budget_exhausted")
             continue
         elif choice.finish_reason != "stop" or not message.content or not message.content.strip():
             print("未正常完成 或 响应错误：模型没有返回工具调用或可用正文")
-            return 1
+            return finish("failed", "incomplete_response")
         else:
             content = message.content
             try:
@@ -202,6 +234,8 @@ async def model_loop(
                 print("模型输出不符合 ResearchOutput", file=sys.stderr)
 
                 if not repair_used:
+                    if round >= max_round:
+                        return finish("failed", "budget_exhausted")
                     repair_used = True
                     errors = error.errors(
                         include_input=False,
@@ -218,30 +252,35 @@ async def model_loop(
                         }, ensure_ascii=False)
                     })
                     continue
-
-                return 1
+                error_types = {item["type"] for item in error.errors()}
+                code: ErrorCode = (
+                    "invalid_json" if "json_invalid" in error_types else "invalid_output"
+                )
+                return finish("failed", code)
             try:
                 validate_evidence(result, allowed_ids, expected_data_mode)
             except EvidenceValidationError as error:
                 print(f"证据校验失败：{error}", file=sys.stderr)
-                return 1
-            return 0
-    return 1
+                code = (
+                    "data_mode_mismatch"
+                    if error.code == "data_mode_mismatch"
+                    else "invalid_evidence"
+                )
+                return finish("failed", code)
+            return finish(result.status)
+    return finish("failed", "budget_exhausted")
 
 
 
 async def main(argv: list[str] | None = None, *, events=None) -> int:
+    if events is None:
+        events = []
     parser = argparse.ArgumentParser(description="D04 结构化研究 Agent 练习")
     parser.add_argument("--preview", action="store_true", help="离线展示模型输入、工具声明和输出 schema")
     args = parser.parse_args(argv)
 
     if args.preview:
-        print(json.dumps({
-            "messages": messages,
-            "tools": build_tool_definitions(),
-            "response_format": {"type": "json_object"},
-            "research_output_schema": ResearchOutput.model_json_schema(),
-        }, ensure_ascii=False, indent=2))
+        print(format_preview(build_preview()))
         return 0
 
     load_dotenv(BACKEND / ".env", override=False)
@@ -259,29 +298,59 @@ async def main(argv: list[str] | None = None, *, events=None) -> int:
         return 1
 
     status = 1
+    event_start = len(events)
+    total_limit = None
+
+    def finish_main_error(status: str, code: ErrorCode) -> None:
+        """为本次 main 记录终态；若模型已记录，则更新那一条。"""
+        for event in events[event_start:]:
+            if event.get("type") == "run_finished":
+                event["status"] = status
+                event["error"] = make_public_error(code).model_dump()
+                return
+        run_id = next(
+            (event["run_id"] for event in reversed(events[event_start:]) if "run_id" in event),
+            None,
+        ) or str(uuid.uuid4())
+        record_run_finished(events, run_id, status, code)
+
     try:
         async with BigModelAsyncClient(api_key=api_key, timeout=timeout) as client:
-            async with asyncio.timeout(TASK_TIMEOUT_SECONDS):
+            async with asyncio.timeout(TASK_TIMEOUT_SECONDS) as total_limit:
                 status = await model_loop(
                     client, model, api_key, events=events, model_timeout=timeout
                 )
+    except asyncio.CancelledError:
+        events.append({"type": "cancelled"})
+        finish_main_error("cancelled", "cancelled")
+        raise
     except TimeoutError:
-        print("任务总时限已到。", file=sys.stderr)
+        if total_limit is not None and total_limit.expired():
+            print("任务总时限已到。", file=sys.stderr)
+            finish_main_error("failed", "total_timeout")
+        else:
+            print("模型调用失败；原始异常已隐藏。", file=sys.stderr)
+            finish_main_error("failed", "model_error")
         status = 1
     except httpx.TimeoutException:
         print("模型请求超时。", file=sys.stderr)
+        finish_main_error("failed", "model_timeout")
         status = 1
     except httpx.HTTPStatusError:
         print("模型服务返回错误状态。", file=sys.stderr)
+        finish_main_error("failed", "model_error")
         status = 1
     except httpx.RequestError:
         print("模型连接失败。", file=sys.stderr)
+        finish_main_error("failed", "model_error")
         status = 1
     except (ValueError, ValidationError):
         print("模型响应解析失败。", file=sys.stderr)
+        finish_main_error("failed", "model_error")
         status = 1
     except Exception:
         print("模型调用失败；原始异常已隐藏。", file=sys.stderr)
+        finish_main_error("failed", "model_error")
         status = 1
     return status
 

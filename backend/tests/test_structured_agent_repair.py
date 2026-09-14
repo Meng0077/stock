@@ -55,9 +55,12 @@ def fake_client(*responses):
 
 def test_valid_first_answer_needs_no_repair():
     client, requests = fake_client(response(VALID_OUTPUT))
+    events = []
 
-    assert asyncio.run(load_agent().model_loop(client, "offline", "fake-key")) == 0
+    assert asyncio.run(load_agent().model_loop(client, "offline", "fake-key", events=events)) == 0
     assert len(requests) == 1
+    assert events[0]["status"] == "insufficient_information"
+    assert "error" not in events[0]
 
 
 def test_structure_error_gets_one_repair_with_safe_error_details():
@@ -78,23 +81,51 @@ def test_structure_error_gets_one_repair_with_safe_error_details():
 
 def test_second_structure_error_stops_without_third_request():
     client, requests = fake_client(response(MISSING_FIELD_OUTPUT), response(MISSING_FIELD_OUTPUT))
+    events = []
 
-    assert asyncio.run(load_agent().model_loop(client, "offline", "fake-key")) == 1
+    assert asyncio.run(load_agent().model_loop(client, "offline", "fake-key", events=events)) == 1
     assert len(requests) == 2
+    assert events[0]["error"]["code"] == "invalid_output"
+    assert "PRIVATE_MARKER" not in json.dumps(events)
 
 
 def test_exhausted_model_budget_prevents_repair_request():
     client, requests = fake_client(response(MISSING_FIELD_OUTPUT))
+    events = []
 
-    assert asyncio.run(load_agent().model_loop(client, "offline", "fake-key", max_round=1)) == 1
+    assert asyncio.run(load_agent().model_loop(
+        client, "offline", "fake-key", max_round=1, events=events
+    )) == 1
     assert len(requests) == 1
+    assert events[0]["error"]["code"] == "budget_exhausted"
 
 
 def test_invalid_evidence_does_not_trigger_format_repair():
     client, requests = fake_client(response(INVALID_EVIDENCE_OUTPUT))
+    events = []
 
-    assert asyncio.run(load_agent().model_loop(client, "offline", "fake-key")) == 1
+    assert asyncio.run(load_agent().model_loop(client, "offline", "fake-key", events=events)) == 1
     assert len(requests) == 1
+    assert events[0]["error"]["code"] == "invalid_evidence"
+
+
+def test_second_invalid_json_records_syntax_error_without_third_request():
+    client, requests = fake_client(response("```json\n{}\n```"), response("not-json"))
+    events = []
+
+    assert asyncio.run(load_agent().model_loop(client, "offline", "fake-key", events=events)) == 1
+    assert len(requests) == 2
+    assert events[0]["error"]["code"] == "invalid_json"
+
+
+def test_data_mode_mismatch_is_distinct_from_unknown_evidence():
+    live_output = VALID_OUTPUT.replace('"fixture"', '"live"')
+    client, requests = fake_client(response(live_output))
+    events = []
+
+    assert asyncio.run(load_agent().model_loop(client, "offline", "fake-key", events=events)) == 1
+    assert len(requests) == 1
+    assert events[0]["error"]["code"] == "data_mode_mismatch"
 
 
 def test_repair_answer_cannot_request_tools():
@@ -108,4 +139,6 @@ def test_repair_answer_cannot_request_tools():
 
     assert asyncio.run(load_agent().model_loop(client, "offline", "fake-key", events=events)) == 1
     assert len(requests) == 2
-    assert events == []
+    assert len(events) == 1
+    assert events[0]["type"] == "run_finished"
+    assert events[0]["error"]["code"] == "invalid_tool_call"

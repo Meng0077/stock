@@ -85,3 +85,37 @@ def test_unrelated_timeout_error_is_not_labeled_as_tool_timeout():
         asyncio.run(example.timeout_demo(
             tool_timeout=1, task_timeout=1, steps=(("failing", failing_tool),)
         ))
+
+
+def test_cancellation_waits_for_cleanup_and_stops_next_step(monkeypatch):
+    example = load_example()
+    monkeypatch.setattr(example, "SLOW_TIME", 60)
+
+    async def run():
+        tasks_before = asyncio.all_tasks()
+        outcome = await example.cancellation_demo()
+        assert asyncio.all_tasks() == tasks_before
+        return outcome
+
+    assert asyncio.run(run()) == {
+        "status": "cancelled",
+        "events": ["started", "cleanup", "cancelled"],
+        "calls": [],
+        "task_cancelled": True,
+    }
+
+
+def test_cancelling_completed_work_does_not_change_its_result(monkeypatch):
+    example = load_example()
+    monkeypatch.setattr(example, "SLOW_TIME", 0)
+
+    async def run():
+        started = asyncio.Event()
+        events = []
+        task = asyncio.create_task(example.slow_work(started, events))
+        await task
+        assert task.cancel() is False
+        await task
+        return events, task.cancelled()
+
+    assert asyncio.run(run()) == (["started", "end", "cleanup"], False)

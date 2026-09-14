@@ -51,6 +51,7 @@
 """
 import math
 
+from stock_agent.agents.preview import format_preview
 from stock_agent.agents.tool_calling import (
     ToolCallProtocolError,
     build_tool_definitions,
@@ -217,9 +218,9 @@ def main() -> int:
     
     if args.preview:
         print("=== 模型输入 ===")
-        print(json.dumps(messages, indent=2, ensure_ascii=False))
+        print(format_preview(messages))
         print("\n=== 工具声明 ===")
-        print(json.dumps(build_tool_definitions(), indent=2, ensure_ascii=False))
+        print(format_preview(build_tool_definitions()))
         return 0
     
     

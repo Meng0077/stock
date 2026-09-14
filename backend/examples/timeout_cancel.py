@@ -2,8 +2,7 @@
 
 Task 5：离线演示单工具超时与一次任务共用的总时限。
 
-Task 7 后续：create_task -> cancel -> await；在 finally 记录清理，
-确认取消后无新调用。最终用 asyncio.run(main()) 启动，不使用密钥或网络。
+Task 7：离线演示取消、等待终态和清理；不使用密钥或网络。
 """
 
 import asyncio
@@ -78,6 +77,8 @@ async def timeout_demo(
                 if total_limit.expired():
                     raise TimeoutError
                 results.append(result)
+    except asyncio.CancelledError:
+        raise
     except TimeoutError:
         if not total_limit.expired():
             raise
@@ -92,5 +93,53 @@ async def timeout_demo(
     }
 
 
+async def slow_work(started: asyncio.Event, events: list[str]) -> None:
+    """通知调用者后等待；退出时记录 cleanup，并向外传播取消。"""
+    try:
+        events.append("started")
+        started.set()
+        await asyncio.sleep(SLOW_TIME)
+        events.append("end")
+    finally:
+        events.append("cleanup")
+
+
+async def cancellation_demo() -> dict[str, object]:
+    """取消慢任务并等待清理；记录是否进入后续步骤。"""
+    events: list[str] = []
+    calls: list[str] = []
+    started = asyncio.Event()
+    task = asyncio.create_task(slow_work(started, events))
+    await started.wait()
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        events.append("cancelled")
+        status = "cancelled"
+    else:
+        calls.append("next_call")
+        status = "completed"
+    return {
+        "status": status,
+        "events": events,
+        "calls": calls,
+        "task_cancelled": task.cancelled(),
+    }
+
+
+async def main() -> None:
+    """依次打印超时演示和取消演示的结果。"""
+    print(await timeout_demo())
+    task = asyncio.create_task(timeout_demo())
+
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        print('------')
+    print(await cancellation_demo())
+
+
 if __name__ == "__main__":
-    print(asyncio.run(timeout_demo()))
+    asyncio.run(main())

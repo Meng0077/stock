@@ -48,7 +48,9 @@ def test_duplicate_tool_id_stops_without_retry_or_mutating_template(capsys):
 
     assert asyncio.run(agent.model_loop(client, "offline", "fake-key", events=events)) == 1
     assert request_count == 1
-    assert events == []
+    assert len(events) == 1
+    assert events[0]["type"] == "run_finished"
+    assert events[0]["error"]["code"] == "invalid_tool_call"
     assert agent.messages == initial_messages
     assert "工具调用协议错误" in capsys.readouterr().err
 
@@ -106,6 +108,8 @@ def test_two_runs_keep_tool_messages_and_events_separate():
     assert json.loads(first_requests[1][-1]["content"])["evidence_id"] == "E1"
     assert json.loads(second_requests[1][-1]["content"])["evidence_id"] == "E1"
     assert {event["run_id"] for event in first_events} != {event["run_id"] for event in second_events}
+    assert first_events[-1]["status"] == second_events[-1]["status"] == "completed"
+    assert not any("error" in event for event in (first_events[-1], second_events[-1]))
 
 
 def test_final_answer_rejects_evidence_not_provided_in_this_run(capsys):
