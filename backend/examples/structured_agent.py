@@ -28,8 +28,6 @@ import sys
 
 import httpx
 from pydantic import ValidationError
-# from zai.types.chat.chat_completion import Completion
-from dotenv import load_dotenv
 import os
 import uuid
 
@@ -53,35 +51,6 @@ MAX_TOOL_CALLS=4
 MAX_OUTPUT_TOKENS = 5000
 TASK_TIMEOUT_SECONDS = 320
 REFUSAL_PREFIXES = ("抱歉", "很抱歉", "对不起", "sorry", "i can't", "i cannot")
-
-
-# class BigModelAsyncClient:
-#     """通过普通 HTTP 对话接口发送可取消的异步请求。"""
-
-#     def __init__(self, *, api_key: str, timeout: float, transport=None):
-#         self._http = httpx.AsyncClient(
-#             base_url="https://open.bigmodel.cn/api/paas/v4/",
-#             headers={"Authorization": f"Bearer {api_key}"},
-#             timeout=timeout,
-#             transport=transport,
-#         )
-
-#     async def __aenter__(self):
-#         await self._http.__aenter__()
-#         return self
-
-#     async def __aexit__(self, exc_type, exc_value, traceback):
-#         await self._http.__aexit__(exc_type, exc_value, traceback)
-
-#     async def create(self, **kwargs):
-#         response = await self._http.post("chat/completions", json=kwargs)
-#         print('_______XXXXXXXX!!!!!!')
-        
-        
-#         response.raise_for_status()
-#         print('_______XXXXXXXX!!!!!!')
-        
-#         return Completion.model_validate(response.json())
 
 
 def is_refusal_text(content: str | None) -> bool:
@@ -157,12 +126,11 @@ async def model_loop(
             result_sink["messages"] = deepcopy(run_messages)
         record_run_finished(events, run_id, status, code)
         return 0 if code is None else 1
+
     while round < max_round:
         round += 1
         try:
-            print('(((((((())))))))')
             async with asyncio.timeout(model_timeout) as request_limit:
-                print('(((((((())))))))')
                 response = await client.create(
                     model=model,
                     messages=run_messages,
@@ -170,25 +138,17 @@ async def model_loop(
                     response_format={"type": "json_object"},
                     max_tokens=MAX_OUTPUT_TOKENS,
                 )
-                print('NNNNNNNN')
         except TimeoutError:
-            print('+++++++')
             if not request_limit.expired():
                 raise
             events.append({"type": "model_timeout", "run_id": run_id, "round": round})
             print("模型请求超时。", file=sys.stderr)
             return finish("failed", "model_timeout")
         except httpx.TimeoutException:
-            print('+++++++!!!!!!')
-            
             events.append({"type": "model_timeout", "run_id": run_id, "round": round})
             print("模型请求超时。", file=sys.stderr)
             return finish("failed", "model_timeout")
-        except Exception as e:
-            print('+++++++!!!!!!', e)
-            
-        
-        print('_______', response)
+
         if getattr(response, "usage", None) is not None:
             usage = {}
             for field in ("prompt_tokens", "completion_tokens", "total_tokens"):
@@ -304,6 +264,10 @@ async def main(argv: list[str] | None = None, *, events=None) -> int:
     
     config = get_llm_config(BACKEND / ".env")
     if not config:
+        print(
+            "配置错误：请设置受支持的 LLM_PROVIDER、对应 API Key 和 MODEL_NAME。",
+            file=sys.stderr,
+        )
         return 1
     
     try:
@@ -332,7 +296,11 @@ async def main(argv: list[str] | None = None, *, events=None) -> int:
         record_run_finished(events, run_id, status, code)
 
     try:
-        async with LLMClient(provider=config.provider, api_key=config.api_key, timeout=timeout) as client:
+        async with LLMClient(
+            provider=config.provider,
+            api_key=config.api_key,
+            timeout=timeout,
+        ) as client:
             async with asyncio.timeout(TASK_TIMEOUT_SECONDS) as total_limit:
                 status = await model_loop(
                     client, config.model, events=events, model_timeout=timeout

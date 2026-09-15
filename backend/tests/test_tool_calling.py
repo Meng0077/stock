@@ -4,7 +4,11 @@ import asyncio
 import json
 
 import pytest
-from zai.types.chat.chat_completion import CompletionMessage, CompletionMessageToolCall, Function
+from stock_agent.llm_client import (
+    LLMFunction as Function,
+    LLMMessage as CompletionMessage,
+    LLMToolCall as CompletionMessageToolCall,
+)
 
 from stock_agent.agents.tool_calling import ToolCallProtocolError, execute_tool_and_return
 

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
+from os import PathLike
 from typing import Any, Literal
 
 import httpx
@@ -8,10 +10,6 @@ from pydantic import BaseModel, ConfigDict
 
 from dotenv import load_dotenv
 
-
-# -------------------------
-# 统一响应结构
-# -------------------------
 
 class LLMFunction(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -66,10 +64,6 @@ class LLMCompletion(BaseModel):
     usage: LLMUsage | None = None
 
 
-# -------------------------
-# Client
-# -------------------------
-
 Provider = Literal["zhipu", "deepseek"]
 
 
@@ -84,14 +78,14 @@ class LLMClient:
         timeout: float,
         transport=None,
     ):
-        self.provider = provider
+        self.provider: Provider = provider
 
         if provider == "zhipu":
             base_url = "https://open.bigmodel.cn/api/paas/v4/"
         elif provider == "deepseek":
             base_url = "https://api.deepseek.com/"
         else:
-            raise ValueError(f"Unsupported LLM provider: {provider}")
+            raise ValueError(f"不支持的 LLM provider：{provider}")
 
         self._http = httpx.AsyncClient(
             base_url=base_url,
@@ -146,26 +140,21 @@ class LLMClient:
         )
 
 
-from dataclasses import dataclass
-import os
-
-from dotenv import load_dotenv
-
-
 @dataclass(frozen=True)
 class LLMConfig:
-    provider: str
+    provider: Provider
     api_key: str
     model: str
 
 
-def get_llm_config(env_path) -> LLMConfig | None:
+def get_llm_config(env_path: str | PathLike[str]) -> LLMConfig | None:
+    """读取 provider、对应密钥和模型名；配置不完整时返回 None。"""
     load_dotenv(env_path, override=False)
 
     provider = os.getenv(
         "LLM_PROVIDER",
         "deepseek",
-    ).strip()
+    ).strip().lower()
 
     model = os.getenv(
         "MODEL_NAME",

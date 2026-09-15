@@ -17,9 +17,9 @@ def test_preview_is_offline_and_shows_request_contract(monkeypatch, capsys):
     def unexpected_call(*args, **kwargs):
         pytest.fail("--preview 不应读取 .env 或创建模型客户端")
 
-    monkeypatch.setattr(agent, "load_dotenv", unexpected_call)
-    monkeypatch.setattr(agent, "BigModelAsyncClient", unexpected_call)
-    monkeypatch.setenv("ZHIPU_API_KEY", "PREVIEW_TEST_SECRET")
+    monkeypatch.setattr(agent, "get_llm_config", unexpected_call)
+    monkeypatch.setattr(agent, "LLMClient", unexpected_call)
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "PREVIEW_TEST_SECRET")
 
     assert asyncio.run(agent.main(["--preview"])) == 0
 

@@ -7,7 +7,11 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-from zai.types.chat.chat_completion import CompletionMessage, CompletionMessageToolCall, Function
+from stock_agent.llm_client import (
+    LLMFunction as Function,
+    LLMMessage as CompletionMessage,
+    LLMToolCall as CompletionMessageToolCall,
+)
 
 
 VALID_OUTPUT = (
@@ -57,7 +61,7 @@ def test_valid_first_answer_needs_no_repair():
     client, requests = fake_client(response(VALID_OUTPUT))
     events = []
 
-    assert asyncio.run(load_agent().model_loop(client, "offline", "fake-key", events=events)) == 0
+    assert asyncio.run(load_agent().model_loop(client, "offline", events=events)) == 0
     assert len(requests) == 1
     assert events[0]["status"] == "insufficient_information"
     assert "error" not in events[0]
@@ -66,7 +70,7 @@ def test_valid_first_answer_needs_no_repair():
 def test_structure_error_gets_one_repair_with_safe_error_details():
     client, requests = fake_client(response(MISSING_FIELD_OUTPUT), response(VALID_OUTPUT))
 
-    assert asyncio.run(load_agent().model_loop(client, "offline", "fake-key")) == 0
+    assert asyncio.run(load_agent().model_loop(client, "offline")) == 0
     assert len(requests) == 2
     repair_prompt = json.loads(requests[1][-1]["content"])
     assert repair_prompt["original_answer"] == MISSING_FIELD_OUTPUT
@@ -83,7 +87,7 @@ def test_second_structure_error_stops_without_third_request():
     client, requests = fake_client(response(MISSING_FIELD_OUTPUT), response(MISSING_FIELD_OUTPUT))
     events = []
 
-    assert asyncio.run(load_agent().model_loop(client, "offline", "fake-key", events=events)) == 1
+    assert asyncio.run(load_agent().model_loop(client, "offline", events=events)) == 1
     assert len(requests) == 2
     assert events[0]["error"]["code"] == "invalid_output"
     assert "PRIVATE_MARKER" not in json.dumps(events)
@@ -94,7 +98,7 @@ def test_exhausted_model_budget_prevents_repair_request():
     events = []
 
     assert asyncio.run(load_agent().model_loop(
-        client, "offline", "fake-key", max_round=1, events=events
+        client, "offline", max_round=1, events=events
     )) == 1
     assert len(requests) == 1
     assert events[0]["error"]["code"] == "budget_exhausted"
@@ -104,7 +108,7 @@ def test_invalid_evidence_does_not_trigger_format_repair():
     client, requests = fake_client(response(INVALID_EVIDENCE_OUTPUT))
     events = []
 
-    assert asyncio.run(load_agent().model_loop(client, "offline", "fake-key", events=events)) == 1
+    assert asyncio.run(load_agent().model_loop(client, "offline", events=events)) == 1
     assert len(requests) == 1
     assert events[0]["error"]["code"] == "invalid_evidence"
 
@@ -113,7 +117,7 @@ def test_second_invalid_json_records_syntax_error_without_third_request():
     client, requests = fake_client(response("```json\n{}\n```"), response("not-json"))
     events = []
 
-    assert asyncio.run(load_agent().model_loop(client, "offline", "fake-key", events=events)) == 1
+    assert asyncio.run(load_agent().model_loop(client, "offline", events=events)) == 1
     assert len(requests) == 2
     assert events[0]["error"]["code"] == "invalid_json"
 
@@ -123,7 +127,7 @@ def test_data_mode_mismatch_is_distinct_from_unknown_evidence():
     client, requests = fake_client(response(live_output))
     events = []
 
-    assert asyncio.run(load_agent().model_loop(client, "offline", "fake-key", events=events)) == 1
+    assert asyncio.run(load_agent().model_loop(client, "offline", events=events)) == 1
     assert len(requests) == 1
     assert events[0]["error"]["code"] == "data_mode_mismatch"
 
@@ -137,7 +141,7 @@ def test_repair_answer_cannot_request_tools():
     client, requests = fake_client(response(MISSING_FIELD_OUTPUT), response(tool_calls=[tool_call]))
     events = []
 
-    assert asyncio.run(load_agent().model_loop(client, "offline", "fake-key", events=events)) == 1
+    assert asyncio.run(load_agent().model_loop(client, "offline", events=events)) == 1
     assert len(requests) == 2
     assert len(events) == 1
     assert events[0]["type"] == "run_finished"

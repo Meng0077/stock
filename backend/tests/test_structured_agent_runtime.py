@@ -7,7 +7,11 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-from zai.types.chat.chat_completion import CompletionMessage, CompletionMessageToolCall, Function
+from stock_agent.llm_client import (
+    LLMFunction as Function,
+    LLMMessage as CompletionMessage,
+    LLMToolCall as CompletionMessageToolCall,
+)
 
 
 def load_agent():
@@ -16,6 +20,17 @@ def load_agent():
     agent = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(agent)
     return agent
+
+
+def configure_agent(monkeypatch, agent):
+    """给 main 注入离线 DeepSeek 配置，不读取真实 .env。"""
+    config = SimpleNamespace(
+        provider="deepseek",
+        api_key="fake-key",
+        model="offline",
+    )
+    monkeypatch.setattr(agent, "get_llm_config", lambda path: config)
+    monkeypatch.setenv("MODEL_TIMEOUT_SECONDS", "30")
 
 
 def test_duplicate_tool_id_stops_without_retry_or_mutating_template(capsys):
@@ -46,7 +61,7 @@ def test_duplicate_tool_id_stops_without_retry_or_mutating_template(capsys):
     client = SimpleNamespace(create=create)
     events = []
 
-    assert asyncio.run(agent.model_loop(client, "offline", "fake-key", events=events)) == 1
+    assert asyncio.run(agent.model_loop(client, "offline", events=events)) == 1
     assert request_count == 1
     assert len(events) == 1
     assert events[0]["type"] == "run_finished"
@@ -98,8 +113,8 @@ def test_two_runs_keep_tool_messages_and_events_separate():
     second_client, second_requests = make_client("second-call")
     first_events, second_events = [], []
 
-    assert asyncio.run(agent.model_loop(first_client, "offline", "fake-key", events=first_events)) == 0
-    assert asyncio.run(agent.model_loop(second_client, "offline", "fake-key", events=second_events)) == 0
+    assert asyncio.run(agent.model_loop(first_client, "offline", events=first_events)) == 0
+    assert asyncio.run(agent.model_loop(second_client, "offline", events=second_events)) == 0
 
     assert agent.messages == initial_messages
     assert len(first_requests[0]) == len(second_requests[0]) == len(initial_messages)
@@ -130,16 +145,13 @@ def test_final_answer_rejects_evidence_not_provided_in_this_run(capsys):
 
     client = SimpleNamespace(create=create)
 
-    assert asyncio.run(agent.model_loop(client, "offline", "fake-key")) == 1
+    assert asyncio.run(agent.model_loop(client, "offline")) == 1
     assert "证据校验失败" in capsys.readouterr().err
 
 
 def test_main_returns_model_loop_status_and_closes_client(monkeypatch):
     agent = load_agent()
-    monkeypatch.setattr(agent, "load_dotenv", lambda *args, **kwargs: None)
-    monkeypatch.setenv("ZHIPU_API_KEY", "fake-key")
-    monkeypatch.setenv("MODEL_NAME", "offline")
-    monkeypatch.setenv("MODEL_TIMEOUT_SECONDS", "30")
+    configure_agent(monkeypatch, agent)
     closed = []
     class FakeClient:
         async def __aenter__(self):
@@ -151,7 +163,7 @@ def test_main_returns_model_loop_status_and_closes_client(monkeypatch):
     async def fake_model_loop(*args, **kwargs):
         return 1
 
-    monkeypatch.setattr(agent, "BigModelAsyncClient", lambda **kwargs: FakeClient())
+    monkeypatch.setattr(agent, "LLMClient", lambda **kwargs: FakeClient())
     monkeypatch.setattr(agent, "model_loop", fake_model_loop)
 
     assert asyncio.run(agent.main([])) == 1
@@ -160,15 +172,12 @@ def test_main_returns_model_loop_status_and_closes_client(monkeypatch):
 
 def test_client_creation_failure_is_safe_and_returns_failure(monkeypatch, capsys):
     agent = load_agent()
-    monkeypatch.setattr(agent, "load_dotenv", lambda *args, **kwargs: None)
-    monkeypatch.setenv("ZHIPU_API_KEY", "fake-key")
-    monkeypatch.setenv("MODEL_NAME", "offline")
-    monkeypatch.setenv("MODEL_TIMEOUT_SECONDS", "30")
+    configure_agent(monkeypatch, agent)
 
     def fail_client(**kwargs):
         raise RuntimeError("sensitive-provider-detail")
 
-    monkeypatch.setattr(agent, "BigModelAsyncClient", fail_client)
+    monkeypatch.setattr(agent, "LLMClient", fail_client)
 
     assert asyncio.run(agent.main([])) == 1
     assert "sensitive-provider-detail" not in capsys.readouterr().err

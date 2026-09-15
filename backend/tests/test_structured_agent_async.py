@@ -8,7 +8,11 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
-from zai.types.chat.chat_completion import CompletionMessage, CompletionMessageToolCall, Function
+from stock_agent.llm_client import (
+    LLMFunction as Function,
+    LLMMessage as CompletionMessage,
+    LLMToolCall as CompletionMessageToolCall,
+)
 
 
 def load_agent():
@@ -17,6 +21,13 @@ def load_agent():
     agent = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(agent)
     return agent
+
+
+def configure_agent(monkeypatch, agent, *, api_key="fake-key", model="offline"):
+    """给 main 注入离线 DeepSeek 配置，不读取真实 .env。"""
+    config = SimpleNamespace(provider="deepseek", api_key=api_key, model=model)
+    monkeypatch.setattr(agent, "get_llm_config", lambda path: config)
+    monkeypatch.setenv("MODEL_TIMEOUT_SECONDS", "30")
 
 
 def test_async_http_client_posts_authenticated_json_without_network():
@@ -35,8 +46,11 @@ def test_async_http_client_posts_authenticated_json_without_network():
         })
 
     async def run():
-        async with agent.BigModelAsyncClient(
-            api_key="fake-key", timeout=1, transport=httpx.MockTransport(respond)
+        async with agent.LLMClient(
+            provider="deepseek",
+            api_key="fake-key",
+            timeout=1,
+            transport=httpx.MockTransport(respond),
         ) as client:
             return await client.create(model="offline", messages=[{"role": "user", "content": "hi"}])
 
@@ -45,9 +59,11 @@ def test_async_http_client_posts_authenticated_json_without_network():
     assert completion.choices[0].message.content == "{}"
     assert completion.usage.total_tokens == 5
     assert len(seen) == 1
-    assert seen[0].url.path == "/api/paas/v4/chat/completions"
+    assert seen[0].url.path == "/chat/completions"
     assert seen[0].headers["Authorization"] == "Bearer fake-key"
-    assert json.loads(seen[0].content)["model"] == "offline"
+    payload = json.loads(seen[0].content)
+    assert payload["model"] == "offline"
+    assert payload["thinking"] == {"type": "disabled"}
 
 
 def test_model_request_timeout_stops_without_retry(capsys):
@@ -60,7 +76,7 @@ def test_model_request_timeout_stops_without_retry(capsys):
 
     events = []
     result = asyncio.run(agent.model_loop(
-        SimpleNamespace(create=create), "offline", "fake-key",
+        SimpleNamespace(create=create), "offline",
         events=events, model_timeout=0.005,
     ))
 
@@ -83,12 +99,31 @@ def test_task_timeout_propagates_without_model_timeout_event():
     async def run():
         async with asyncio.timeout(0.005):
             await agent.model_loop(
-                SimpleNamespace(create=create), "offline", "fake-key",
+                SimpleNamespace(create=create), "offline",
                 events=events, model_timeout=1,
             )
 
     with pytest.raises(TimeoutError):
         asyncio.run(run())
+    assert events == []
+
+
+def test_unexpected_model_error_propagates_to_safe_outer_boundary():
+    agent = load_agent()
+
+    async def create(**kwargs):
+        raise RuntimeError("PRIVATE_PROVIDER_ERROR")
+
+    events = []
+    with pytest.raises(RuntimeError, match="PRIVATE_PROVIDER_ERROR"):
+        asyncio.run(
+            agent.model_loop(
+                SimpleNamespace(create=create),
+                "offline",
+                events=events,
+            )
+        )
+
     assert events == []
 
 
@@ -113,7 +148,7 @@ def test_model_usage_is_recorded_for_the_request():
 
     events = []
     result = asyncio.run(agent.model_loop(
-        SimpleNamespace(create=create), "offline", "fake-key", events=events,
+        SimpleNamespace(create=create), "offline", events=events,
     ))
 
     assert result == 0
@@ -151,7 +186,7 @@ def test_total_timeout_stops_after_second_model_request():
     async def run():
         async with asyncio.timeout(0.005):
             await agent.model_loop(
-                SimpleNamespace(create=create), "offline", "fake-key",
+                SimpleNamespace(create=create), "offline",
                 events=events, model_timeout=1,
             )
 
@@ -164,12 +199,10 @@ def test_total_timeout_stops_after_second_model_request():
 
 def test_http_status_error_is_reported_without_exposing_key(monkeypatch, capsys):
     agent = load_agent()
-    monkeypatch.setattr(agent, "load_dotenv", lambda *args, **kwargs: None)
-    monkeypatch.setenv("ZHIPU_API_KEY", "PRIVATE_TEST_KEY")
-    monkeypatch.setenv("MODEL_NAME", "offline")
+    configure_agent(monkeypatch, agent, api_key="PRIVATE_TEST_KEY")
     monkeypatch.setenv("MODEL_TIMEOUT_SECONDS", "1")
 
-    real_client_class = agent.BigModelAsyncClient
+    real_client_class = agent.LLMClient
 
     def fake_client(**kwargs):
         return real_client_class(
@@ -177,7 +210,7 @@ def test_http_status_error_is_reported_without_exposing_key(monkeypatch, capsys)
             transport=httpx.MockTransport(lambda request: httpx.Response(429)),
         )
 
-    monkeypatch.setattr(agent, "BigModelAsyncClient", fake_client)
+    monkeypatch.setattr(agent, "LLMClient", fake_client)
 
     events = []
     assert asyncio.run(agent.main([], events=events)) == 1
@@ -190,10 +223,7 @@ def test_http_status_error_is_reported_without_exposing_key(monkeypatch, capsys)
 
 def test_main_cancellation_closes_client_records_event_and_stops_work(monkeypatch):
     agent = load_agent()
-    monkeypatch.setattr(agent, "load_dotenv", lambda *args, **kwargs: None)
-    monkeypatch.setenv("ZHIPU_API_KEY", "fake-key")
-    monkeypatch.setenv("MODEL_NAME", "offline")
-    monkeypatch.setenv("MODEL_TIMEOUT_SECONDS", "30")
+    configure_agent(monkeypatch, agent)
 
     started = asyncio.Event()
     timeline = []
@@ -219,7 +249,7 @@ def test_main_cancellation_closes_client_records_event_and_stops_work(monkeypatc
         timeline.append("next_request")
         return 0
 
-    monkeypatch.setattr(agent, "BigModelAsyncClient", lambda **kwargs: FakeClient())
+    monkeypatch.setattr(agent, "LLMClient", lambda **kwargs: FakeClient())
     monkeypatch.setattr(agent, "model_loop", fake_model_loop)
 
     async def run():
@@ -241,9 +271,7 @@ def test_main_cancellation_closes_client_records_event_and_stops_work(monkeypatc
 
 def test_main_total_timeout_records_total_timeout_after_client_closes(monkeypatch):
     agent = load_agent()
-    monkeypatch.setattr(agent, "load_dotenv", lambda *args, **kwargs: None)
-    monkeypatch.setenv("ZHIPU_API_KEY", "fake-key")
-    monkeypatch.setenv("MODEL_NAME", "offline")
+    configure_agent(monkeypatch, agent)
     monkeypatch.setenv("MODEL_TIMEOUT_SECONDS", "300")
     monkeypatch.setattr(agent, "TASK_TIMEOUT_SECONDS", 0.005)
     closed = []
@@ -258,7 +286,7 @@ def test_main_total_timeout_records_total_timeout_after_client_closes(monkeypatc
     async def wait_forever(*args, **kwargs):
         await asyncio.sleep(60)
 
-    monkeypatch.setattr(agent, "BigModelAsyncClient", lambda **kwargs: FakeClient())
+    monkeypatch.setattr(agent, "LLMClient", lambda **kwargs: FakeClient())
     monkeypatch.setattr(agent, "model_loop", wait_forever)
     events = []
 
@@ -271,10 +299,7 @@ def test_main_total_timeout_records_total_timeout_after_client_closes(monkeypatc
 
 def test_unrelated_timeout_is_not_labeled_total_timeout(monkeypatch):
     agent = load_agent()
-    monkeypatch.setattr(agent, "load_dotenv", lambda *args, **kwargs: None)
-    monkeypatch.setenv("ZHIPU_API_KEY", "fake-key")
-    monkeypatch.setenv("MODEL_NAME", "offline")
-    monkeypatch.setenv("MODEL_TIMEOUT_SECONDS", "30")
+    configure_agent(monkeypatch, agent)
 
     class FakeClient:
         async def __aenter__(self):
@@ -286,7 +311,7 @@ def test_unrelated_timeout_is_not_labeled_total_timeout(monkeypatch):
     async def failing_loop(*args, **kwargs):
         raise TimeoutError("PRIVATE_PROVIDER_ERROR")
 
-    monkeypatch.setattr(agent, "BigModelAsyncClient", lambda **kwargs: FakeClient())
+    monkeypatch.setattr(agent, "LLMClient", lambda **kwargs: FakeClient())
     monkeypatch.setattr(agent, "model_loop", failing_loop)
     events = []
 
@@ -297,10 +322,7 @@ def test_unrelated_timeout_is_not_labeled_total_timeout(monkeypatch):
 
 def test_client_close_error_replaces_success_terminal_event(monkeypatch):
     agent = load_agent()
-    monkeypatch.setattr(agent, "load_dotenv", lambda *args, **kwargs: None)
-    monkeypatch.setenv("ZHIPU_API_KEY", "fake-key")
-    monkeypatch.setenv("MODEL_NAME", "offline")
-    monkeypatch.setenv("MODEL_TIMEOUT_SECONDS", "30")
+    configure_agent(monkeypatch, agent)
 
     class FakeClient:
         async def __aenter__(self):
@@ -313,7 +335,7 @@ def test_client_close_error_replaces_success_terminal_event(monkeypatch):
         agent.record_run_finished(events, "same-run", "completed")
         return 0
 
-    monkeypatch.setattr(agent, "BigModelAsyncClient", lambda **kwargs: FakeClient())
+    monkeypatch.setattr(agent, "LLMClient", lambda **kwargs: FakeClient())
     monkeypatch.setattr(agent, "model_loop", completed_loop)
     events = []
 

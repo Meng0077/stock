@@ -165,9 +165,14 @@ def test_real_mode_path_reuses_agent_and_closes_client_without_network(runner, c
         async def create(self, **kwargs):
             return await self.scripted.create(**kwargs)
 
-    agent.BigModelAsyncClient = FakeRealClient
+    agent.LLMClient = FakeRealClient
     record = asyncio.run(runner.run_case(
-        case_map["D05-02"], "real", agent, api_key="fake-key", model="offline-model"
+        case_map["D05-02"],
+        "real",
+        agent,
+        api_key="fake-key",
+        model="offline-model",
+        provider="deepseek",
     ))
     assert record["automatic_verdict"] == "pass"
     assert record["model_request_count"] == 2

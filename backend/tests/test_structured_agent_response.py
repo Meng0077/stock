@@ -6,7 +6,11 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from zai.types.chat.chat_completion import CompletionMessage, CompletionMessageToolCall, Function
+from stock_agent.llm_client import (
+    LLMFunction as Function,
+    LLMMessage as CompletionMessage,
+    LLMToolCall as CompletionMessageToolCall,
+)
 
 
 VALID_OUTPUT = (
@@ -31,7 +35,7 @@ def run_once(choice, *, events=None):
         return SimpleNamespace(choices=[] if choice is None else [choice], usage=None)
 
     client = SimpleNamespace(create=create)
-    result = asyncio.run(load_agent().model_loop(client, "offline", "fake-key", events=events))
+    result = asyncio.run(load_agent().model_loop(client, "offline", events=events))
     return result, calls
 
 

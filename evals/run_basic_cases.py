@@ -21,9 +21,7 @@ import uuid
 import httpx
 from dotenv import load_dotenv
 from pydantic import ValidationError
-# from zai.types.chat.chat_completion import CompletionMessage, CompletionMessageToolCall, Function
 from stock_agent.llm_client import (
-    LLMClient,
     LLMFunction,
     LLMMessage,
     LLMToolCall,
@@ -314,7 +312,15 @@ def set_terminal(agent, events: list[dict], run_id: str, code: str) -> None:
     agent.record_run_finished(events, run_id, "failed", code)
 
 
-async def run_case(case: dict, mode: str, agent, *, api_key: str = "", model: str = "", provider: str = "") -> dict:
+async def run_case(
+    case: dict,
+    mode: str,
+    agent,
+    *,
+    api_key: str = "",
+    model: str = "",
+    provider: str = "",
+) -> dict:
     """运行一个案例；输入案例/模式/Agent，返回可保存的安全结果。"""
     run_id = str(uuid.uuid4())
     initial = case_messages(agent, case)
@@ -330,7 +336,12 @@ async def run_case(case: dict, mode: str, agent, *, api_key: str = "", model: st
     elif mode == "offline" and not case["scripted_responses"]:
         agent.record_run_finished(events, run_id, "failed", "incomplete_response")
         verdict = "blocked"
-    elif mode == "real" and (not case.get("real_api_allowed") or not api_key or not model):
+    elif mode == "real" and (
+        not case.get("real_api_allowed")
+        or not api_key
+        or not model
+        or not provider
+    ):
         agent.record_run_finished(events, run_id, "failed", "model_error")
         verdict = "blocked"
     else:
@@ -348,7 +359,7 @@ async def run_case(case: dict, mode: str, agent, *, api_key: str = "", model: st
                         )
                 handler_calls = spy["count"]
             else:
-                async with LLMClient(
+                async with agent.LLMClient(
                     provider=provider,
                     api_key=api_key,
                     timeout=300.0,
@@ -470,6 +481,7 @@ def main(argv: list[str] | None = None) -> int:
         if not cases:
             print("找不到指定案例。", file=sys.stderr)
             return 1
+    provider = ""
     if args.mode == "real":
         cases = [case for case in cases if case.get("real_api_allowed")]
         if not cases:
