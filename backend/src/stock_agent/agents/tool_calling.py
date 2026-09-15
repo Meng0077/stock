@@ -6,11 +6,14 @@ from collections.abc import Sequence
 from typing import Any, Literal
 
 from pydantic import ValidationError
-from zai.types.chat.chat_completion import CompletionMessage, CompletionMessageToolCall
+from stock_agent.llm_client import (
+    LLMMessage,
+    LLMToolCall,
+)
 
 from stock_agent.tools.registry import TOOL_REGISTRY, execute_tool
 
-TOOL_TIMEOUT_SECONDS = 5
+TOOL_TIMEOUT_SECONDS = 15
 
 
 def build_tool_definitions() -> list[dict[str, Any]]:
@@ -45,7 +48,9 @@ class ToolCallProtocolError(ValueError):
         super().__init__(self._MESSAGES[code])
 
 
-def validate_tool_call_ids(tool_calls: Sequence[CompletionMessageToolCall]) -> None:
+def validate_tool_call_ids(
+    tool_calls: Sequence[LLMToolCall],
+) -> None:
     """在执行任何工具前，检查本轮所有调用 ID。"""
     ids_seen = set()
     for call in tool_calls:
@@ -57,7 +62,7 @@ def validate_tool_call_ids(tool_calls: Sequence[CompletionMessageToolCall]) -> N
 
 
 async def execute_tool_and_return(
-    message: CompletionMessage,
+    message: LLMMessage,
     *,
     messages: list[dict[str, Any]],
     events: list[dict[str, Any]],
@@ -131,6 +136,7 @@ async def execute_tool_and_return(
                 "tool": event_tool_name,
                 "company_id": response["data"]["company_id"],
                 "fixture_result": response["data"],
+                "evidence_id": evidence_id,
                 "tool_calls_executed": tool_calls_executed,
             })
         else:

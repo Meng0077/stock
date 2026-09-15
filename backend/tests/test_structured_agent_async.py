@@ -244,7 +244,7 @@ def test_main_total_timeout_records_total_timeout_after_client_closes(monkeypatc
     monkeypatch.setattr(agent, "load_dotenv", lambda *args, **kwargs: None)
     monkeypatch.setenv("ZHIPU_API_KEY", "fake-key")
     monkeypatch.setenv("MODEL_NAME", "offline")
-    monkeypatch.setenv("MODEL_TIMEOUT_SECONDS", "30")
+    monkeypatch.setenv("MODEL_TIMEOUT_SECONDS", "300")
     monkeypatch.setattr(agent, "TASK_TIMEOUT_SECONDS", 0.005)
     closed = []
 

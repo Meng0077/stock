@@ -28,7 +28,7 @@ import sys
 
 import httpx
 from pydantic import ValidationError
-from zai.types.chat.chat_completion import Completion
+# from zai.types.chat.chat_completion import Completion
 from dotenv import load_dotenv
 import os
 import uuid
@@ -42,6 +42,7 @@ from stock_agent.agents.tool_calling import (
 )
 from stock_agent.schemas.research_output import ResearchOutput
 from stock_agent.schemas.errors import ErrorCode, make_public_error
+from stock_agent.llm_client import LLMClient, get_llm_config
 
 
 
@@ -50,32 +51,37 @@ SYSTEM_PROMPT = "你是股票分析助手。仅依据用户提供的资料回答
 MAX_MODEL_ROUNDS=3
 MAX_TOOL_CALLS=4
 MAX_OUTPUT_TOKENS = 5000
-TASK_TIMEOUT_SECONDS = 120
+TASK_TIMEOUT_SECONDS = 320
 REFUSAL_PREFIXES = ("抱歉", "很抱歉", "对不起", "sorry", "i can't", "i cannot")
 
 
-class BigModelAsyncClient:
-    """通过普通 HTTP 对话接口发送可取消的异步请求。"""
+# class BigModelAsyncClient:
+#     """通过普通 HTTP 对话接口发送可取消的异步请求。"""
 
-    def __init__(self, *, api_key: str, timeout: float, transport=None):
-        self._http = httpx.AsyncClient(
-            base_url="https://open.bigmodel.cn/api/paas/v4/",
-            headers={"Authorization": f"Bearer {api_key}"},
-            timeout=timeout,
-            transport=transport,
-        )
+#     def __init__(self, *, api_key: str, timeout: float, transport=None):
+#         self._http = httpx.AsyncClient(
+#             base_url="https://open.bigmodel.cn/api/paas/v4/",
+#             headers={"Authorization": f"Bearer {api_key}"},
+#             timeout=timeout,
+#             transport=transport,
+#         )
 
-    async def __aenter__(self):
-        await self._http.__aenter__()
-        return self
+#     async def __aenter__(self):
+#         await self._http.__aenter__()
+#         return self
 
-    async def __aexit__(self, exc_type, exc_value, traceback):
-        await self._http.__aexit__(exc_type, exc_value, traceback)
+#     async def __aexit__(self, exc_type, exc_value, traceback):
+#         await self._http.__aexit__(exc_type, exc_value, traceback)
 
-    async def create(self, **kwargs):
-        response = await self._http.post("chat/completions", json=kwargs)
-        response.raise_for_status()
-        return Completion.model_validate(response.json())
+#     async def create(self, **kwargs):
+#         response = await self._http.post("chat/completions", json=kwargs)
+#         print('_______XXXXXXXX!!!!!!')
+        
+        
+#         response.raise_for_status()
+#         print('_______XXXXXXXX!!!!!!')
+        
+#         return Completion.model_validate(response.json())
 
 
 def is_refusal_text(content: str | None) -> bool:
@@ -132,27 +138,31 @@ def record_run_finished(
 
 
 async def model_loop(
-    client, model, api_key, max_round=MAX_MODEL_ROUNDS, max_tool=MAX_TOOL_CALLS,
-    events=None, model_timeout=30.0,
+    client, model, max_round=MAX_MODEL_ROUNDS, max_tool=MAX_TOOL_CALLS,
+    events=None, model_timeout=300.0, *, initial_messages=None,
+    initial_evidence_ids=None, result_sink=None, run_id=None,
 ) -> int:
     if events is None:
         events = []
-    run_messages = deepcopy(messages)
-    allowed_ids: set[str] = set()
+    run_messages = deepcopy(messages if initial_messages is None else initial_messages)
+    allowed_ids: set[str] = set(initial_evidence_ids or ())
     expected_data_mode = "fixture"
     round = 0
     tool_calls_executed = 0
-    run_id = str(uuid.uuid4())
+    run_id = run_id or str(uuid.uuid4())
     repair_used = False
 
     def finish(status: str, code: ErrorCode | None = None) -> int:
+        if result_sink is not None:
+            result_sink["messages"] = deepcopy(run_messages)
         record_run_finished(events, run_id, status, code)
         return 0 if code is None else 1
-
     while round < max_round:
         round += 1
         try:
+            print('(((((((())))))))')
             async with asyncio.timeout(model_timeout) as request_limit:
+                print('(((((((())))))))')
                 response = await client.create(
                     model=model,
                     messages=run_messages,
@@ -160,17 +170,25 @@ async def model_loop(
                     response_format={"type": "json_object"},
                     max_tokens=MAX_OUTPUT_TOKENS,
                 )
+                print('NNNNNNNN')
         except TimeoutError:
+            print('+++++++')
             if not request_limit.expired():
                 raise
             events.append({"type": "model_timeout", "run_id": run_id, "round": round})
             print("模型请求超时。", file=sys.stderr)
             return finish("failed", "model_timeout")
         except httpx.TimeoutException:
+            print('+++++++!!!!!!')
+            
             events.append({"type": "model_timeout", "run_id": run_id, "round": round})
             print("模型请求超时。", file=sys.stderr)
             return finish("failed", "model_timeout")
-
+        except Exception as e:
+            print('+++++++!!!!!!', e)
+            
+        
+        print('_______', response)
         if getattr(response, "usage", None) is not None:
             usage = {}
             for field in ("prompt_tokens", "completion_tokens", "total_tokens"):
@@ -267,9 +285,10 @@ async def model_loop(
                     else "invalid_evidence"
                 )
                 return finish("failed", code)
+            if result_sink is not None:
+                result_sink["final_output"] = result.model_dump()
             return finish(result.status)
     return finish("failed", "budget_exhausted")
-
 
 
 async def main(argv: list[str] | None = None, *, events=None) -> int:
@@ -282,15 +301,13 @@ async def main(argv: list[str] | None = None, *, events=None) -> int:
     if args.preview:
         print(format_preview(build_preview()))
         return 0
-
-    load_dotenv(BACKEND / ".env", override=False)
-    api_key = os.getenv("ZHIPU_API_KEY", "").strip()
-    model = os.getenv("MODEL_NAME", "").strip()
-    if not api_key or not model:
-        print("配置错误：请设置 ZHIPU_API_KEY 和 MODEL_NAME。", file=sys.stderr)
+    
+    config = get_llm_config(BACKEND / ".env")
+    if not config:
         return 1
+    
     try:
-        timeout = float(os.getenv("MODEL_TIMEOUT_SECONDS", "30"))
+        timeout = float(os.getenv("MODEL_TIMEOUT_SECONDS", "300"))
         if not math.isfinite(timeout) or timeout <= 0:
             raise ValueError
     except ValueError:
@@ -315,10 +332,10 @@ async def main(argv: list[str] | None = None, *, events=None) -> int:
         record_run_finished(events, run_id, status, code)
 
     try:
-        async with BigModelAsyncClient(api_key=api_key, timeout=timeout) as client:
+        async with LLMClient(provider=config.provider, api_key=config.api_key, timeout=timeout) as client:
             async with asyncio.timeout(TASK_TIMEOUT_SECONDS) as total_limit:
                 status = await model_loop(
-                    client, model, api_key, events=events, model_timeout=timeout
+                    client, config.model, events=events, model_timeout=timeout
                 )
     except asyncio.CancelledError:
         events.append({"type": "cancelled"})
