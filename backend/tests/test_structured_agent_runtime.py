@@ -22,6 +22,12 @@ def load_agent():
     return agent
 
 
+def test_cli_reuses_packaged_model_loop():
+    agent = load_agent()
+
+    assert agent.model_loop.__module__ == "stock_agent.agents.manual_agent"
+
+
 def configure_agent(monkeypatch, agent):
     """给 main 注入离线 DeepSeek 配置，不读取真实 .env。"""
     config = SimpleNamespace(

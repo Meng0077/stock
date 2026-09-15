@@ -7,7 +7,14 @@ name = "stock-agent"
 version = "0.1.0"
 description = "股票研究与模拟交易 Agent 学习项目"
 requires-python = ">=3.11"
-dependencies = ["zai-sdk==0.2.3", "python-dotenv==1.2.1", "pydantic==2.13.5", "httpx==0.28.1"]
+dependencies = [
+    "fastapi==0.141.1",
+    "httpx==0.28.1",
+    "pydantic==2.13.5",
+    "python-dotenv==1.2.1",
+    "uvicorn==0.53.0",
+    "zai-sdk==0.2.3",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

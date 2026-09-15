@@ -194,6 +194,7 @@ def source_hash() -> str:
     paths = (
         AGENT_PATH,
         Path(__file__),
+        ROOT / "backend" / "src" / "stock_agent" / "agents" / "manual_agent.py",
         ROOT / "backend" / "src" / "stock_agent" / "agents" / "tool_calling.py",
         ROOT / "backend" / "src" / "stock_agent" / "tools" / "registry.py",
     )
