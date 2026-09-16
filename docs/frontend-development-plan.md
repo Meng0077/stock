@@ -55,7 +55,7 @@
 | 前端阶段 | 可并行的后端阶段 | 前端产物 | 是否等待后端 |
 | --- | --- | --- | --- |
 | FE01 工程与契约 | D08 Manual/LangChain 对照 | React 工程、公开对话请求类型、结构化响应类型、mock | 否 |
-| FE02 最小对话页面 | D08–D09 Agent 收口 | Composer、单轮对话记录、状态机、结果和安全错误组件 | 否，先使用 mock |
+| FE02 最小对话页面 | D08–D09 Agent 收口 | Page 内最小请求与展示，跑通后抽 Hook/组件，功能完成后统一测试 | 否，先使用 mock |
 | FE03 真实 API 联调 | D10 完整链路 | 对话 API 客户端和浏览器端到端测试 | 是，等待后端对话请求归一化入口 |
 | FE04 证据与数据时间 | D11–D30 RAG/数据工具 | 引用、行情、宏观和新闻时间展示 | 是，等待证据和时间契约 |
 | FE05 决策与风险 | D31–D40 决策/组合/风险 | Decision Trace、仓位前后对比 | 是，等待领域模型和 API |
@@ -234,967 +234,164 @@ function getMockRunResponse(status: RunStatus): RunResponse;
 
 完成记录：`getMockCreateResearchRunRequest()` 提供不含内部研究字段的自然语言请求；`getMockRunResponse()` 按传入状态返回精确响应类型和独立副本；`getMockValidationError()` 提供面向 `message` 的 HTTP 422 fixture。测试覆盖公开请求、四种运行终态、D06 示例关键字段、fixture 声明、副本隔离、422 结构和安全错误边界。
 
-## 6. FE02：对话式研究页面与状态处理
+## 6. FE02：从最小对话页面到合理抽象
 
-目标：完成 D10 的最小对话式研究页面。
+目标：完成基于本地 Mock Transport 的最小单轮对话研究页面。用户只输入自然语言，前端展示用户消息、加载状态和结构化 Agent 结果。
 
-用户不需要理解或填写 `company_id`、`data_mode`、`as_of` 等内部研究字段，只需要像聊天一样描述自己的问题，例如：
+当前状态：FE02 本地 Mock 业务功能已实现；统一补测尚未开始，不将此标记为测试验收完成。真实 HTTP 接入仍属于 FE03。
 
-> 帮我看看英伟达最近怎么样。
+补充交互：连续提交保留之前已结束的本地对话，并支持清空全部历史。历史不持久化，也不传给模型；每条消息仍是独立的一次研究请求。现有 AbortController 仅用于清空、下一轮提交和页面卸载时让旧响应失效，不表示实现了后端任务取消。
 
-或：
+详细执行清单：`docs/frontend-fe02-todo.md`。本节只同步目标、顺序和边界，不再保留旧的“先写复杂 Hook”方案。
 
-> 我现在持有 NVDA，成本 220，最近适不适合继续加仓？
+### 6.1 开发方式与范围确认
 
-前端负责提交自然语言消息、展示研究结果和维护请求生命周期。
+每一步开始前，先说明用户问题、文件位置、使用位置、调用者、调用时机、输入输出、内部执行顺序，以及明确不做的内容。
 
-后端负责根据用户自然语言补充或推导研究所需的内部上下文，例如：
+必须区分“只搭架构”与“实现业务”；范围不明确时，编码前先确认。
 
-* 标的识别；
-* 当前或用户指定的 `as_of`；
-* 所需工具和数据源；
-* fixture / historical / live 等实际数据模式；
-* 是否需要报价、RAG、新闻、宏观或组合风险数据。
+开发阶段不新增或修改前端测试，只运行 `typecheck`、`lint` 和 `build`。业务全部完成、模块边界稳定以后，再统一补测试。
 
-前端不得要求用户替 Agent 完成这些内部决策。
+### 6.2 当前已有架构
 
----
+Route、Page、Hook、页面状态类型与 Transport 已连接；Page 负责组装，Hook 管理请求状态，Conversation 展示本轮用户消息与 Agent 结果。
 
-### Step FE02.1：对话输入组件
+```text
+main.tsx / BrowserRouter
+  → App（注入 RunTransport）
+  → AppRoutes
+  → /research
+  → ResearchPage
+      ├─ ResearchComposer
+      ├─ useResearchRun
+      ├─ ResearchConversation → ResearchResponse
+      └─ RunTransport / Fake Transport
+```
 
-文件：
-
-`frontend/src/features/research/ResearchComposer.tsx`
-
-目标：提供类似聊天输入框的最小研究入口。
-
-用户只输入自然语言消息。
-
-建议前端 API 请求类型：
+公开请求和响应统一从 `src/api/contracts.ts` 导入。feature 的 `type.ts` 只负责页面状态，不复制 API 领域类型。
 
 ```ts
 interface CreateResearchRunRequest {
-  message: string;
-  conversation_id?: string;
+  message: string
+  conversation_id?: string
 }
 ```
 
-第一阶段可以不实现真正的多轮 conversation memory，`conversation_id` 可暂时省略或保留为可选字段。
+前端不生成 `company_id`、`data_mode`、`as_of`，不选择工具与数据源。FE02 不实现真正的多轮模型记忆。
 
-组件接口：
+### 6.3 新执行顺序
 
-```ts
-interface ResearchComposerProps {
-  disabled: boolean;
+| 步骤 | 要完成什么 | 为什么这样安排 |
+| --- | --- | --- |
+| FE02.1 | 看懂 BrowserRouter → App → Route → Page | 先知道代码在哪里使用 |
+| FE02.2 | Composer 输入、trim、空输入拦截和 disabled | 先建立最小用户入口 |
+| FE02.3 | 在 ResearchPage 内直接调用 Fake Transport | 看清 createRun 的调用者和时机 |
+| FE02.4 | 在 Page 内保存用户消息、loading 和 response，直接写最小 JSX | 先跑通可观察的业务链路 |
+| FE02.5 | 从实际页面状态整理 ResearchViewState | 类型来自真实需求 |
+| FE02.6 | 将已经工作的请求生命周期从 Page 移到 useResearchRun | 先说明抽象理由，再抽 Hook |
+| FE02.7 | 从已经工作的 JSX 抽 Conversation/Response | 组件边界来自实际代码 |
+| FE02.8 | 展示 Agent 四种终态与通用 Transport 错误 | 补齐最小安全错误边界 |
+| FE02.9 | 输入体验、样式、可访问性和代码收口 | 业务全部完成 |
+| FE02.10 | 统一补组件、Hook、页面和 Route 测试 | 不穿插在开发过程中 |
 
-  onSubmit: (
-    request: CreateResearchRunRequest
-  ) => void | Promise<void>;
-}
-```
+已有 Hook 文件不意味着必须先填 Hook。最小实现先写在 `ResearchPage`，跑通并理解后再移入 `useResearchRun`。
 
-职责：
-
-* 收集用户自然语言；
-* 做最基本的空输入校验；
-* 将消息交给页面控制器；
-* 不直接调用 API；
-* 不负责渲染研究结果；
-* 不解析股票代码；
-* 不决定 `data_mode`；
-* 不生成 `as_of`；
-* 不决定使用哪些工具。
-
-React 19 建议使用 `<form action={...}>`：
-
-```tsx
-export function ResearchComposer({
-  disabled,
-  onSubmit,
-}: ResearchComposerProps) {
-  async function submitAction(
-    formData: FormData,
-  ) {
-    const message = String(
-      formData.get("message") ?? "",
-    ).trim();
-
-    if (!message) {
-      return;
-    }
-
-    await onSubmit({
-      message,
-    });
-  }
-
-  return (
-    <form action={submitAction}>
-      <textarea
-        name="message"
-        placeholder="例如：帮我看看英伟达最近怎么样..."
-        required
-      />
-
-      <button
-        type="submit"
-        disabled={disabled}
-      >
-        发送
-      </button>
-    </form>
-  );
-}
-```
-
-第一版可以采用 uncontrolled form，不要求为输入框单独维护 `useState`。
-
-完成标准：
-
-* [ ] 用户只需输入一段自然语言；
-* [ ] 空消息不能提交；
-* [ ] 不向用户暴露 `company_id`、`data_mode`、`as_of`；
-* [ ] 提交逻辑通过 `onSubmit` 向外传递；
-* [ ] 页面后续可方便替换 mock API 和真实 API。
-
----
-
-### Step FE02.2：API 请求契约
-
-文件：`frontend/src/api/contracts.ts`
-
-FE01 已完成 `CreateResearchRunRequest` 与结构化 `RunResponse`。功能代码统一从 API 契约层导入，不在 feature 目录重复声明接口。为兼容当前学习文件，`frontend/src/features/research/type.ts` 只做类型转出，不拥有第二份定义。
-
-后端返回继续使用可辨识联合类型：成功/信息不足一定有 `result`，失败/取消一定有安全 `error`。`ResearchOutput.data_mode` 仍是必填字段，不能因为改成对话 UI 就变成可选。
-
-注意：
-
-对话式 UI 不代表后端改成纯 Markdown 输出。
-
-仍然保持：
+### 6.4 最小请求的内部流程
 
 ```text
-自然语言输入
-    ↓
-Agent
-    ↓
-结构化 ResearchOutput
-    ↓
-React 渲染成对话消息
+用户提交 form
+  → Composer 读取并 trim message
+  → 空消息直接 return，不发送请求
+  → onSubmit({ message })
+  → ResearchPage.handleSubmit
+  → 保存用户消息并显示 loading
+  → await runTransport.createRun(request)
+  → 保存 RunResponse
+  → 页面展示结构化结果
 ```
 
-而不是：
+`createRun` 不在页面或 Hook 初始化时调用，只有用户提交后才调用。
+
+抽离 Hook 后保持同一条逻辑：
 
 ```text
-自然语言输入
-    ↓
-LLM Markdown
-    ↓
-dangerouslySetInnerHTML
+useResearchRun(createRun)
+  → 初始化 idle，不请求
+  → Composer 调用 submit(request)
+  → submit 设置 submitting
+  → submit 内部调用 createRun(request)
+  → resolve 后进入 received
+  → reject 后进入 request_failed
+  → reset 恢复 idle
 ```
 
-完成标准：
-
-* [x] 前端请求模型只包含用户真正需要填写的字段；
-* [x] 前端代码不声明或生成后端内部 `ResearchRequest`；
-* [x] 页面依赖自己的 API contract，不依赖 LangChain Message / LangGraph State；
-* [ ] D10 后端对话入口实现归一化后，验证 Manual → LangChain → LangGraph 的内部迁移无需修改前端协议。
-
----
-
-### Step FE02.3：页面请求状态机
-
-文件：
-
-`frontend/src/features/research/useResearchRun.ts`
-
-目标：集中处理一次研究请求的生命周期。
-
-页面状态至少包括：
+### 6.5 FE02 最小状态与错误处理
 
 ```ts
 type ResearchViewState =
+  | { kind: 'idle' }
   | {
-      kind: "idle";
+      kind: 'submitting'
+      userMessage: string
     }
   | {
-      kind: "submitting";
-      requestId: number;
-      userMessage: string;
+      kind: 'received'
+      userMessage: string
+      response: RunResponse
     }
   | {
-      kind: "received";
-      requestId: number;
-      userMessage: string;
-      response: RunResponse;
+      kind: 'request_failed'
+      userMessage: string
+      errorMessage: string
     }
-  | {
-      kind: "request_invalid";
-      userMessage: string;
-      messages: string[];
-    }
-  | {
-      kind: "request_failed";
-      requestId: number;
-      userMessage: string;
-      errorMessage: string;
-    };
 ```
 
-终态继续保存 `userMessage`，否则请求完成后无法把用户气泡与对应的 Agent 结果组成一轮对话。`requestId` 是前端竞态标识，`run_id` 是后端运行身份，两者不能混用。
+Agent 的 `completed`、`insufficient_information`、`failed` 和 `cancelled` 都是合法 `RunResponse`，进入 `received`；展示组件根据状态读取 `result` 或 `error`。
 
-建议 Hook：
+Transport 抛错只显示统一安全提示，不展示原始异常、stack、密钥、provider headers 或 hidden reasoning。
 
-```ts
-function useResearchRun(
-  createRun: (
-    request: CreateResearchRunRequest,
-    signal?: AbortSignal,
-  ) => Promise<RunResponse>,
-): {
-  state: ResearchViewState;
+提交期间禁用重复提交，因此 FE02 不把 `requestId`、旧响应保护和 `AbortController` 作为前置要求。
 
-  submit: (
-    request: CreateResearchRunRequest
-  ) => Promise<void>;
+### 6.6 展示组件的抽象时机
 
-  reset: () => void;
-};
-```
+先在 `ResearchPage` 中直接写最小 JSX。跑通以后只先抽：
 
-职责：
+- `ResearchConversation`：组织用户消息、加载状态、通用错误和 Agent 消息；
+- `ResearchResponse`：按公开响应状态展示结构化结果。
 
-* 管理 loading；
-* 管理 HTTP 请求；
-* 管理 AbortController；
-* 处理 HTTP 422；
-* 处理断网或 HTTP transport failure；
-* 防止旧请求覆盖新结果；
-* 不解释 Agent 业务结果。
+只有代码明显过长或出现重复 JSX 时，才继续抽离 `RunSummary`、`ClaimList`、`EvidenceBadge`、`MissingInformation` 和 `PublicErrorPanel`，不提前创建空文件。
 
----
+结果必须区分 facts 与 inferences，显示 evidence ID、run ID 和真实 data mode。不得把 fixture 包装成实时行情，也不得直接渲染模型原始 Markdown/HTML。
 
-#### 请求 ID
+### 6.7 明确推迟的能力
 
-每次提交：
+| 能力 | 后续阶段 |
+| --- | --- |
+| 真实 `POST /api/chat/runs` | FE03，等待后端 Request Normalizer |
+| HTTP 422、非预期 HTTP 状态和运行时响应校验 | FE03 |
+| `formatValidationMessages` | 真实接口需要字段级提示时再考虑；当前不实现 |
+| AbortSignal 传给 fetch、requestId 和旧响应保护 | FE03，根据真实重复提交/重新请求需求加入 |
+| 可点击证据、来源与数据时间 | FE04 |
+| Decision Trace、组合和风险对比 | FE05 |
+| 后端取消、SSE、checkpoint、断线重连和最终快照恢复 | FE06 |
 
-```ts
-const requestId =
-  ++latestRequestId.current;
-```
+### 6.8 功能完成后的统一测试与验收
 
-只允许最新请求更新页面：
+FE02.1～FE02.9 完成后再补测试，覆盖 Composer、Hook 调用时机与状态、四种 Agent 终态、页面完整流程、Route/404 和敏感信息不展示。
 
-```ts
-if (
-  requestId !==
-  latestRequestId.current
-) {
-  return;
-}
-```
-
-解决：
+最终演示路径：
 
 ```text
-请求 A
-↓
-请求 B
-↓
-B 先返回
-↓
-A 后返回
-
-最终仍显示 B
+用户进入 /research
+  → 输入“帮我看看英伟达最近怎么样”
+  → 用户消息立即显示
+  → 页面显示研究中
+  → 返回本地 Mock 结构化结果
+  → 分开展示事实、推断、缺失信息和证据
+  → 显示 run ID 与 fixture 标识
 ```
 
----
-
-#### AbortController
-
-新请求开始时：
-
-```ts
-previousController?.abort();
-```
-
-再创建新的：
-
-```ts
-const controller =
-  new AbortController();
-```
-
-调用：
-
-```ts
-await createRun(
-  request,
-  controller.signal,
-);
-```
-
-浏览器 abort 用于停止前端等待。
-
-后端是否真正停止 Agent，需要由 FastAPI / asyncio cancellation 单独保证。
-
----
-
-#### HTTP failure 与 Agent failure 分开
-
-以下属于：
-
-```ts
-{
-  kind: "request_failed"
-}
-```
-
-例如：
-
-* 无网络；
-* fetch 失败；
-* 服务不可达；
-* 非预期 HTTP 错误。
-
-以下仍属于：
-
-```ts
-{
-  kind: "received",
-  response,
-}
-```
-
-例如：
-
-```json
-{
-  "status": "failed",
-  "error": {
-    "code": "model_timeout"
-  }
-}
-```
-
-因为这是：
-
-> HTTP 请求成功，Agent 给出了合法的失败终态。
-
-不要把：
-
-```text
-Agent failed
-```
-
-和：
-
-```text
-HTTP failed
-```
-
-混为一类。
-
-完成标准：
-
-* [ ] 新请求能取消旧浏览器请求；
-* [ ] 旧响应无法覆盖新响应；
-* [ ] transport error 与 Agent failure 分离；
-* [ ] cancelled / failed RunResponse 仍作为合法业务响应处理；
-* [ ] Hook 可使用 mock `createRun` 测试。
-
----
-
-### Step FE02.4：对话消息展示
-
-建议文件：
-
-* `frontend/src/features/research/ResearchConversation.tsx`
-* `frontend/src/features/research/UserMessage.tsx`
-* `frontend/src/features/research/ResearchResponse.tsx`
-
-页面视觉上采用对话结构：
-
-```text
-User
-
-帮我看看英伟达最近怎么样，
-我成本 220。
-
-Agent
-
-根据目前取得的资料：
-
-事实
-- ...
-- ...
-
-推断
-- ...
-
-缺失信息
-- ...
-
-数据截至：
-...
-```
-
-第一阶段不实现真正多轮 Agent memory。
-
-FE02 最小实现先保证当前一轮“用户消息 + Agent 结构化回复”完整对应。若页面保留多条本地记录，每次提交仍然对应一个独立 `run_id`，历史记录只是 UI 展示，不代表模型拥有多轮记忆。
-
-即：
-
-```text
-message A
-↓
-run A
-
-message B
-↓
-run B
-```
-
-而不是立即实现：
-
-```text
-完整历史上下文
-↓
-LLM memory
-↓
-conversation compression
-```
-
-这些不属于 FE02。
-
-完成标准：
-
-* [ ] 用户消息与 Agent 消息视觉区分；
-* [ ] 请求结束后仍保留并显示该次 `userMessage`；
-* [ ] 每个 Agent 结果保留自己的 `run_id`；
-* [ ] 不把后端内部事件直接展示成聊天正文；
-* [ ] 不把模型原始 response 直接渲染到页面。
-
----
-
-### Step FE02.5：结构化研究结果组件
-
-建议文件：
-
-* `RunSummary.tsx`
-* `ClaimList.tsx`
-* `MissingInformation.tsx`
-* `EvidenceBadge.tsx`
-* `PublicErrorPanel.tsx`
-
----
-
-#### `RunSummary`
-
-显示：
-
-* `run_id`
-* Agent 外层状态
-* 数据模式
-* 后续可增加数据截至时间
-
-例如：
-
-```text
-Run: abc-123
-Status: completed
-Data: fixture
-```
-
-不得把：
-
-```text
-fixture
-```
-
-包装成：
-
-```text
-实时数据
-```
-
----
-
-#### `ClaimList`
-
-分开展示：
-
-```text
-Facts
-```
-
-与：
-
-```text
-Inferences
-```
-
-例如：
-
-```text
-事实
-
-NVDA 教学模拟报价为 100 USD
-[E1]
-```
-
-以及：
-
-```text
-推断
-
-该价格不能用于实际投资判断
-[E1]
-```
-
-不能合并成统一的“分析结果”，否则用户无法区分事实和系统推断。
-
----
-
-#### `EvidenceBadge`
-
-每条 claim 显示：
-
-```text
-E1
-E2
-```
-
-当前阶段只需要显示 ID。
-
-Week 3 RAG 接入后，可逐步升级成：
-
-```text
-点击 E1
-↓
-打开 evidence
-↓
-显示文档
-↓
-page / section / source
-```
-
----
-
-#### `MissingInformation`
-
-当：
-
-```ts
-result.status ===
-  "insufficient_information"
-```
-
-突出展示：
-
-```text
-缺少信息：
-- 最新报价
-- 当前持仓
-- 某报告期资料
-```
-
-不要只显示内部状态字符串。
-
----
-
-#### `PublicErrorPanel`
-
-当：
-
-```ts
-response.status === "failed"
-```
-
-只展示：
-
-```text
-error.code
-error.stage
-error.message
-```
-
-不得展示：
-
-* stack trace；
-* raw exception；
-* API key；
-* provider headers；
-* hidden reasoning；
-* 原始模型请求；
-* 内部路径。
-
----
-
-### Step FE02.6：HTTP 422 安全格式化
-
-建议函数：
-
-```ts
-function formatValidationMessages(
-  payload: unknown,
-): string[];
-```
-
-输入：
-
-FastAPI HTTP 422 的未知 JSON。
-
-输出：
-
-安全、适合用户阅读的字段提示。
-
-例如 FastAPI：
-
-```json
-{
-  "detail": [
-    {
-      "loc": [
-        "body",
-        "message"
-      ],
-      "msg": "String should have at least 1 character"
-    }
-  ]
-}
-```
-
-转换：
-
-```text
-message:
-String should have at least 1 character
-```
-
-如果 payload 结构不是预期：
-
-```ts
-return [
-  "请求参数不合法，请检查输入。"
-];
-```
-
-不得：
-
-```ts
-JSON.stringify(payload)
-```
-
-直接展示未知响应全文。
-
-完成标准：
-
-* [ ] 只读取允许的 FastAPI validation 字段；
-* [ ] 非预期 payload 使用统一错误；
-* [ ] 不使用 `dangerouslySetInnerHTML` 渲染错误；
-* [ ] 不显示后端原始异常全文。
-
----
-
-### Step FE02.7：mock 页面测试
-
-第一阶段尽量通过 mock API 验证 UI 与状态机，不依赖真实 LLM。
-
-必须覆盖：
-
-#### Case 1：自然语言提交
-
-输入：
-
-```text
-帮我看看英伟达最近怎么样
-```
-
-应生成：
-
-```ts
-{
-  message:
-    "帮我看看英伟达最近怎么样"
-}
-```
-
-前端不得自行生成：
-
-```ts
-company_id
-data_mode
-as_of
-```
-
----
-
-#### Case 2：completed
-
-mock：
-
-```ts
-{
-  status: "completed",
-  result: {
-    facts: [...],
-    inferences: [...],
-    missing_information: [],
-  }
-}
-```
-
-验证：
-
-* [ ] 用户消息正常显示；
-* [ ] facts 正确显示；
-* [ ] inferences 正确显示；
-* [ ] evidence IDs 正确显示；
-* [ ] run_id 正确显示。
-
----
-
-#### Case 3：insufficient_information
-
-验证：
-
-* [ ] 缺失信息明确展示；
-* [ ] 页面不把缺资料结果表现为成功研究结论。
-
----
-
-#### Case 4：Agent failed
-
-例如：
-
-```ts
-{
-  status: "failed",
-  error: {
-    code: "model_timeout",
-    stage: "model",
-    message: "模型请求超时。",
-  },
-}
-```
-
-验证：
-
-* [ ] 当作合法 RunResponse；
-* [ ] 展示 PublicError；
-* [ ] 不读取 `result.facts`。
-
----
-
-#### Case 5：cancelled
-
-验证：
-
-* [ ] 不读取 `result`；
-* [ ] 页面能明确显示任务已取消。
-
----
-
-#### Case 6：HTTP 422
-
-验证：
-
-* [ ] 进入 `request_invalid`；
-* [ ] 显示安全字段提示；
-* [ ] 不显示原始 JSON。
-
----
-
-#### Case 7：Network failure
-
-验证：
-
-```ts
-{
-  kind: "request_failed"
-}
-```
-
-与 Agent failure 不混淆。
-
----
-
-#### Case 8：旧响应覆盖
-
-模拟：
-
-```text
-request A
-↓
-request B
-↓
-B resolve
-↓
-A resolve
-```
-
-最终必须显示 B。
-
----
-
-#### Case 9：敏感信息
-
-mock 错误中故意加入：
-
-```text
-stack
-api_key
-authorization
-raw_exception
-reasoning_content
-```
-
-验证页面均不显示。
-
----
-
-## FE02 最终数据流
-
-```text
-ResearchComposer
-      ↓
-用户自然语言
-      ↓
-CreateResearchRunRequest
-      ↓
-useResearchRun
-      ↓
-requestId / AbortController
-      ↓
-POST /api/chat/runs
-      ↓
-FastAPI
-      ↓
-后端 Request Normalizer
-      ↓
-内部 ResearchRequest
-      ↓
-Agent
-      ↓
-Tools / RAG / Data
-      ↓
-ResearchOutput
-      ↓
-RunResponse
-      ↓
-useResearchRun
-      ↓
-ResearchConversation
-      ↓
-结构化对话卡片
-```
-
-前端只处理：
-
-```text
-用户说了什么
-请求当前处于什么状态
-Agent 返回了什么结构化结果
-如何安全展示
-```
-
-前端不负责：
-
-```text
-识别 NVDA
-决定调用哪个工具
-决定 data_mode
-计算 as_of
-决定需要报价还是 RAG
-决定是否读取新闻
-```
-
-这些属于后端 Agent。
-
----
-
-## FE02 完成标准
-
-完成 FE02 后，应能够演示：
-
-```text
-用户：
-
-“帮我看看英伟达最近怎么样”
-
-↓ 点击发送
-
-页面：
-
-用户消息立即出现在对话区域
-
-↓ Agent 请求
-
-页面显示 submitting
-
-↓ 后端返回
-
-Agent：
-
-事实
-- ...
-
-推断
-- ...
-
-缺失信息
-- ...
-
-证据
-[E1] [E2]
-
-Run ID
-xxx
-```
-
-同时：
-
-* [ ] 新请求不会被旧响应覆盖；
-* [ ] 网络错误和 Agent 错误明确区分；
-* [ ] Agent 的结构化输出没有被降级成不可验证的纯 Markdown；
-* [ ] fixture / historical / live 不被错误包装；
-* [ ] 页面不暴露原始异常、密钥和模型内部信息。
-
----
-
-## 后续演进
-
-FE02 只建立对话框架。
-
-后续按开发周逐步增强：
-
-```text
-Week 3
-Evidence ID
-→ 可点击 RAG 原文片段
-
-Week 5
-→ 最新报价 / Bar / 数据时间
-
-Week 6
-→ 新闻来源和事件证据
-
-Week 7
-→ Decision Trace
-
-Week 8
-→ Portfolio / Risk / Scenario
-
-Week 9
-→ 完整 Research Workspace
-→ 多模块整合
-→ 条件分支
-→ cancellation / checkpoint 展示
-```
-
-因此 FE02 不需要提前实现这些领域 UI，只需要保证当前组件结构能容纳它们。
-
+完成条件：类型检查、lint、构建通过；功能完成后统一补充的测试通过；没有提前实现 FE03/FE06 的能力。
 
 ## 7. FE03：接入真实 API
 
@@ -1337,7 +534,7 @@ frontend/
 当前下一步：
 
 1. FE01 已按对话目标修订：公开请求只含 `message` 和保留的 `conversation_id`，结构化响应保持不变。
-2. 继续做 FE02，先用 Fake Transport 完成单轮对话状态和组件测试，不等待真实接口。
+2. 按 `docs/frontend-fe02-todo.md` 执行 FE02：先在 Page 内跑通最小请求和渲染，再抽 Hook/组件；开发期间不写测试，功能完成后统一补测。
 3. D10 前由后端增加 `/api/chat/runs` 与 Request Normalizer，再做 FE03 联调；不能直接破坏现有 `/api/runs` 契约。
 4. 每次后端新增领域契约时，先补契约样例和类型，再开发对应 UI。
 
@@ -1413,7 +610,7 @@ type ResultBlock =
 1. 浏览器取消：用户发起新请求或离开页面时，停止等待旧连接。
 2. Agent 取消：后端真正把任务进入 `cancelled` 终态。
 
-- [ ] FE02：用本地递增 `requestId` 防止旧响应覆盖新页面。
+- [ ] FE03：真实 HTTP 联调允许重复提交或重新请求时，再用递增 `requestId` 防止旧响应覆盖新页面；FE02 先通过 submitting 禁用重复提交。
 - [ ] FE03：把 `AbortSignal` 传给请求层。
 - [ ] FE06：用后端 `run_id` 关联取消、事件和最终快照。
 - [ ] 浏览器 `abort()` 不得被描述为后端任务已经取消。

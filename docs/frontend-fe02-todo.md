@@ -1,45 +1,231 @@
-# FE02 TODO：对话式研究页面与状态处理
+# FE02 TODO：从最小对话页面到合理抽象
 
-> 对应总计划：`docs/frontend-development-plan.md` 的“FE02：对话式研究页面与状态处理”。
+> 本文是 FE02 的详细执行清单。`docs/frontend-development-plan.md` 的 FE02 章节同步目标、顺序和边界，不再保留旧的复杂 Hook 方案。
 
-## 1. 本阶段目标
+## 当前交付状态
 
-完成一个基于 Mock Transport 的单轮对话研究页面：
+- [x] FE02 本地 Mock 单轮对话业务已实现，包括输入、请求状态、用户消息、结构化结果、安全错误和清空。
+- [x] 支持连续提交并保留之前已结束的本地对话；清空全部历史，刷新或离开页面不保留，不传给模型。
+- [x] Page 已直接连接 Composer 与 Hook，Conversation 按联合类型展示响应，不使用 `as any`。
+- [x] 输入有明确 label；提交期间禁用输入和按钮，并显示“研究中”。
+- [x] 四种合法 Agent 终态的展示分支已完成。
+- [x] 类型检查、lint、生产构建通过。
+- [x] 浏览器手动验证：completed、资料不足、Agent failed/cancelled、延迟加载与禁用输入、Transport 抛错、清空当前对话。
+- [x] 桌面与 375px 小屏手动检查通过，长文本和 Run ID 可以换行。
+- [ ] FE02.10 统一补测尚未开始；本次不新增或修改测试文件。
+
+以下章节保留开发过程说明。知识理解类清单由学习者确认，不因代码交付自动勾选。
+
+## 1. 开发方式
+
+FE02 不再从独立 Hook 或细分组件开始，而是遵循：
 
 ```text
-用户输入自然语言
+先看页面在哪里使用
     ↓
-页面立即显示用户消息和提交状态
+在页面内完成最小可运行流程
     ↓
-Mock createRun 返回结构化 RunResponse
+确认调用时机和数据流
     ↓
-页面分别展示事实、推断、证据、缺失信息或安全错误
+观察代码中真实出现的问题
+    ↓
+再抽离 Hook、类型和展示组件
+    ↓
+功能全部完成后统一补测试
 ```
 
-FE02 不依赖真实 LLM，也不等待后端 `/api/chat/runs` 完成。
+开始每一步前，必须先说明：
 
-## 2. 当前进度
+1. 本步解决什么用户问题；
+2. 代码放在哪个文件；
+3. 谁调用它；
+4. 什么时候调用；
+5. 输入和输出是什么；
+6. 本步明确不实现什么；
+7. 本步是“只搭架构”还是“实现业务逻辑”。
 
-- [ ] FE02.1 对话输入组件：已有初版，仍需修正和测试。
-- [x] FE02.2 API 请求契约：FE01 已完成。
-- [ ] FE02.3 页面请求状态机：只有类型骨架，尚未实现。
-- [ ] FE02.4 对话消息展示：尚未实现。
-- [ ] FE02.5 结构化研究结果组件：尚未实现。
-- [ ] FE02.6 HTTP 422 安全格式化：尚未实现。
-- [ ] FE02.7 Mock 页面测试：尚未实现。
+如果范围不明确，编码前先确认，不自行扩大任务。
+
+开发阶段不新增或修改前端测试。每一步只运行：
+
+```text
+pnpm typecheck
+pnpm lint
+pnpm build
+```
+
+等 FE02 业务功能全部完成后，再进入统一测试阶段。
 
 ---
 
-## 3. FE02.1：完成对话输入组件
+## 2. FE02 最终目标
 
-文件：
+完成一个使用本地 Mock Transport 的单轮对话研究页面：
+
+```text
+用户进入 /research
+    ↓
+输入自然语言问题
+    ↓
+空输入在 Composer 内被拦截
+    ↓
+页面调用 Fake RunTransport
+    ↓
+页面显示用户消息和加载状态
+    ↓
+页面收到结构化 RunResponse
+    ↓
+页面展示事实、推断、证据、缺失信息或安全错误
+```
+
+公开请求只包含：
+
+```ts
+interface CreateResearchRunRequest {
+  message: string
+  conversation_id?: string
+}
+```
+
+FE02 不要求用户填写或理解：
+
+```text
+company_id
+data_mode
+as_of
+工具选择
+RAG 策略
+新闻或宏观数据源
+```
+
+---
+
+## 3. 当前已有架构
+
+以下记录已经完成的架构基础；业务交付状态见文档顶部。
+
+- [x] `BrowserRouter` 已接入应用入口。
+- [x] `/` 重定向到 `/research`。
+- [x] `/research` 对应 `ResearchPage`。
+- [x] 未知路由对应 `NotFoundPage`。
+- [x] `App` 可以注入 `RunTransport`。
+- [x] `ResearchPage`、`ResearchComposer`、`ResearchConversation` 文件已建立。
+- [x] `useResearchRun` 和 `ResearchViewState` 文件已建立。
+- [x] `RunTransport` 接口和最小 Fake Transport 已建立。
+- [x] `CreateResearchRunRequest`、`RunResponse` 公开契约已在 FE01 完成。
+
+当前架构关系：
+
+```text
+main.tsx
+  → App
+  → AppRoutes
+  → ResearchPage
+      ├─ ResearchComposer
+      ├─ useResearchRun
+      ├─ ResearchConversation → ResearchResponse
+      └─ RunTransport
+```
+
+这些文件后续按步骤填充，不能因为文件已经存在就直接实现最终复杂逻辑。
+
+---
+
+## 4. 新的执行顺序
+
+```text
+FE02.1 看懂 Route 与 Page 的装配关系
+    ↓
+FE02.2 完成最小输入组件
+    ↓
+FE02.3 在 Page 内跑通最小请求
+    ↓
+FE02.4 在 Page 内直接显示最小结果
+    ↓
+FE02.5 根据已经出现的页面状态整理类型
+    ↓
+FE02.6 将请求生命周期抽离为 useResearchRun
+    ↓
+FE02.7 根据已经出现的 JSX 抽离展示组件
+    ↓
+FE02.8 补齐 FE02 范围内的终态和安全错误
+    ↓
+FE02.9 完成页面体验和代码收口
+    ↓
+FE02.10 功能完成后统一补测试
+```
+
+---
+
+## 5. FE02.1：理解 Route、App 与 Page
+
+### 本步性质
+
+只理解和检查架构，不实现业务逻辑。
+
+### 文件
+
+```text
+frontend/src/main.tsx
+frontend/src/App.tsx
+frontend/src/app/routes.tsx
+frontend/src/pages/ResearchPage.tsx
+frontend/src/pages/NotFoundPage.tsx
+```
+
+### 需要理解的调用链
+
+```text
+main.tsx 创建 React 应用
+    ↓
+BrowserRouter 提供浏览器路由上下文
+    ↓
+App 负责注入 Transport
+    ↓
+AppRoutes 根据 URL 选择页面
+    ↓
+/research 渲染 ResearchPage
+```
+
+### TODO
+
+- [ ] 能说明为什么 `BrowserRouter` 放在 `main.tsx`。
+- [ ] 能说明 `App` 为什么不直接处理研究请求。
+- [ ] 能说明 Route 与 Page 的区别。
+- [ ] 能从 `/research` 找到最终渲染的 `ResearchPage`。
+- [ ] 能说明 `RunTransport` 为什么从 App 注入。
+
+### 本步不做
+
+- 不写请求逻辑；
+- 不写 Hook 状态机；
+- 不写结果渲染；
+- 不写测试。
+
+---
+
+## 6. FE02.2：完成最小输入组件
+
+### 用户问题
+
+用户需要输入一段自然语言并点击发送。
+
+### 文件
 
 ```text
 frontend/src/features/research/ResearchComposer.tsx
-frontend/src/features/research/ResearchComposer.test.tsx
 ```
 
-组件接口：
+### 使用位置
+
+```tsx
+<ResearchComposer
+  disabled={false}
+  onSubmit={handleSubmit}
+/>
+```
+
+### 组件接口
 
 ```ts
 interface ResearchComposerProps {
@@ -50,106 +236,251 @@ interface ResearchComposerProps {
 }
 ```
 
-TODO：
+### 内部逻辑
 
-- [ ] 从 `frontend/src/api/contracts.ts` 导入 `CreateResearchRunRequest`。
-- [ ] 删除组件内重复声明的 `CreateResearchRunRequest`。
-- [ ] 删除未使用的 `React` 导入。
-- [ ] 读取 `message` 并执行 `trim()`。
-- [ ] 空字符串或纯空格不能调用 `onSubmit`。
+```text
+用户提交 form
+    ↓
+读取 message
+    ↓
+trim()
+    ↓
+空字符串：直接 return
+    ↓
+合法消息：onSubmit({ message })
+```
+
+### TODO
+
+- [ ] 从公开契约导入 `CreateResearchRunRequest`。
+- [ ] 不在组件内重复定义请求类型。
+- [ ] 对输入执行 `trim()`。
+- [ ] 空字符串或纯空格直接返回，不发送请求。
 - [ ] 合法输入只提交 `{ message }`。
-- [ ] `disabled=true` 时禁用发送按钮。
-- [ ] 不显示或生成 `company_id`、`data_mode`、`as_of`。
-- [ ] 添加输入框的可访问名称，确保测试可以稳定查找。
-- [ ] 测试合法提交、空输入、去除首尾空格和禁用状态。
+- [ ] `disabled=true` 时不能重复提交。
+- [ ] 不生成 `company_id`、`data_mode` 或 `as_of`。
 
-完成标准：
+### 完成标准
 
-```ts
-onSubmit({
-  message: "帮我看看英伟达最近怎么样",
-})
+能明确说明：
+
+```text
+ResearchComposer 只收集输入
+它不知道 createRun
+它不知道 Mock 或 HTTP
+它不展示 Agent 结果
 ```
 
 ---
 
-## 4. FE02.2：使用统一 API 请求契约
+## 7. FE02.3：在 Page 内跑通最小请求
 
-文件：
+### 为什么先写在 Page
+
+此时先看清最短调用链，不立即把逻辑藏进 Hook。
+
+### 文件
 
 ```text
-frontend/src/api/contracts.ts
-frontend/src/features/research/type.ts
+frontend/src/pages/ResearchPage.tsx
+frontend/src/api/runTransport.ts
+frontend/src/mocks/fakeRunTransport.ts
 ```
 
-当前契约：
+### 最小调用链
+
+```text
+ResearchComposer.onSubmit
+    ↓
+ResearchPage.handleSubmit
+    ↓
+runTransport.createRun(request)
+    ↓
+Promise<RunResponse>
+```
+
+### 页面内最小实现
+
+第一版只需要：
 
 ```ts
-interface CreateResearchRunRequest {
-  message: string
-  conversation_id?: string
+async function handleSubmit(
+  request: CreateResearchRunRequest,
+) {
+  const response = await runTransport.createRun(request)
+  // 下一步再显示 response
 }
 ```
 
-TODO：
+### TODO
 
-- [x] 请求类型集中定义在 API 契约层。
-- [x] feature 层的 `type.ts` 只转出类型，不维护第二份定义。
-- [x] `RunResponse` 保持可辨识联合类型。
-- [x] `ResearchOutput.data_mode` 保持必填。
-- [ ] D10 后端对话入口完成后，验证真实请求协议；该项不阻塞 FE02。
+- [ ] 先在 `ResearchPage` 定义 `handleSubmit`。
+- [ ] 将 `handleSubmit` 传给 `ResearchComposer.onSubmit`。
+- [ ] 在 `handleSubmit` 内调用注入的 `runTransport.createRun`。
+- [ ] 明确 `createRun` 在用户提交后才执行，不在页面渲染时执行。
+- [ ] Fake Transport 只返回 FE01 已有的固定 `RunResponse`。
+
+### 本步不做
+
+- 不使用 `requestId`；
+- 不使用 `AbortController`；
+- 不解析 HTTP 422；
+- 不实现真实 fetch；
+- 不抽离 Hook；
+- 不写测试。
 
 ---
 
-## 5. FE02.3：实现页面请求状态机
+## 8. FE02.4：在 Page 内直接显示最小结果
 
-文件：
+### 用户问题
 
-```text
-frontend/src/features/research/useResearchRun.ts
-frontend/src/features/research/useResearchRun.test.ts
+用户提交以后，需要知道问题已经发送，并看到 Agent 返回的结构化结果。
+
+### 先使用最简单的页面状态
+
+```ts
+const [userMessage, setUserMessage] = useState('')
+const [isSubmitting, setIsSubmitting] = useState(false)
+const [response, setResponse] = useState<RunResponse | null>(null)
 ```
 
-状态类型：
+### 调用顺序
+
+```text
+handleSubmit(request)
+    ↓
+保存 request.message
+    ↓
+setIsSubmitting(true)
+    ↓
+await runTransport.createRun(request)
+    ↓
+setResponse(response)
+    ↓
+setIsSubmitting(false)
+```
+
+### TODO
+
+- [ ] 提交后立即保留用户消息。
+- [ ] 请求期间显示“研究中”。
+- [ ] 收到结果后显示 `run_id` 和 `status`。
+- [ ] 第一版可以直接在 `ResearchPage` 内写最小 JSX。
+- [ ] 暂时不创建 `RunSummary`、`ClaimList` 等细分组件。
+
+### 为什么暂时不抽组件
+
+先看到真实 JSX 和重复结构，才能判断组件边界。不能为了目录好看提前创建空组件。
+
+---
+
+## 9. FE02.5：从页面实际状态整理类型
+
+### 抽象时机
+
+当页面已经同时维护用户消息、加载状态和响应时，再把不可能同时成立的状态整理为联合类型。
+
+### 文件
+
+```text
+frontend/src/features/research/type.ts
+```
+
+### FE02 最小状态
 
 ```ts
 type ResearchViewState =
   | {
-      kind: "idle"
+      kind: 'idle'
     }
   | {
-      kind: "submitting"
-      requestId: number
+      kind: 'submitting'
       userMessage: string
     }
   | {
-      kind: "received"
-      requestId: number
+      kind: 'received'
       userMessage: string
       response: RunResponse
     }
   | {
-      kind: "request_invalid"
-      userMessage: string
-      messages: string[]
-    }
-  | {
-      kind: "request_failed"
-      requestId: number
+      kind: 'request_failed'
       userMessage: string
       errorMessage: string
     }
 ```
 
-Hook 接口：
+### TODO
+
+- [ ] 从页面已有状态推导联合类型，而不是先写复杂状态机。
+- [ ] `submitting` 保留 `userMessage`。
+- [ ] `received` 同时保存用户消息和 `RunResponse`。
+- [ ] 网络或 Mock 抛错使用统一 `request_failed`。
+- [ ] 不在 FE02 增加暂时用不到的字段。
+
+### FE02 暂不需要
+
+```text
+requestId
+AbortController
+request_invalid
+checkpoint
+SSE event sequence
+```
+
+FE02 提交期间禁用输入，因此当前不会出现并行请求竞态。等 FE03 真实 HTTP 联调需要重复提交或重新请求时，再引入竞态保护。
+
+---
+
+## 10. FE02.6：抽离 useResearchRun
+
+### 为什么现在才抽离
+
+到这一步，`ResearchPage` 已经出现以下与布局无关的代码：
+
+```text
+保存页面状态
+调用 createRun
+处理 Promise 成功
+处理通用失败
+恢复 idle
+```
+
+这些代码才构成 Hook 的真实抽象理由。
+
+### 文件
+
+```text
+frontend/src/features/research/useResearchRun.ts
+```
+
+### 使用位置
 
 ```ts
-function useResearchRun(
-  createRun: (
-    request: CreateResearchRunRequest,
-    signal?: AbortSignal,
-  ) => Promise<RunResponse>,
-): {
+const {
+  state,
+  submit,
+  reset,
+} = useResearchRun(
+  runTransport.createRun,
+)
+```
+
+### 输入
+
+```ts
+type CreateRun = (
+  request: CreateResearchRunRequest,
+  signal?: AbortSignal,
+) => Promise<RunResponse>
+```
+
+FE02 不使用 `signal`，只是保持 Transport 接口以后可以扩展。
+
+### 输出
+
+```ts
+{
   state: ResearchViewState
   submit: (
     request: CreateResearchRunRequest,
@@ -158,257 +489,218 @@ function useResearchRun(
 }
 ```
 
-TODO：
-
-- [ ] 使用 `useState` 保存 `ResearchViewState`。
-- [ ] 使用 `useRef` 保存最新的递增 `requestId`。
-- [ ] 使用 `useRef` 保存当前 `AbortController`。
-- [ ] 每次提交前取消上一个浏览器请求。
-- [ ] 提交开始时进入 `submitting`。
-- [ ] 请求成功时进入 `received`。
-- [ ] HTTP 422 进入 `request_invalid`。
-- [ ] 网络、服务不可达或其他 transport error 进入 `request_failed`。
-- [ ] 只有最新 `requestId` 可以更新页面状态。
-- [ ] `reset()` 取消当前请求并恢复 `idle`。
-- [ ] Hook 卸载时取消仍在执行的请求。
-- [ ] Abort 产生的旧请求错误不能覆盖新请求状态。
-- [ ] Agent 的 `failed` 和 `cancelled` 响应仍作为合法 `received` 状态处理。
-
-必须保持以下边界：
+### 内部执行顺序
 
 ```text
-HTTP/网络失败
-→ request_failed
+Hook 初始化
+→ 只创建 idle 状态，不调用 createRun
 
-HTTP 成功，但 Agent 返回 failed/cancelled
-→ received
+用户提交
+→ ResearchComposer 调用 submit(request)
+→ submit 设置 submitting
+→ submit 调用 createRun(request)
+→ 成功后设置 received
+→ 抛错后设置 request_failed
+
+用户 reset
+→ 状态恢复 idle
 ```
 
-测试：
+### TODO
 
-- [ ] 首次提交状态变化正确。
-- [ ] 新请求会取消旧请求。
-- [ ] A 后返回、B 先返回时最终显示 B。
-- [ ] transport error 和 Agent failure 不混淆。
-- [ ] reset 后恢复 idle。
+- [ ] 初始化时保持 `idle`。
+- [ ] 确认 Hook 初始化不会调用 `createRun`。
+- [ ] 只在 `submit()` 内调用 `createRun`。
+- [ ] 请求开始进入 `submitting`。
+- [ ] Promise resolve 后进入 `received`。
+- [ ] Promise reject 后进入通用 `request_failed`。
+- [ ] `reset()` 只恢复 `idle`。
+- [ ] 页面只负责组装和渲染，不再包含请求生命周期。
+
+### 本步不做
+
+- 不解析 HTTP 422；
+- 不处理旧响应覆盖；
+- 不实现浏览器取消；
+- 不实现后端任务取消；
+- 不实现断点恢复；
+- 不写测试。
 
 ---
 
-## 6. FE02.4：实现对话消息展示
+## 11. FE02.7：根据真实 JSX 抽离展示组件
 
-建议文件：
+### 抽象原则
+
+先从已经可以工作的 `ResearchPage` 移动代码，不提前设计大量组件。
+
+### 第一轮只抽两个组件
 
 ```text
 frontend/src/features/research/ResearchConversation.tsx
-frontend/src/features/research/UserMessage.tsx
 frontend/src/features/research/ResearchResponse.tsx
 ```
 
-建议接口：
-
-```ts
-interface UserMessageProps {
-  message: string
-}
-
-interface ResearchResponseProps {
-  response: RunResponse
-}
-
-interface ResearchConversationProps {
-  state: ResearchViewState
-}
-```
-
-TODO：
-
-- [ ] 用户消息和 Agent 消息使用不同的视觉样式。
-- [ ] `submitting` 时立即显示用户消息。
-- [ ] `submitting` 时显示明确的加载状态。
-- [ ] 请求完成后继续保留本轮 `userMessage`。
-- [ ] 将 `RunResponse` 交给结构化结果组件渲染。
-- [ ] 每个 Agent 结果显示自己的 `run_id`。
-- [ ] 不把后端内部事件展示成聊天正文。
-- [ ] 不直接渲染模型原始 response。
-- [ ] 不暗示页面已经拥有真正的多轮模型记忆。
-
-FE02 的最小会话关系：
+职责：
 
 ```text
-message A → run A
-message B → run B
+ResearchConversation
+→ 根据 ResearchViewState 组织用户消息、加载状态和 Agent 消息
+
+ResearchResponse
+→ 根据 RunResponse.status 展示结构化结果
 ```
 
-本地保留历史消息只表示 UI 历史，不表示模型自动获得历史上下文。
+### TODO
 
----
-
-## 7. FE02.5：实现结构化研究结果组件
-
-建议文件：
-
-```text
-frontend/src/features/research/RunSummary.tsx
-frontend/src/features/research/ClaimList.tsx
-frontend/src/features/research/MissingInformation.tsx
-frontend/src/features/research/EvidenceBadge.tsx
-frontend/src/features/research/PublicErrorPanel.tsx
-```
-
-建议接口：
-
-```ts
-interface RunSummaryProps {
-  response: RunResponse
-}
-
-interface ClaimListProps {
-  title: string
-  claims: readonly Claim[]
-}
-
-interface MissingInformationProps {
-  items: readonly string[]
-}
-
-interface EvidenceBadgeProps {
-  evidenceId: string
-}
-
-interface PublicErrorPanelProps {
-  error: PublicError
-}
-```
-
-具体类型名称以 `frontend/src/api/contracts.ts` 中的现有导出为准，不在组件文件中复制领域类型。
-
-TODO：
-
-- [ ] `RunSummary` 展示 `run_id`、状态和真实 `data_mode`。
-- [ ] 不把 fixture 数据描述成实时数据。
-- [ ] `ClaimList` 分开渲染 facts 与 inferences。
-- [ ] 每条 claim 显示关联的 evidence ID。
-- [ ] `EvidenceBadge` 当前只显示 ID，不提前实现证据详情弹窗。
-- [ ] `insufficient_information` 突出显示缺失信息。
-- [ ] `failed` 只展示 `error.code`、`error.stage`、`error.message`。
+- [ ] 用户消息和 Agent 消息视觉区分。
+- [ ] submitting 显示用户消息和加载状态。
+- [ ] received 显示用户消息和结构化结果。
+- [ ] request_failed 显示统一安全提示。
+- [ ] `completed` 展示 facts、inferences、evidence ID、run ID 和 data mode。
+- [ ] `insufficient_information` 突出 missing information。
+- [ ] `failed` 只显示公开 `error`。
 - [ ] `cancelled` 明确显示任务已取消。
-- [ ] 按 `response.status` 缩小类型后再读取 `result` 或 `error`。
-- [ ] 不显示 stack、raw exception、API key、provider headers、内部路径或 hidden reasoning。
+
+只有当 `ResearchResponse` 已经明显过长或出现重复 JSX 时，才继续抽离：
+
+```text
+RunSummary
+ClaimList
+EvidenceBadge
+MissingInformation
+PublicErrorPanel
+```
+
+这批组件不是 FE02 开始阶段的前置任务。
 
 ---
 
-## 8. FE02.6：实现 HTTP 422 安全格式化
+## 12. FE02.8：补齐本阶段错误边界
 
-建议文件：
+FE02 只处理已经真实存在的两类结果。
+
+### Agent 终态
+
+以下是合法 `RunResponse`，不属于网络异常：
 
 ```text
-frontend/src/features/research/formatValidationMessages.ts
-frontend/src/features/research/formatValidationMessages.test.ts
+completed
+insufficient_information
+failed
+cancelled
 ```
 
-函数接口：
+### Transport 抛错
 
-```ts
-function formatValidationMessages(
-  payload: unknown,
-): string[]
+Fake Transport 或未来 Transport 抛出异常时，FE02 统一显示：
+
+```text
+暂时无法完成请求，请稍后重试。
 ```
 
-功能：
+不得显示原始异常、stack、密钥或模型内部信息。
 
-将未知的 FastAPI HTTP 422 JSON 转换成可以安全展示给用户的字段提示。
+### FE02 不实现 HTTP 422 字段格式化
+
+空输入已经由 `ResearchComposer` 拦截。真实 HTTP 422 要等 FE03 接入 `/api/chat/runs` 后，根据实际返回协议处理。
+
+当前不创建：
+
+```text
+formatValidationMessages.ts
+RunValidationError
+HTTP 错误解析器
+```
+
+---
+
+## 13. FE02.9：页面体验与代码收口
 
 TODO：
 
-- [ ] 将输入始终视为 `unknown`，先检查再读取。
-- [ ] 只读取允许的 `detail[].loc` 和 `detail[].msg`。
-- [ ] 将合法错误转换为 `字段: 错误信息`。
-- [ ] 非预期结构返回 `请求参数不合法，请检查输入。`。
-- [ ] 不直接向用户展示 `JSON.stringify(payload)`。
-- [ ] 不使用 `dangerouslySetInnerHTML`。
-- [ ] 不展示后端原始异常全文。
-- [ ] 测试标准 422、空对象、数组、字符串、恶意额外字段和字段缺失。
+- [ ] 输入框拥有明确 label。
+- [ ] 提交期间输入框和按钮禁用。
+- [ ] 状态变化不只依赖颜色表达。
+- [ ] fixture 明确标记为教学模拟数据。
+- [ ] 长文本可以正常换行。
+- [ ] 页面在常见桌面和移动宽度可阅读。
+- [ ] App、Page、Hook、Transport、组件职责与 README 一致。
+- [ ] 删除没有使用的提前抽象和空文件。
+- [ ] `pnpm typecheck` 通过。
+- [ ] `pnpm lint` 通过。
+- [ ] `pnpm build` 通过。
 
 ---
 
-## 9. FE02.7：组装 Mock 页面并完成测试
+## 14. FE02.10：功能完成后统一补测试
 
-建议文件：
+只有 FE02.1～FE02.9 完成并且业务结构稳定后，才进入测试阶段。
+
+### 统一补充的测试
+
+- [ ] `ResearchComposer`：合法输入、trim、空输入和 disabled。
+- [ ] `useResearchRun`：初始化不请求，submit 才调用 `createRun`。
+- [ ] `useResearchRun`：submitting、received、request_failed、reset。
+- [ ] `ResearchResponse`：四种合法 Agent 终态。
+- [ ] `ResearchPage`：从输入到 Mock 结果的完整流程。
+- [ ] 页面不显示原始异常、stack、API key 或 hidden reasoning。
+- [ ] Route：`/research` 与 404 页面。
+
+### 统一执行
 
 ```text
-frontend/src/features/research/ResearchPage.tsx
-frontend/src/features/research/ResearchPage.test.tsx
-frontend/src/App.tsx
+pnpm typecheck
+pnpm lint
+pnpm test
+pnpm build
 ```
 
-TODO：
-
-- [ ] 创建可控制成功、失败、延迟和乱序响应的 Fake `createRun`。
-- [ ] 使用 `useResearchRun(createRun)` 管理页面状态。
-- [ ] 连接 `ResearchComposer` 和 `submit`。
-- [ ] 连接 `ResearchConversation` 和当前状态。
-- [ ] 使用研究页面替换当前 App 初始化占位内容。
-- [ ] 保持 Mock Transport 可被 FE03 的 HTTP Transport 替换。
-
-必须覆盖以下用例：
-
-- [ ] 自然语言输入只提交 `{ message }`。
-- [ ] `completed` 显示用户消息、facts、inferences、evidence ID 和 `run_id`。
-- [ ] `insufficient_information` 明确显示缺失信息。
-- [ ] Agent `failed` 被当作合法 `RunResponse` 并显示安全错误。
-- [ ] `cancelled` 不读取 `result`，并显示取消状态。
-- [ ] HTTP 422 进入 `request_invalid`，不显示原始 JSON。
-- [ ] Network failure 进入 `request_failed`，不与 Agent failure 混淆。
-- [ ] A、B 请求乱序返回时最终只显示 B。
-- [ ] 页面不显示 `stack`、`api_key`、`authorization`、`raw_exception` 或 `reasoning_content`。
+测试阶段只验证已经确定的功能，不借测试继续扩展 FE02 范围。
 
 ---
 
-## 10. FE02 不做的内容
+## 15. 推迟到后续阶段
 
-- [ ] 不在 FE02 调用真实 `/api/chat/runs`；真实 HTTP 接入属于 FE03。
-- [ ] 不在浏览器中识别股票代码。
-- [ ] 不由前端选择 Agent 工具。
-- [ ] 不由前端生成 `as_of`。
-- [ ] 不由前端决定 `data_mode`。
-- [ ] 不实现真正的多轮 Agent memory。
-- [ ] 不实现 SSE 流式事件。
-- [ ] 不实现 Markdown/HTML 富文本渲染。
-- [ ] 不实现可点击的 RAG 证据详情。
-- [ ] 不实现新闻、组合风险或 Decision Trace 页面。
+### FE03：真实 HTTP 联调
 
-以上条目用于明确范围，不需要勾选为“已实现”。
+- `POST /api/chat/runs`；
+- HTTP 422；
+- 非预期 HTTP 状态；
+- 运行时响应校验；
+- `AbortSignal` 传给 fetch；
+- 根据真实交互需要决定是否加入 `requestId` 和旧响应保护。
+
+### FE04～FE05：领域组件
+
+- 可点击证据与来源；
+- 报告期、发布时间和数据时间；
+- Decision Trace；
+- 组合、仓位和风险对比。
+
+### FE06：工作流与恢复
+
+- 后端正式取消；
+- SSE 事件；
+- 断线重连；
+- checkpoint；
+- 最终快照恢复；
+- 重复事件和事件序号处理。
 
 ---
 
-## 11. 推荐实施顺序
+## 16. FE02 最终验收
 
-```text
-FE02.1 ResearchComposer
-    ↓
-FE02.3 useResearchRun
-    ↓
-FE02.6 formatValidationMessages
-    ↓
-FE02.5 结构化结果组件
-    ↓
-FE02.4 对话消息与页面组装
-    ↓
-FE02.7 Mock 集成测试
-```
-
-## 12. FE02 总体验收
-
-- [ ] 用户只输入自然语言即可发起研究。
-- [ ] 用户消息在提交后立即显示。
-- [ ] 页面明确显示提交中状态。
-- [ ] 页面使用结构化组件展示 facts、inferences、evidence 和 missing information。
-- [ ] 页面显示正确的 `run_id` 和 `data_mode`。
-- [ ] 新请求不会被旧响应覆盖。
-- [ ] 网络错误和 Agent 错误明确区分。
-- [ ] Agent 输出没有被降级为不可验证的纯 Markdown。
-- [ ] 页面不暴露原始异常、密钥或模型内部信息。
-- [ ] FE02 的组件和状态测试全部通过。
-- [ ] TypeScript 类型检查通过。
-- [ ] lint 检查通过。
-- [ ] 前端测试全部通过。
+- [x] `/research` 可以打开对话研究页面。
+- [x] 用户只输入自然语言即可提交。
+- [x] 空输入不会调用 Transport。
+- [x] 提交时保留并显示用户消息。
+- [x] 页面显示明确的加载状态。
+- [x] 页面展示结构化 facts 和 inferences。
+- [x] 页面展示 evidence ID、run ID 和真实 data mode。
+- [x] 资料不足、Agent 失败和取消都有明确显示。
+- [x] Transport 抛错时只显示统一安全错误。
+- [x] 页面不暴露内部异常、密钥或模型内部信息。
+- [x] 页面没有提前实现 FE03/FE06 能力。
+- [x] 代码结构能够清楚说明从 Page 内实现到 Hook/组件抽离的过程。
+- [ ] 功能完成后统一补充的测试全部通过。
