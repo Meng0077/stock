@@ -1,6 +1,7 @@
 import type {
   CancelledRunResponse,
   CompletedRunResponse,
+  CreateResearchRunRequest,
   FailedRunResponse,
   FastApiValidationError,
   InsufficientInformationRunResponse,
@@ -91,13 +92,17 @@ const validationError = {
   detail: [
     {
       type: 'string_too_short',
-      loc: ['body', 'question'],
+      loc: ['body', 'message'],
       msg: 'String should have at least 1 character',
       input: '   ',
       ctx: { min_length: 1 },
     },
   ],
 } satisfies FastApiValidationError
+
+const createRunRequest = {
+  message: '帮我看看英伟达最近怎么样',
+} satisfies CreateResearchRunRequest
 
 /**
  * 输入运行终态，输出一份独立的固定 RunResponse。
@@ -117,4 +122,9 @@ export function getMockRunResponse(status: RunStatus): RunResponse {
 /** 输出一份独立的 FastAPI HTTP 422 fixture。 */
 export function getMockValidationError(): FastApiValidationError {
   return structuredClone(validationError)
+}
+
+/** 输出一份只含用户自然语言的公开对话请求 fixture。 */
+export function getMockCreateResearchRunRequest(): CreateResearchRunRequest {
+  return structuredClone(createRunRequest)
 }

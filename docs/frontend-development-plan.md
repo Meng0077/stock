@@ -10,27 +10,34 @@
 
 最终页面负责：
 
-- 输入公司、研究问题、资料模式、研究截止时间和后期的风险假设；
+- 以对话方式输入自然语言研究问题和后期的风险假设；
 - 展示运行身份、状态、事实、推断、缺失信息和证据；
 - 后续展示行情时间、宏观统计期、引用、不确定性和 Decision Trace；
 - 后续对比当前仓位与假设调整后的风险；
 - 明确分开“市场观点”和“个人风险结论”；
 - 只展示后端允许公开的安全错误，不展示原始异常、密钥或内部模型信息。
 
-首版不做：
+### D10 最小对话版本不做
 
 - Redux 或复杂全局状态管理；
 - 图表和复杂 dashboard；
-- 下单、模拟成交或券商写权限；
 - 后端语义尚未确定的 SSE、断线重连和任务恢复；
+- 真正的多轮 Agent memory、上下文压缩和历史会话恢复；
+- 要求用户填写 `company_id`、`data_mode` 或 `as_of` 等内部研究字段；
 - 用前端假数据冒充真实来源、实时行情或个人风险结论。
+
+### D50 面试首版始终不做
+
+- 下单、模拟成交或券商写权限；
+- 在浏览器保存模型密钥、券商凭据或账户号；
+- 展示隐藏思维链，或把临时 token 当作正式研究结果。
 
 ## 2. 从总计划提取的原始前端任务
 
 | 原开发日 | 前端任务 | 完成标准 |
 | --- | --- | --- |
-| D10 | 建立 React 结果页骨架 | 浏览器跑通 `React → POST /api/runs → FastAPI → Agent → Tool → ResearchOutput → React` |
-| D10 | 最小请求与结果展示 | 可输入请求，展示 `run_id`、状态、facts、evidence ID 和 data mode；失败不泄露原始异常 |
+| D10 | 建立 React 对话式研究页骨架 | 浏览器跑通 `自然语言 → 对话 API → 后端归一化 → Agent → Tool → ResearchOutput → React` |
+| D10 | 最小对话与结果展示 | 用户只输入自然语言；页面展示用户消息、`run_id`、状态、facts、evidence ID 和 data mode；失败不泄露原始异常 |
 | D43 | 完善问题输入与研究结果页 | 显示行情时间、宏观统计期、引用和不确定性 |
 | D44 | 展示决策与风险 | 展示 Decision Trace、当前仓位与假设后风险；市场观点与个人风险结论清楚分开 |
 | D45 | 演示状态分支 | 正常、资料不足、风险否决和取消均可演示；旧请求不能覆盖当前页面 |
@@ -47,9 +54,9 @@
 
 | 前端阶段 | 可并行的后端阶段 | 前端产物 | 是否等待后端 |
 | --- | --- | --- | --- |
-| FE01 工程与契约 | D08 Manual/LangChain 对照 | React 工程、TypeScript 类型、mock | 否 |
-| FE02 最小交互页面 | D08–D09 Agent 收口 | 表单、状态机、结果和安全错误组件 | 否 |
-| FE03 真实 API 联调 | D10 完整链路 | `POST /api/runs` 客户端和浏览器端到端测试 | 是，等待 D09/D10 最终 runner 与本地访问方式 |
+| FE01 工程与契约 | D08 Manual/LangChain 对照 | React 工程、公开对话请求类型、结构化响应类型、mock | 否 |
+| FE02 最小对话页面 | D08–D09 Agent 收口 | Composer、单轮对话记录、状态机、结果和安全错误组件 | 否，先使用 mock |
+| FE03 真实 API 联调 | D10 完整链路 | 对话 API 客户端和浏览器端到端测试 | 是，等待后端对话请求归一化入口 |
 | FE04 证据与数据时间 | D11–D30 RAG/数据工具 | 引用、行情、宏观和新闻时间展示 | 是，等待证据和时间契约 |
 | FE05 决策与风险 | D31–D40 决策/组合/风险 | Decision Trace、仓位前后对比 | 是，等待领域模型和 API |
 | FE06 工作流状态 | D41–D45 LangGraph | 取消、恢复、竞态保护；可选 SSE | 部分；竞态保护可提前，真实取消/SSE 等后端 |
@@ -57,24 +64,53 @@
 
 当前应立即开始 FE01 和 FE02；D09 完成后收口 FE03。FE04–FE06 不阻塞前端基础开发。
 
-## 4. 当前公开 API 契约
+## 4. 对话 API 与内部研究契约
 
-### 请求
+对话式改造后必须区分两层请求，不能只是把前端字段改名后直接调用当前接口。
 
-`POST /api/runs`
+### 4.1 前端公开请求
+
+建议新增 `POST /api/chat/runs`，避免破坏现有 `POST /api/runs` 的固定契约与后端测试。
 
 ```ts
-type DataMode = "fixture" | "historical" | "live";
-
-interface ResearchRequest {
-  company_id: string; // 1～80 个字符
-  question: string;   // 1～2000 个字符
-  data_mode: DataMode;
-  as_of: string;      // 必须是带时区的 ISO 8601 时间
+interface CreateResearchRunRequest {
+  message: string;
+  conversation_id?: string;
 }
 ```
 
-### 响应
+首阶段只发送 `message`。`conversation_id` 是未来多轮会话的保留字段；在后端没有记忆语义前，前端不生成或宣传多轮上下文能力。
+
+### 4.2 后端内部请求
+
+当前 `POST /api/runs` 接收的 `ResearchRequest` 保留为后端教学、评估和归一化后的内部契约：
+
+```ts
+interface InternalResearchRequest {
+  company_id: string;
+  question: string;
+  data_mode: "fixture" | "historical" | "live";
+  as_of: string;
+}
+```
+
+对话入口必须在服务端完成：
+
+```text
+CreateResearchRunRequest
+  ↓ Request Normalizer
+Internal ResearchRequest
+  ↓ existing runner
+RunResponse
+```
+
+- `company_id`：从消息识别；不明确时返回信息不足，不能静默猜错标的；
+- `question`：保留用户原意，不能把持仓或限制条件丢掉；
+- `as_of`：使用服务器带时区时间，或解析用户明确指定的历史时点；
+- `data_mode`：由服务端环境和实际数据源决定，不能信任模型或浏览器自行标记；
+- 工具选择：仍由 Agent 与白名单执行层负责，前端不决定。
+
+### 4.3 公开响应
 
 ```ts
 type RunStatus =
@@ -117,12 +153,11 @@ interface PublicError {
   stage: "model" | "tool" | "validation" | "task";
 }
 
-interface RunResponse {
-  run_id: string;
-  status: RunStatus;
-  result: ResearchOutput | null;
-  error: PublicError | null;
-}
+type RunResponse =
+  | { run_id: string; status: "completed"; result: CompletedResearchOutput; error: null }
+  | { run_id: string; status: "insufficient_information"; result: InsufficientInformationResearchOutput; error: null }
+  | { run_id: string; status: "failed"; result: null; error: PublicError }
+  | { run_id: string; status: "cancelled"; result: null; error: PublicError };
 ```
 
 页面必须遵守响应组合：
@@ -132,7 +167,14 @@ interface RunResponse {
 - 页面按外层 `status` 决定终态，并检查 `result.status` 与其一致；
 - HTTP 422 是 FastAPI 请求校验响应，不是 `RunResponse`，需单独解析。
 
-### 当前契约缺口
+### 4.4 当前契约缺口与 FE03 闸门
+
+当前后端尚未实现 `CreateResearchRunRequest → ResearchRequest` 的归一化入口。因此：
+
+- FE01 可以先定义目标公开请求类型和 mock；
+- FE02 可以通过 Fake Transport 完成对话 UI；
+- FE03 真实联调必须等待后端新增对话入口及其 Pydantic 请求模型、归一化测试和安全错误映射；
+- 前端不得把自然语言在浏览器中自行解析成股票代码或伪造 `data_mode/as_of`。
 
 当前 `ResearchOutput` 只有证据 ID，没有证据来源、链接、发布时间或原文片段。因此：
 
@@ -141,7 +183,7 @@ interface RunResponse {
 - D10 若要求显示完整来源，后端必须补充公开证据摘要，或提供按 `evidence_id` 查询的只读接口；
 - 行情时间、宏观统计期、新闻时间、Decision Trace 和风险对比均等待后续契约。
 
-当前 FastAPI 也没有单独配置浏览器跨域访问。FE03 联调时优先使用前端开发代理保持同源；如果部署方式确实跨域，再由后端添加精确来源白名单，不使用任意来源配置。
+当前 FastAPI 也没有单独配置浏览器跨域访问。FE03 联调时优先使用现有 Vite `/api` 开发代理保持同源；如果部署方式确实跨域，再由后端添加精确来源白名单，不使用任意来源配置。
 
 ## 5. FE01：创建工程与契约层
 
@@ -162,11 +204,12 @@ interface RunResponse {
 
 文件：`frontend/src/api/contracts.ts`
 
-- [x] 定义本节列出的 `ResearchRequest`、`RunResponse`、`ResearchOutput`、`EvidenceClaim`、`PublicError`。
+- [x] 定义前端公开的 `CreateResearchRunRequest`，只要求 `message`，并保留可选 `conversation_id`。
+- [x] 定义 `RunResponse`、`ResearchOutput`、`EvidenceClaim`、`PublicError`。
 - [x] 单独定义 FastAPI HTTP 422 的响应结构。
 - [x] 不提前加入来源、行情、Decision Trace 或风险字段。
 
-完成记录：`RunResponse` 使用可辨识联合类型表达四种终态及其合法 `result/error` 组合；公开错误码和阶段与后端固定集合一致。字符串长度与 `as_of` 时区属于运行时规则，仍由 FastAPI 最终校验。
+完成记录：`RunResponse` 使用可辨识联合类型表达四种终态及其合法 `result/error` 组合；公开错误码和阶段与后端固定集合一致。对话请求不暴露 `company_id/data_mode/as_of`；这些内部字段等待后端归一化入口生成并校验。
 
 ### Step FE01.3：准备固定 mock
 
@@ -174,6 +217,7 @@ interface RunResponse {
 
 - [x] 从 `docs/d06-step7-valid-response.json` 派生成功 mock。
 - [x] 准备 `insufficient_information`、`failed`、`cancelled` 和 HTTP 422 mock。
+- [x] 准备只包含自然语言 `message` 的公开请求 mock；422 字段位置使用 `body.message`。
 - [x] mock 明确标注为 fixture，不能展示成真实市场数据。
 
 建议函数：
@@ -188,108 +232,969 @@ function getMockRunResponse(status: RunStatus): RunResponse;
 
 功能：让页面在不请求后端和模型的情况下覆盖所有状态。
 
-完成记录：`getMockRunResponse()` 按传入状态返回精确响应类型和独立副本；`getMockValidationError()` 提供 HTTP 422 fixture。测试覆盖四种运行终态、D06 示例关键字段、fixture 声明、副本隔离、422 结构和安全错误边界。FE01 完成时前端共 12 个测试通过。
+完成记录：`getMockCreateResearchRunRequest()` 提供不含内部研究字段的自然语言请求；`getMockRunResponse()` 按传入状态返回精确响应类型和独立副本；`getMockValidationError()` 提供面向 `message` 的 HTTP 422 fixture。测试覆盖公开请求、四种运行终态、D06 示例关键字段、fixture 声明、副本隔离、422 结构和安全错误边界。
 
-## 6. FE02：最小页面与状态处理
+## 6. FE02：对话式研究页面与状态处理
 
-目标：完成 D10 页面主体，并提前解决 D45 的旧响应覆盖问题。
+目标：完成 D10 的最小对话式研究页面。
 
-### Step FE02.1：请求表单
+用户不需要理解或填写 `company_id`、`data_mode`、`as_of` 等内部研究字段，只需要像聊天一样描述自己的问题，例如：
 
-文件：`frontend/src/features/research/ResearchForm.tsx`
+> 帮我看看英伟达最近怎么样。
 
-- [ ] 输入 `company_id`、`question`、`data_mode` 和 `as_of`。
-- [ ] 提交中禁用重复提交或明确允许新请求替换旧请求。
-- [ ] 浏览器侧只做方便用户的基础校验；后端仍是最终校验者。
-- [ ] `as_of` 提交前转换为带时区的 ISO 8601 字符串。
+或：
 
-组件输入输出：
+> 我现在持有 NVDA，成本 220，最近适不适合继续加仓？
+
+前端负责提交自然语言消息、展示研究结果和维护请求生命周期。
+
+后端负责根据用户自然语言补充或推导研究所需的内部上下文，例如：
+
+* 标的识别；
+* 当前或用户指定的 `as_of`；
+* 所需工具和数据源；
+* fixture / historical / live 等实际数据模式；
+* 是否需要报价、RAG、新闻、宏观或组合风险数据。
+
+前端不得要求用户替 Agent 完成这些内部决策。
+
+---
+
+### Step FE02.1：对话输入组件
+
+文件：
+
+`frontend/src/features/research/ResearchComposer.tsx`
+
+目标：提供类似聊天输入框的最小研究入口。
+
+用户只输入自然语言消息。
+
+建议前端 API 请求类型：
 
 ```ts
-interface ResearchFormProps {
-  disabled: boolean;
-  onSubmit: (request: ResearchRequest) => void | Promise<void>;
+interface CreateResearchRunRequest {
+  message: string;
+  conversation_id?: string;
 }
 ```
 
-功能：收集请求并交给页面控制器，不直接负责渲染结果。
+第一阶段可以不实现真正的多轮 conversation memory，`conversation_id` 可暂时省略或保留为可选字段。
 
-### Step FE02.2：页面状态机
+组件接口：
 
-文件：`frontend/src/features/research/useResearchRun.ts`
+```ts
+interface ResearchComposerProps {
+  disabled: boolean;
+
+  onSubmit: (
+    request: CreateResearchRunRequest
+  ) => void | Promise<void>;
+}
+```
+
+职责：
+
+* 收集用户自然语言；
+* 做最基本的空输入校验；
+* 将消息交给页面控制器；
+* 不直接调用 API；
+* 不负责渲染研究结果；
+* 不解析股票代码；
+* 不决定 `data_mode`；
+* 不生成 `as_of`；
+* 不决定使用哪些工具。
+
+React 19 建议使用 `<form action={...}>`：
+
+```tsx
+export function ResearchComposer({
+  disabled,
+  onSubmit,
+}: ResearchComposerProps) {
+  async function submitAction(
+    formData: FormData,
+  ) {
+    const message = String(
+      formData.get("message") ?? "",
+    ).trim();
+
+    if (!message) {
+      return;
+    }
+
+    await onSubmit({
+      message,
+    });
+  }
+
+  return (
+    <form action={submitAction}>
+      <textarea
+        name="message"
+        placeholder="例如：帮我看看英伟达最近怎么样..."
+        required
+      />
+
+      <button
+        type="submit"
+        disabled={disabled}
+      >
+        发送
+      </button>
+    </form>
+  );
+}
+```
+
+第一版可以采用 uncontrolled form，不要求为输入框单独维护 `useState`。
+
+完成标准：
+
+* [ ] 用户只需输入一段自然语言；
+* [ ] 空消息不能提交；
+* [ ] 不向用户暴露 `company_id`、`data_mode`、`as_of`；
+* [ ] 提交逻辑通过 `onSubmit` 向外传递；
+* [ ] 页面后续可方便替换 mock API 和真实 API。
+
+---
+
+### Step FE02.2：API 请求契约
+
+文件：`frontend/src/api/contracts.ts`
+
+FE01 已完成 `CreateResearchRunRequest` 与结构化 `RunResponse`。功能代码统一从 API 契约层导入，不在 feature 目录重复声明接口。为兼容当前学习文件，`frontend/src/features/research/type.ts` 只做类型转出，不拥有第二份定义。
+
+后端返回继续使用可辨识联合类型：成功/信息不足一定有 `result`，失败/取消一定有安全 `error`。`ResearchOutput.data_mode` 仍是必填字段，不能因为改成对话 UI 就变成可选。
+
+注意：
+
+对话式 UI 不代表后端改成纯 Markdown 输出。
+
+仍然保持：
+
+```text
+自然语言输入
+    ↓
+Agent
+    ↓
+结构化 ResearchOutput
+    ↓
+React 渲染成对话消息
+```
+
+而不是：
+
+```text
+自然语言输入
+    ↓
+LLM Markdown
+    ↓
+dangerouslySetInnerHTML
+```
+
+完成标准：
+
+* [x] 前端请求模型只包含用户真正需要填写的字段；
+* [x] 前端代码不声明或生成后端内部 `ResearchRequest`；
+* [x] 页面依赖自己的 API contract，不依赖 LangChain Message / LangGraph State；
+* [ ] D10 后端对话入口实现归一化后，验证 Manual → LangChain → LangGraph 的内部迁移无需修改前端协议。
+
+---
+
+### Step FE02.3：页面请求状态机
+
+文件：
+
+`frontend/src/features/research/useResearchRun.ts`
+
+目标：集中处理一次研究请求的生命周期。
 
 页面状态至少包括：
 
 ```ts
 type ResearchViewState =
-  | { kind: "idle" }
-  | { kind: "submitting"; requestId: number }
-  | { kind: "received"; response: RunResponse }
-  | { kind: "request_invalid"; messages: string[] }
-  | { kind: "request_failed"; message: string };
+  | {
+      kind: "idle";
+    }
+  | {
+      kind: "submitting";
+      requestId: number;
+      userMessage: string;
+    }
+  | {
+      kind: "received";
+      requestId: number;
+      userMessage: string;
+      response: RunResponse;
+    }
+  | {
+      kind: "request_invalid";
+      userMessage: string;
+      messages: string[];
+    }
+  | {
+      kind: "request_failed";
+      requestId: number;
+      userMessage: string;
+      errorMessage: string;
+    };
 ```
 
-- [ ] 每次提交生成递增的本地 `requestId`。
-- [ ] 新请求开始时中止上一个浏览器请求。
-- [ ] 响应返回时，仅当它仍是最新 `requestId` 才更新页面。
-- [ ] Agent 的 `failed` / `cancelled` 属于成功收到的 `RunResponse`，不要与断网混为一类。
+终态继续保存 `userMessage`，否则请求完成后无法把用户气泡与对应的 Agent 结果组成一轮对话。`requestId` 是前端竞态标识，`run_id` 是后端运行身份，两者不能混用。
 
 建议 Hook：
 
 ```ts
 function useResearchRun(
-  createRun: (request: ResearchRequest, signal?: AbortSignal) => Promise<RunResponse>,
+  createRun: (
+    request: CreateResearchRunRequest,
+    signal?: AbortSignal,
+  ) => Promise<RunResponse>,
 ): {
   state: ResearchViewState;
-  submit: (request: ResearchRequest) => Promise<void>;
+
+  submit: (
+    request: CreateResearchRunRequest
+  ) => Promise<void>;
+
   reset: () => void;
 };
 ```
 
-输入：可替换的请求函数，便于 mock 和真实 API 共用。
+职责：
 
-输出：当前视图状态、提交函数和重置函数。
+* 管理 loading；
+* 管理 HTTP 请求；
+* 管理 AbortController；
+* 处理 HTTP 422；
+* 处理断网或 HTTP transport failure；
+* 防止旧请求覆盖新结果；
+* 不解释 Agent 业务结果。
 
-功能：集中管理加载、成功、校验失败、网络失败、中止和旧响应保护。
+---
 
-### Step FE02.3：结果与错误组件
+#### 请求 ID
+
+每次提交：
+
+```ts
+const requestId =
+  ++latestRequestId.current;
+```
+
+只允许最新请求更新页面：
+
+```ts
+if (
+  requestId !==
+  latestRequestId.current
+) {
+  return;
+}
+```
+
+解决：
+
+```text
+请求 A
+↓
+请求 B
+↓
+B 先返回
+↓
+A 后返回
+
+最终仍显示 B
+```
+
+---
+
+#### AbortController
+
+新请求开始时：
+
+```ts
+previousController?.abort();
+```
+
+再创建新的：
+
+```ts
+const controller =
+  new AbortController();
+```
+
+调用：
+
+```ts
+await createRun(
+  request,
+  controller.signal,
+);
+```
+
+浏览器 abort 用于停止前端等待。
+
+后端是否真正停止 Agent，需要由 FastAPI / asyncio cancellation 单独保证。
+
+---
+
+#### HTTP failure 与 Agent failure 分开
+
+以下属于：
+
+```ts
+{
+  kind: "request_failed"
+}
+```
+
+例如：
+
+* 无网络；
+* fetch 失败；
+* 服务不可达；
+* 非预期 HTTP 错误。
+
+以下仍属于：
+
+```ts
+{
+  kind: "received",
+  response,
+}
+```
+
+例如：
+
+```json
+{
+  "status": "failed",
+  "error": {
+    "code": "model_timeout"
+  }
+}
+```
+
+因为这是：
+
+> HTTP 请求成功，Agent 给出了合法的失败终态。
+
+不要把：
+
+```text
+Agent failed
+```
+
+和：
+
+```text
+HTTP failed
+```
+
+混为一类。
+
+完成标准：
+
+* [ ] 新请求能取消旧浏览器请求；
+* [ ] 旧响应无法覆盖新响应；
+* [ ] transport error 与 Agent failure 分离；
+* [ ] cancelled / failed RunResponse 仍作为合法业务响应处理；
+* [ ] Hook 可使用 mock `createRun` 测试。
+
+---
+
+### Step FE02.4：对话消息展示
 
 建议文件：
 
-- `frontend/src/features/research/RunSummary.tsx`
-- `frontend/src/features/research/ClaimList.tsx`
-- `frontend/src/features/research/MissingInformation.tsx`
-- `frontend/src/features/research/PublicErrorPanel.tsx`
+* `frontend/src/features/research/ResearchConversation.tsx`
+* `frontend/src/features/research/UserMessage.tsx`
+* `frontend/src/features/research/ResearchResponse.tsx`
 
-- [ ] 展示 `run_id` 和外层状态。
-- [ ] 分开展示 facts 与 inferences，避免把推断写成事实。
-- [ ] 每条 claim 展示其 evidence IDs。
-- [ ] 信息不足时突出 `missing_information`。
-- [ ] 明确显示 `fixture` / `historical` / `live`，不得把 fixture 写成实时。
-- [ ] 失败只显示 `PublicError.code`、`stage` 和 `message`。
-- [ ] HTTP 422 只提取可公开的字段提示，不渲染任意 HTML。
+页面视觉上采用对话结构：
+
+```text
+User
+
+帮我看看英伟达最近怎么样，
+我成本 220。
+
+Agent
+
+根据目前取得的资料：
+
+事实
+- ...
+- ...
+
+推断
+- ...
+
+缺失信息
+- ...
+
+数据截至：
+...
+```
+
+第一阶段不实现真正多轮 Agent memory。
+
+FE02 最小实现先保证当前一轮“用户消息 + Agent 结构化回复”完整对应。若页面保留多条本地记录，每次提交仍然对应一个独立 `run_id`，历史记录只是 UI 展示，不代表模型拥有多轮记忆。
+
+即：
+
+```text
+message A
+↓
+run A
+
+message B
+↓
+run B
+```
+
+而不是立即实现：
+
+```text
+完整历史上下文
+↓
+LLM memory
+↓
+conversation compression
+```
+
+这些不属于 FE02。
+
+完成标准：
+
+* [ ] 用户消息与 Agent 消息视觉区分；
+* [ ] 请求结束后仍保留并显示该次 `userMessage`；
+* [ ] 每个 Agent 结果保留自己的 `run_id`；
+* [ ] 不把后端内部事件直接展示成聊天正文；
+* [ ] 不把模型原始 response 直接渲染到页面。
+
+---
+
+### Step FE02.5：结构化研究结果组件
+
+建议文件：
+
+* `RunSummary.tsx`
+* `ClaimList.tsx`
+* `MissingInformation.tsx`
+* `EvidenceBadge.tsx`
+* `PublicErrorPanel.tsx`
+
+---
+
+#### `RunSummary`
+
+显示：
+
+* `run_id`
+* Agent 外层状态
+* 数据模式
+* 后续可增加数据截至时间
+
+例如：
+
+```text
+Run: abc-123
+Status: completed
+Data: fixture
+```
+
+不得把：
+
+```text
+fixture
+```
+
+包装成：
+
+```text
+实时数据
+```
+
+---
+
+#### `ClaimList`
+
+分开展示：
+
+```text
+Facts
+```
+
+与：
+
+```text
+Inferences
+```
+
+例如：
+
+```text
+事实
+
+NVDA 教学模拟报价为 100 USD
+[E1]
+```
+
+以及：
+
+```text
+推断
+
+该价格不能用于实际投资判断
+[E1]
+```
+
+不能合并成统一的“分析结果”，否则用户无法区分事实和系统推断。
+
+---
+
+#### `EvidenceBadge`
+
+每条 claim 显示：
+
+```text
+E1
+E2
+```
+
+当前阶段只需要显示 ID。
+
+Week 3 RAG 接入后，可逐步升级成：
+
+```text
+点击 E1
+↓
+打开 evidence
+↓
+显示文档
+↓
+page / section / source
+```
+
+---
+
+#### `MissingInformation`
+
+当：
+
+```ts
+result.status ===
+  "insufficient_information"
+```
+
+突出展示：
+
+```text
+缺少信息：
+- 最新报价
+- 当前持仓
+- 某报告期资料
+```
+
+不要只显示内部状态字符串。
+
+---
+
+#### `PublicErrorPanel`
+
+当：
+
+```ts
+response.status === "failed"
+```
+
+只展示：
+
+```text
+error.code
+error.stage
+error.message
+```
+
+不得展示：
+
+* stack trace；
+* raw exception；
+* API key；
+* provider headers；
+* hidden reasoning；
+* 原始模型请求；
+* 内部路径。
+
+---
+
+### Step FE02.6：HTTP 422 安全格式化
 
 建议函数：
 
 ```ts
-function formatValidationMessages(payload: unknown): string[];
+function formatValidationMessages(
+  payload: unknown,
+): string[];
 ```
 
-输入：HTTP 422 的未知 JSON 响应。
+输入：
 
-输出：可供表单显示的安全字符串列表。
+FastAPI HTTP 422 的未知 JSON。
 
-功能：从 FastAPI `detail` 数组提取字段位置和提示；结构不合法时返回统一提示，不显示原始响应全文。
+输出：
 
-### Step FE02.4：mock 页面测试
+安全、适合用户阅读的字段提示。
 
-- [ ] 表单四个字段能生成合法请求。
-- [ ] `completed` 正确展示 facts、inferences、证据 ID 和 data mode。
-- [ ] `insufficient_information` 正确展示缺失信息。
-- [ ] `failed` / `cancelled` 不尝试读取 `result`。
-- [ ] HTTP 422 显示字段错误。
-- [ ] 较旧请求晚返回时不能覆盖较新请求。
-- [ ] 页面不出现堆栈、API Key、原始异常或隐藏模型信息。
+例如 FastAPI：
+
+```json
+{
+  "detail": [
+    {
+      "loc": [
+        "body",
+        "message"
+      ],
+      "msg": "String should have at least 1 character"
+    }
+  ]
+}
+```
+
+转换：
+
+```text
+message:
+String should have at least 1 character
+```
+
+如果 payload 结构不是预期：
+
+```ts
+return [
+  "请求参数不合法，请检查输入。"
+];
+```
+
+不得：
+
+```ts
+JSON.stringify(payload)
+```
+
+直接展示未知响应全文。
+
+完成标准：
+
+* [ ] 只读取允许的 FastAPI validation 字段；
+* [ ] 非预期 payload 使用统一错误；
+* [ ] 不使用 `dangerouslySetInnerHTML` 渲染错误；
+* [ ] 不显示后端原始异常全文。
+
+---
+
+### Step FE02.7：mock 页面测试
+
+第一阶段尽量通过 mock API 验证 UI 与状态机，不依赖真实 LLM。
+
+必须覆盖：
+
+#### Case 1：自然语言提交
+
+输入：
+
+```text
+帮我看看英伟达最近怎么样
+```
+
+应生成：
+
+```ts
+{
+  message:
+    "帮我看看英伟达最近怎么样"
+}
+```
+
+前端不得自行生成：
+
+```ts
+company_id
+data_mode
+as_of
+```
+
+---
+
+#### Case 2：completed
+
+mock：
+
+```ts
+{
+  status: "completed",
+  result: {
+    facts: [...],
+    inferences: [...],
+    missing_information: [],
+  }
+}
+```
+
+验证：
+
+* [ ] 用户消息正常显示；
+* [ ] facts 正确显示；
+* [ ] inferences 正确显示；
+* [ ] evidence IDs 正确显示；
+* [ ] run_id 正确显示。
+
+---
+
+#### Case 3：insufficient_information
+
+验证：
+
+* [ ] 缺失信息明确展示；
+* [ ] 页面不把缺资料结果表现为成功研究结论。
+
+---
+
+#### Case 4：Agent failed
+
+例如：
+
+```ts
+{
+  status: "failed",
+  error: {
+    code: "model_timeout",
+    stage: "model",
+    message: "模型请求超时。",
+  },
+}
+```
+
+验证：
+
+* [ ] 当作合法 RunResponse；
+* [ ] 展示 PublicError；
+* [ ] 不读取 `result.facts`。
+
+---
+
+#### Case 5：cancelled
+
+验证：
+
+* [ ] 不读取 `result`；
+* [ ] 页面能明确显示任务已取消。
+
+---
+
+#### Case 6：HTTP 422
+
+验证：
+
+* [ ] 进入 `request_invalid`；
+* [ ] 显示安全字段提示；
+* [ ] 不显示原始 JSON。
+
+---
+
+#### Case 7：Network failure
+
+验证：
+
+```ts
+{
+  kind: "request_failed"
+}
+```
+
+与 Agent failure 不混淆。
+
+---
+
+#### Case 8：旧响应覆盖
+
+模拟：
+
+```text
+request A
+↓
+request B
+↓
+B resolve
+↓
+A resolve
+```
+
+最终必须显示 B。
+
+---
+
+#### Case 9：敏感信息
+
+mock 错误中故意加入：
+
+```text
+stack
+api_key
+authorization
+raw_exception
+reasoning_content
+```
+
+验证页面均不显示。
+
+---
+
+## FE02 最终数据流
+
+```text
+ResearchComposer
+      ↓
+用户自然语言
+      ↓
+CreateResearchRunRequest
+      ↓
+useResearchRun
+      ↓
+requestId / AbortController
+      ↓
+POST /api/chat/runs
+      ↓
+FastAPI
+      ↓
+后端 Request Normalizer
+      ↓
+内部 ResearchRequest
+      ↓
+Agent
+      ↓
+Tools / RAG / Data
+      ↓
+ResearchOutput
+      ↓
+RunResponse
+      ↓
+useResearchRun
+      ↓
+ResearchConversation
+      ↓
+结构化对话卡片
+```
+
+前端只处理：
+
+```text
+用户说了什么
+请求当前处于什么状态
+Agent 返回了什么结构化结果
+如何安全展示
+```
+
+前端不负责：
+
+```text
+识别 NVDA
+决定调用哪个工具
+决定 data_mode
+计算 as_of
+决定需要报价还是 RAG
+决定是否读取新闻
+```
+
+这些属于后端 Agent。
+
+---
+
+## FE02 完成标准
+
+完成 FE02 后，应能够演示：
+
+```text
+用户：
+
+“帮我看看英伟达最近怎么样”
+
+↓ 点击发送
+
+页面：
+
+用户消息立即出现在对话区域
+
+↓ Agent 请求
+
+页面显示 submitting
+
+↓ 后端返回
+
+Agent：
+
+事实
+- ...
+
+推断
+- ...
+
+缺失信息
+- ...
+
+证据
+[E1] [E2]
+
+Run ID
+xxx
+```
+
+同时：
+
+* [ ] 新请求不会被旧响应覆盖；
+* [ ] 网络错误和 Agent 错误明确区分；
+* [ ] Agent 的结构化输出没有被降级成不可验证的纯 Markdown；
+* [ ] fixture / historical / live 不被错误包装；
+* [ ] 页面不暴露原始异常、密钥和模型内部信息。
+
+---
+
+## 后续演进
+
+FE02 只建立对话框架。
+
+后续按开发周逐步增强：
+
+```text
+Week 3
+Evidence ID
+→ 可点击 RAG 原文片段
+
+Week 5
+→ 最新报价 / Bar / 数据时间
+
+Week 6
+→ 新闻来源和事件证据
+
+Week 7
+→ Decision Trace
+
+Week 8
+→ Portfolio / Risk / Scenario
+
+Week 9
+→ 完整 Research Workspace
+→ 多模块整合
+→ 条件分支
+→ cancellation / checkpoint 展示
+```
+
+因此 FE02 不需要提前实现这些领域 UI，只需要保证当前组件结构能容纳它们。
+
 
 ## 7. FE03：接入真实 API
 
@@ -299,25 +1204,26 @@ function formatValidationMessages(payload: unknown): string[];
 
 ```ts
 async function createRun(
-  request: ResearchRequest,
+  request: CreateResearchRunRequest,
   signal?: AbortSignal,
 ): Promise<RunResponse>;
 ```
 
-输入：合法研究请求和可选的浏览器取消信号。
+输入：用户自然语言请求和可选的浏览器取消信号。
 
 输出：后端公开的 `RunResponse`。
 
-功能：发送 `POST /api/runs`，解析正常响应、HTTP 422 和不可用响应；不包含页面渲染逻辑。
+功能：发送 `POST /api/chat/runs`，解析正常响应、HTTP 422 和不可用响应；不包含页面渲染逻辑。
 
-- [ ] 通过开发代理或部署配置使用 `/api/runs`，不把地址散落在组件中。
+- [ ] 等待后端实现对话入口和 Request Normalizer，不直接把 `message` 发给当前 `/api/runs`。
+- [ ] 通过开发代理或部署配置使用 `/api/chat/runs`，不把地址散落在组件中。
 - [ ] 请求头只声明 JSON，不在浏览器保存模型密钥。
 - [ ] 区分 HTTP/网络失败、HTTP 422 和 Agent 安全终态。
 - [ ] 验证响应中的 `run_id` 与当前页面结果绑定。
 - [ ] 跑通 completed、insufficient information 和安全失败路径。
 - [ ] 在浏览器确认旧响应保护有效。
 
-完成标准：能现场说明一次请求从表单到 Agent、只读工具、结构化结果，再回到页面的完整路径。
+完成标准：能现场说明一次自然语言消息如何在后端归一化，再经过 Agent、只读工具和结构化结果回到对话页面。
 
 ## 8. FE04：引用与数据时间工作台
 
@@ -398,11 +1304,16 @@ frontend/
 │   │   ├── contracts.ts
 │   │   └── createRun.ts
 │   ├── features/research/
-│   │   ├── ResearchForm.tsx
+│   │   ├── ResearchComposer.tsx
+│   │   ├── ResearchConversation.tsx
+│   │   ├── UserMessage.tsx
+│   │   ├── ResearchResponse.tsx
 │   │   ├── RunSummary.tsx
 │   │   ├── ClaimList.tsx
+│   │   ├── EvidenceBadge.tsx
 │   │   ├── MissingInformation.tsx
 │   │   ├── PublicErrorPanel.tsx
+│   │   ├── type.ts
 │   │   └── useResearchRun.ts
 │   ├── mocks/
 │   │   └── runResponses.ts
@@ -425,9 +1336,9 @@ frontend/
 
 当前下一步：
 
-1. 先做 FE01，创建真实可运行的 React + TypeScript 工程和 mock 契约。
-2. 继续做 FE02，独立完成页面状态和测试。
-3. 后端 D09 稳定后做 FE03 联调，不要求 FE01/FE02 等待。
+1. FE01 已按对话目标修订：公开请求只含 `message` 和保留的 `conversation_id`，结构化响应保持不变。
+2. 继续做 FE02，先用 Fake Transport 完成单轮对话状态和组件测试，不等待真实接口。
+3. D10 前由后端增加 `/api/chat/runs` 与 Request Normalizer，再做 FE03 联调；不能直接破坏现有 `/api/runs` 契约。
 4. 每次后端新增领域契约时，先补契约样例和类型，再开发对应 UI。
 
 ## 14. `ai-chat-n` 可借鉴的技术设计
@@ -452,7 +1363,7 @@ Evidence / Decision / Risk / Error 组件
 
 对应计划：
 
-- [ ] FE01：定义 `RunResponse` 等同步响应类型。
+- [x] FE01：定义 `CreateResearchRunRequest` 与 `RunResponse` 等同步契约。
 - [ ] FE03：通过 `RunTransport` 隔离 mock 与真实 HTTP。
 - [ ] FE06：只有后端事件协议稳定后，再增加 `SseRunTransport`、事件解析器和 reducer。
 - [ ] 解析和状态归并使用纯函数测试，不依赖真实模型响应。
@@ -462,7 +1373,7 @@ Evidence / Decision / Risk / Error 组件
 ```ts
 interface RunTransport {
   createRun(
-    request: ResearchRequest,
+    request: CreateResearchRunRequest,
     options?: { signal?: AbortSignal },
   ): Promise<RunResponse>;
 }

@@ -1,19 +1,15 @@
 /**
- * 当前文件逐字段对应 FastAPI 的公开 Pydantic 模型。
- * 它只描述 D06 已存在的契约，不提前加入来源、行情、决策或风险字段。
+ * 前端公开 API 契约。
+ * 对话页面只提交用户自然语言；后端负责把它归一化为 Agent 内部研究请求。
+ * 响应仍逐字段对应 D06 已存在的公开 Pydantic 模型。
  */
 
 export type DataMode = 'fixture' | 'historical' | 'live'
 
-/**
- * 后端要求 as_of 是带时区的 ISO 8601 字符串。
- * TypeScript 不能仅靠 string 类型验证时区，运行时校验仍以后端为准。
- */
-export interface ResearchRequest {
-  readonly company_id: string
-  readonly question: string
-  readonly data_mode: DataMode
-  readonly as_of: string
+export interface CreateResearchRunRequest {
+  readonly message: string
+  /** FE02 暂不实现真正的多轮记忆；未启用时不发送该字段。 */
+  readonly conversation_id?: string
 }
 
 export interface EvidenceClaim {
@@ -128,7 +124,7 @@ export interface FastApiValidationIssue {
   readonly url?: string
 }
 
-/** FastAPI 在请求体校验失败时返回的 HTTP 422 结构，不属于 RunResponse。 */
+/** FastAPI 在公开对话请求校验失败时返回的 HTTP 422 结构。 */
 export interface FastApiValidationError {
   readonly detail: readonly FastApiValidationIssue[]
 }

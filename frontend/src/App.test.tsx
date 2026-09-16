@@ -13,5 +13,6 @@ describe('App', () => {
       }),
     ).toBeInTheDocument()
     expect(screen.getByText('工程初始化完成')).toBeInTheDocument()
+    expect(screen.getByText(/FE01 已完成对话请求契约/)).toBeInTheDocument()
   })
 })

@@ -2,11 +2,21 @@ import { describe, expect, it } from 'vitest'
 
 import {
   getMockRunResponse,
+  getMockCreateResearchRunRequest,
   getMockValidationError,
   MOCK_DATA_NOTICE,
 } from './runResponses'
 
 describe('run response fixtures', () => {
+  it('公开请求不要求用户填写内部研究字段', () => {
+    const request = getMockCreateResearchRunRequest()
+
+    expect(request).toEqual({ message: '帮我看看英伟达最近怎么样' })
+    expect(request).not.toHaveProperty('company_id')
+    expect(request).not.toHaveProperty('data_mode')
+    expect(request).not.toHaveProperty('as_of')
+  })
+
   it.each([
     'completed',
     'insufficient_information',
@@ -52,13 +62,13 @@ describe('run response fixtures', () => {
     expect(second.result.facts[0]?.text).not.toBe('被调用方修改')
   })
 
-  it('提供与 D06 示例一致的 HTTP 422 mock', () => {
+  it('提供面向 message 字段的对话请求 HTTP 422 mock', () => {
     const response = getMockValidationError()
 
     expect(response.detail).toHaveLength(1)
     expect(response.detail[0]).toMatchObject({
       type: 'string_too_short',
-      loc: ['body', 'question'],
+      loc: ['body', 'message'],
       input: '   ',
       ctx: { min_length: 1 },
     })

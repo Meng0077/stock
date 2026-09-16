@@ -13,7 +13,7 @@ function App() {
           React、TypeScript、Vite 与 Tailwind CSS 已就绪
         </h1>
         <p className="mt-6 max-w-xl leading-7 text-slate-300">
-          当前只包含工程基础设施。研究表单、结构化结果、证据与运行状态将在对应前端步骤中实现。
+          FE01 已完成对话请求契约、结构化响应和固定 mock。对话输入、研究消息与请求状态将在 FE02 中实现。
         </p>
         <dl className="mt-10 grid gap-3 text-sm sm:grid-cols-2">
           {['React 19', 'TypeScript 6', 'Vite 8', 'Tailwind CSS 4'].map(

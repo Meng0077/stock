@@ -3,26 +3,30 @@ import { describe, expect, expectTypeOf, it } from 'vitest'
 import type {
   CancelledRunResponse,
   CompletedRunResponse,
+  CreateResearchRunRequest,
   FastApiValidationError,
-  ResearchRequest,
   RunResponse,
 } from './contracts'
 
 describe('API contracts', () => {
-  it('描述当前 ResearchRequest 的四个公开字段', () => {
-    const request: ResearchRequest = {
-      company_id: 'NVDA',
-      question: '查询教学报价',
-      data_mode: 'fixture',
-      as_of: '2026-09-15T16:00:00+08:00',
+  it('对话请求只要求用户提供自然语言消息', () => {
+    const request: CreateResearchRunRequest = {
+      message: '帮我看看英伟达最近怎么样',
     }
 
-    expect(Object.keys(request)).toEqual([
-      'company_id',
-      'question',
-      'data_mode',
-      'as_of',
-    ])
+    expect(Object.keys(request)).toEqual(['message'])
+    expect(request).not.toHaveProperty('company_id')
+    expect(request).not.toHaveProperty('data_mode')
+    expect(request).not.toHaveProperty('as_of')
+  })
+
+  it('允许为未来多轮对话保留可选 conversation_id', () => {
+    const request: CreateResearchRunRequest = {
+      message: '我成本 220，最近适合继续加仓吗？',
+      conversation_id: 'conversation-001',
+    }
+
+    expect(request.conversation_id).toBe('conversation-001')
   })
 
   it('通过联合类型区分成功和取消响应', () => {
@@ -37,7 +41,7 @@ describe('API contracts', () => {
       detail: [
         {
           type: 'string_too_short',
-          loc: ['body', 'question'],
+          loc: ['body', 'message'],
           msg: 'String should have at least 1 character',
           input: '   ',
           ctx: { min_length: 1 },
@@ -45,6 +49,6 @@ describe('API contracts', () => {
       ],
     }
 
-    expect(response.detail[0]?.loc).toEqual(['body', 'question'])
+    expect(response.detail[0]?.loc).toEqual(['body', 'message'])
   })
 })
