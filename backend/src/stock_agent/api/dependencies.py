@@ -7,7 +7,7 @@
 from collections.abc import Awaitable, Callable
 from uuid import UUID
 
-from stock_agent.agents.manual_runner import run_manual_agent
+from stock_agent.agents.manual.manual_runner import run_manual_agent
 from stock_agent.api.schemas import AgentRunResult
 from stock_agent.schemas.research import ResearchRequest
 

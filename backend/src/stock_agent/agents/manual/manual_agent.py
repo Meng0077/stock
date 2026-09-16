@@ -19,7 +19,7 @@ import uuid
 import httpx
 from pydantic import ValidationError
 
-from stock_agent.agents.evidence_validation import (
+from stock_agent.agents.structured_output import (
     EvidenceValidationError,
     validate_evidence,
 )

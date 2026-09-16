@@ -13,7 +13,7 @@ from uuid import UUID, uuid4
 
 from fastapi import Depends, FastAPI
 
-from stock_agent.agents.manual_runner import failed_run
+from stock_agent.agents.manual.manual_runner import failed_run
 from stock_agent.agents.run_errors import error_code_from_exception
 from stock_agent.api.dependencies import AgentRunner, get_agent_runner
 from stock_agent.api.schemas import RunResponse

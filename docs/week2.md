@@ -709,6 +709,9 @@ LangChain Tools 本质依然是把明确输入/输出的 callable 暴露给模�
 
 # D08：Manual Agent vs LangChain 对照
 
+进度：轻量 runner、四案例离线验证和人工对照报告已完成（2026-09-16）；独立 runner 自动化测试未补，脱稿复盘待自检。
+当前实现不统计模型 / handler 次数，不恢复重型采集方案。执行记录见 [D08 文档](day08.md)，结论见 [对照报告](day08/report.md)。下面保留原教学说明。
+
 今天尽量**少写新功能，多分析**。
 
 这是整个 Week 2 面试价值最高的一天。

@@ -140,10 +140,10 @@ Step 5 测试结果：`16 passed`。
 文件：`backend/src/stock_agent/agents/langchain_agent.py`
 
 - [x] 定义 `build_agent_input(request) -> dict`，包含 company_id、question、data_mode、as_of。
-- [x] 定义 `build_langchain_agent(model, tools) -> object`，调用 `create_agent`。
+- [x] 定义 `build_langchain_agent(model) -> object`，调用 `create_agent`，工具由内部提供。
 - [x] system prompt 要求公司资料和报价必须使用工具，并声明 fixture 语义。
 - [x] 定义 `invoke_langchain_agent(agent, request) -> dict`，只负责 `ainvoke` 并返回 state。
-- [x] Agent 只接收 `build_langchain_tools()` 生成工具的无重复子集；按任务最小授权。
+- [x] Agent 内部使用 `build_langchain_tools()` 提供固定的报价和公司资料工具，不对外暴露 tools 参数。
 - [x] 不在这里复制 Manual Agent 的 `while`、`continue` 或工具分发代码。
 - [x] 暂不转换为 `AgentRunResult`，结构化输出和 API 接入留给 D09/D10。
 

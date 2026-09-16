@@ -1,65 +1,224 @@
-"""D08：在固定 D05 案例上离线对照 Manual Agent 与 LangChain Agent。
-
-运行目标命令（完成 TODO 后）：
-    PYTHONPATH=backend/src backend/.venv/bin/python evals/run_agent_comparison.py
-
-默认只使用 scripted responses 和 fixture，不读取 API Key，不访问网络。
-"""
+"""D08：同一个 case 分别运行 Manual Agent 和 LangChain Agent，打印流程摘要。"""
 
 from __future__ import annotations
 
-import argparse
+import asyncio
+import json
 from pathlib import Path
-from typing import Any
 
-from stock_agent.agents.comparison import CaseComparison
+from langchain.messages import AIMessage, ToolMessage
+from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
+
+from stock_agent.agents.langchain.langchain_agent import build_langchain_agent
+
+if __package__:
+    from .run_basic_cases import load_agent, load_cases, run_case
+else:
+    from run_basic_cases import load_agent, load_cases, run_case
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_DATASET = ROOT / "evals" / "basic_cases.jsonl"
-DEFAULT_REPORT = ROOT / "docs" / "day08" / "report.md"
+DATASET = ROOT / "evals" / "basic_cases.jsonl"
+
+CASE_IDS = ("D05-02", "D05-06", "D05-07", "D05-10")
 
 
-def load_comparison_cases(path: Path) -> list[dict[str, Any]]:
-    """输入 D05 JSONL 路径；输出 D08 选中的四个原始案例。"""
-    # TODO D08-Step-2.2：复用 D05 loader 和 select_comparison_cases()。
-    raise NotImplementedError
+class ScriptedToolModel(FakeMessagesListChatModel):
+    """让 FakeMessagesListChatModel 支持 LangChain Agent 的 bind_tools。"""
+
+    def bind_tools(self, tools, **kwargs):
+        return self
 
 
-async def run_manual_case(case: dict[str, Any]):
-    """输入一个 D05 案例；离线运行 Manual Agent；输出 AgentObservation。"""
-    # TODO D08-Step-3.2：复用 D05 scripted runner，不复制 Manual model_loop。
-    raise NotImplementedError
+def load_comparison_cases():
+    cases = load_cases(DATASET)
+
+    return [
+        case
+        for case in cases
+        if case["case_id"] in CASE_IDS
+    ]
 
 
-async def run_langchain_case(case: dict[str, Any]):
-    """输入同一 D05 案例；用 fake model 运行 LangChain；输出 AgentObservation。"""
-    # TODO D08-Step-4.2：把 scripted responses 转成 AIMessage；设置有限 recursion_limit。
-    # TODO D08-Step-4.3：统计模型请求和 handler 执行；捕获现有异常但不修复。
-    raise NotImplementedError
+async def run_manual(case):
+    """运行 Manual Agent。"""
+
+    return await run_case(
+        case,
+        "offline",
+        load_agent(),
+    )
 
 
-async def run_comparison(cases: list[dict[str, Any]]) -> list[CaseComparison]:
-    """输入固定案例；逐例运行两种 Agent；输出一一对应的对照结果。"""
-    # TODO D08-Step-5.2：同一案例先 Manual 后 LangChain，确保 handler 已恢复。
-    raise NotImplementedError
+def build_scripted_responses(case):
+    """把 D05 scripted response 转成 LangChain AIMessage。"""
+
+    responses = []
+
+    for item in case["scripted_responses"]:
+
+        if item["finish_reason"] == "tool_calls":
+
+            responses.append(
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": call["name"],
+                            "args": call["arguments"],
+                            "id": call["id"],
+                        }
+                        for call in item["tool_calls"]
+                    ],
+                )
+            )
+
+        else:
+
+            content = item["content"]
+
+            responses.append(
+                AIMessage(
+                    content=(
+                        content
+                        if isinstance(content, str)
+                        else json.dumps(content, ensure_ascii=False)
+                    )
+                )
+            )
+
+    return responses
 
 
-def render_report(comparisons: list[CaseComparison]) -> str:
-    """输入对照结果；输出不含密钥和完整模型对象的 Markdown 报告。"""
-    # TODO D08-Step-6.1：生成案例表与职责边界表，不覆盖人工结论模板。
-    raise NotImplementedError
+async def run_langchain(case):
+    """运行 LangChain Agent。"""
+
+    model = ScriptedToolModel(
+        responses=build_scripted_responses(case)
+    )
+
+    agent = build_langchain_agent(model)
+    
+    input_state = {
+        "messages": [
+            {
+                "role": "user",
+                "content": json.dumps(
+                    case["input"],
+                    ensure_ascii=False,
+                ),
+            }
+        ]
+    }
+    
+    state = input_state
+    
+    try:
+        async for state in agent.astream(
+            state,
+            {"recursion_limit": 6},
+            stream_mode="values",
+        ):
+            pass
+
+        status = "returned"
+        error = None
+
+    except Exception as exc:
+        status = "error"
+        error = type(exc).__name__
+    return {
+        "status": status,
+        "messages": state["messages"],
+        "error": error,}
 
 
-def main(argv: list[str] | None = None) -> int:
-    """解析离线命令参数、运行四个案例并写报告；成功返回 0。"""
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--dataset", type=Path, default=DEFAULT_DATASET)
-    parser.add_argument("--report", type=Path, default=DEFAULT_REPORT)
-    parser.parse_args(argv)
-    # TODO D08-Step-6.2：执行 run_comparison()，安全写入报告并打印摘要。
-    raise NotImplementedError
+def summarize_manual(run):
+    """提取 Manual Agent 的关键流程。"""
+
+    events = run["events"]
+
+    return {
+        "status": run["terminal_status"],
+        "error": (run["safe_error"] or {}).get("code"),
+        "tool_order": [
+            event["tool"]
+            for event in events
+            if event.get("type") == "tool_requested"
+        ],
+        "tool_results": [
+            event["type"]
+            for event in events
+            if event.get("type") in (
+                "tool_succeeded",
+                "tool_failed",
+            )
+        ],
+        "message_types": [
+            message["role"]
+            for message in run["messages"]
+        ],
+    }
+
+
+def summarize_langchain(state):
+    """提取 LangChain Agent 的关键流程。"""
+
+    messages = state["messages"]
+
+    return {
+        "status": state["status"],
+        "error": state["error"],
+        "tool_order": [
+            call["name"]
+            for message in messages
+            if isinstance(message, AIMessage)
+            for call in message.tool_calls
+        ],
+        "tool_results": [
+            message.status
+            for message in messages
+            if isinstance(message, ToolMessage)
+        ],
+        "message_types": [
+            type(message).__name__
+            for message in messages
+        ],
+    }
+
+
+async def compare_case(case):
+
+    manual = await run_manual(case)
+
+    langchain = await run_langchain(case)
+
+    return {
+        "case_id": case["case_id"],
+        "manual": summarize_manual(manual),
+        "langchain": summarize_langchain(langchain),
+    }
+
+
+async def main():
+
+    cases = load_comparison_cases()
+
+    results = []
+
+    for case in cases:
+        results.append(
+            await compare_case(case)
+        )
+
+    print(
+        json.dumps(
+            results,
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    asyncio.run(main())

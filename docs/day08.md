@@ -1,172 +1,123 @@
 # D08：Manual Agent vs LangChain Agent 行为对照
 
-- 开发日：D08
-- 今日状态：TODO、代码骨架和报告模板已建立；从 Step 1 开始
-- 前置基线：D07 已提交为 `3e50d2d`；全量测试 `191 passed`
-- 参考：[Week 2 计划](week2.md)、[Python 总开发计划](../stock-agent-python-development-plan.md)
+- 开发日：D08。
+- 今日状态：轻量 runner、四案例离线验证和对照报告已完成；独立 runner 测试未补，脱稿复盘待自检。
+- 整理与复核日期：2026-09-16。
+- 前置基线：D07 提交 3e50d2d，当时全量测试 191 passed；当前回归 207 passed，已包含部分 D09 增量。
+- 参考：[Week 2 计划](week2.md)、[Python 总开发计划](../stock-agent-python-development-plan.md)。
+- 产出：[Manual / LangChain 对照报告](day08/report.md)。
 
-## 今天结束时要得到什么
+## 当前范围：轻量 comparison runner
 
-用相同的 D05 固定案例分别驱动 Manual Agent 和 LangChain Agent，按共同口径记录：
+按最新要求，evals/run_agent_comparison.py 只做以下事情：
 
-```text
-同一 D05 case + scripted model decisions + 同一 TOOL_REGISTRY
-                    │
-          ┌─────────┴─────────┐
-          ↓                   ↓
-    Manual model_loop    LangChain create_agent
-          │                   │
-          └─────────┬─────────┘
-                    ↓
-       调用次数 / 错误 / 工具顺序 / 消息轨迹
-```
+1. compare_case(case) 分别运行 run_manual(case)、run_langchain(case)。
+2. summarize_manual、summarize_langchain 提取状态、错误、工具顺序、工具结果和消息类型。
+3. 返回包含 case_id、manual、langchain 的普通字典。
+4. 默认运行 D05-02/06/07/10；没有 --case 参数，结果打印到终端，报告人工填写。
 
-产出一份基于实际行为的对照报告，并能解释框架接管了什么、哪些安全与业务责任
-仍属于应用代码。
+不统计模型或 handler 次数，不要求自动 differences、AgentObservation / CaseComparison、自动 Markdown 报告或新增采集系统。
 
-## 今天不做
+旧 comparison.py 和 test_agent_comparison.py 是未参与当前 runner 的重型方案骨架，不属于轻量实现的必做项，也不能算作已实现或已执行的测试。
 
-- [ ] 不修改 Manual Agent 的现有行为。
-- [ ] 不复制 D05 案例、fixture 或工具 handler。
-- [ ] 不请求真实模型；对照使用 scripted/fake model，保证结果稳定可复现。
-- [ ] 不在 D08 给 LangChain 补 timeout、budget、evidence、结构化输出或安全错误映射；这些属于 D09。
-- [ ] 不把 LangChain Agent 接入 FastAPI；这属于 D10。
-- [ ] 不用代码行数作为主要比较指标，只比较可观察行为和职责边界。
+## 文件与职责
 
-## 已创建文件
+| 文件 | 当前用途 |
+| --- | --- |
+| evals/run_agent_comparison.py | 四个固定案例的离线 runner 与摘要 |
+| evals/basic_cases.jsonl | 复用 D05 输入和 scripted responses，不复制案例 |
+| backend/src/stock_agent/agents/manual/manual_agent.py | Manual model_loop |
+| backend/src/stock_agent/agents/langchain/langchain_agent.py | 创建 Agent，内部提供固定工具 |
+| docs/day08/report.md | 实际结果、职责边界、差异解释与复盘 |
 
-1. `backend/src/stock_agent/agents/comparison.py`：共同观察模型与归一化函数。
-2. `evals/run_agent_comparison.py`：四个固定案例的离线对照 runner。
-3. `backend/tests/test_agent_comparison.py`：选择、归一化、对照与安全边界测试。
-4. `docs/day08/report.md`：最终对照报告模板。
+## Step 0：确认基线
 
-## Step 0：确认 D07 基线（5～10 分钟）
+- [x] 保留 D07 基线：提交 3e50d2d，当时 191 passed。
+- [x] 复用原 Manual loop、同一个 registry 和 fixture handler。
+- [x] 注明当前复核包含部分 D09 增量，不将结果冒充纯 D07 快照。
 
-- [x] D07 提交为 `3e50d2d`，开始 D08 时工作区干净。
-- [x] D07 全量测试为 `191 passed`。
-- [x] Manual Agent、LangChain Agent 和两个 fixture 工具均保留现状。
+## Step 1：对照两种 loop
 
-## Step 1：读懂两种 loop 的对应关系（25～35 分钟）
+- [x] 报告列出模型调用、工具分发、消息回填和循环调度的对应职责。
+- [x] 记录 HumanMessage → AIMessage(tool_calls) → ToolMessage → AIMessage(final)。
+- [x] 说明 Manual 最终答案单独保存，消息列表差异不等于调用次数差异。
+- [x] 说明框架接管编排不等于接管业务规则与安全边界。
 
-- [ ] 阅读 `manual_agent.model_loop()`，找到模型请求、`tool_calls` 判断、
-  `execute_tool_and_return()`、`continue` 和最终停止的位置。
-- [ ] 阅读 LangChain state，能识别
-  `HumanMessage → AIMessage(tool_calls) → ToolMessage → AIMessage(final)`。
-- [ ] 写出以下对应关系：
+## Step 2：固定案例与比较口径
 
-```text
-Manual while loop          → LangChain/LangGraph Agent runtime
-client.create()            → model node
-message.tool_calls         → AIMessage.tool_calls
-execute_tool_and_return()  → tool node + adapter
-role="tool" 字典           → ToolMessage
-continue                   → graph edge 回到 model node
-```
+- [x] 复用 D05-02 正常报价、D05-06 空 company_id、D05-07 未知工具、D05-10 持续请求工具。
+- [x] 比较状态、错误、工具顺序、工具结果和消息类型，不强行统一内部表示。
 
-- [ ] 理解“框架接管 orchestration”不等于“框架接管业务规则和安全边界”。
+## Step 3：读取 Manual 结果
 
-## Step 2：固定公平比较契约（25～35 分钟）
+- [x] run_manual 复用 D05 离线 runner、scripted client 和原始 model_loop。
+- [x] summarize_manual 从原事件读取工具顺序、结果、终态、安全错误和消息类型。
+- [x] 不为对照修改 Manual 行为。
 
-文件：`backend/src/stock_agent/agents/comparison.py`
+## Step 4：运行 LangChain 并读取 state
 
-- [ ] 复用 `evals/basic_cases.jsonl`，只选择：
-  - `D05-02`：正常 `get_quote`。
-  - `D05-06`：空 `company_id`。
-  - `D05-07`：未知工具。
-  - `D05-10`：持续请求工具。
-- [ ] 实现 `select_comparison_cases(cases, case_ids) -> list[dict]`，缺失、重复或顺序漂移时拒绝。
-- [ ] 使用 `AgentObservation` 作为共同口径：终态、模型调用次数、工具请求与结果、
-  handler 次数、消息类型和异常类型。
-- [ ] 明确不要求两边内部事件结构一致，也不比较代码行数。
+- [x] 将同一 case 的 scripted responses 转成 AIMessage，fake model 支持 bind_tools。
+- [x] Agent 内部提供固定工具，调用方只传 model，不创建真实模型客户端。
+- [x] recursion_limit=6 限制重复工具案例；异常仅记录类型名。
+- [x] summarize_langchain 读取实际工具顺序、结果和消息类型。
 
-## Step 3：归一化 Manual Agent 记录（30～40 分钟）
+## Step 5：生成两份摘要
 
-文件：`comparison.py`、`evals/run_agent_comparison.py`
+- [x] compare_case 返回同一案例的 manual / langchain 普通字典。
+- [x] 四个固定案例均输出两份摘要。
+- [x] 明确 returned 仅表示 loop 返回，不表示最终业务状态或证据校验通过。
+- [x] 明确 GraphRecursionError 与 Manual budget_exhausted 的边界口径不同。
 
-- [ ] 实现 `run_manual_case(case) -> AgentObservation`，复用 D05
-  `ScriptedClient`、runner 和原始 `model_loop()`。
-- [ ] 实现 `observe_manual_record(record) -> AgentObservation`。
-- [ ] 从现有事件读取工具请求/成功/失败顺序，不重新解释业务结果。
-- [ ] 统计模型调用和 handler 执行次数；每个案例结束后恢复 handler。
-- [ ] 不改 Manual Agent 以迎合 LangChain 的状态格式。
+## Step 6：整理人工报告
 
-## Step 4：离线驱动 LangChain Agent（40～55 分钟）
+- [x] 填写四案例终态、错误、工具顺序、结果和消息流程。
+- [x] 填写 framework / application 职责边界。
+- [x] 保留已有结论，补充状态层次和预算差异解释。
+- [x] 清理空模板、重复表格和旧方案必做项，不虚构调用次数。
 
-文件：`evals/run_agent_comparison.py`、`comparison.py`
+## Step 7：离线验证与测试状态
 
-- [ ] 把同一案例的 `scripted_responses` 转成 LangChain `AIMessage` 序列。
-- [ ] fake model 实现 `bind_tools()`，记录模型节点实际调用次数。
-- [ ] Agent 仍只使用 `build_langchain_tools()` 的最小工具子集。
-- [ ] 用 spy 统计真正进入 registry handler 的次数，结束后必须恢复。
-- [ ] 为重复工具案例设置有限 `recursion_limit`，防止离线测试无限循环。
-- [ ] 实现 `observe_langchain_state(...) -> AgentObservation`；如果框架抛异常，
-  只记录异常类型，不在 D08 映射成 D09 的公开错误。
+- [x] 实际运行轻量 runner，四案例均结束，无真实模型请求。
+- [x] 现有 LangChain 测试验证非法参数与未知工具不会进入 handler。
+- [x] 后端全量回归通过：207 passed。
+- [ ] 轻量 runner 的独立自动化测试尚未补充；旧 test_agent_comparison.py 只有测试清单，不作为通过依据。
 
-## Step 5：运行四个固定案例并生成差异（35～45 分钟）
+## Step 8：复盘与文档收口
 
-- [ ] 实现 `run_comparison(cases) -> list[CaseComparison]`。
-- [ ] 实现 `compare_case(manual, langchain) -> CaseComparison`，要求相同 case_id。
-- [ ] 对每个案例记录模型调用次数、工具请求顺序、工具结果、handler 次数、
-  消息类型、终态和异常。
-- [ ] 区分“行为一致”“状态表示不同”“安全机制尚未迁移”三类结论。
-- [ ] 不把预期差异当作测试失败，也不为了表格相同而修改 Agent。
+- [x] D07 Step7 保存脚本语法检查通过，不再次请求真实模型。
+- [x] 填写执行记录、对照结论和 D09 剩余项。
+- [x] 报告补充口语化面试回答。
+- [ ] 学习者自检：能否脱稿解释 LangChain 替代了哪部分 Manual 代码？
+- [ ] 学习者自检：为什么仍需要 whitelist、Pydantic、evidence、timeout 和 budget？
 
-## Step 6：生成并填写对照报告（30～40 分钟）
+## D08 开发与报告完成标准
 
-文件：`docs/day08/report.md`
+- [x] 四个固定案例均产生 Manual / LangChain 两份摘要。
+- [x] 使用相同 D05 案例和同一 registry，不复制业务逻辑。
+- [x] 报告记录终态、错误、工具顺序、消息流程和实际差异。
+- [x] 非法参数和未知工具没有 handler 执行路径，已有测试覆盖。
+- [x] 重复工具案例在有限边界结束，不把递归限制当作业务预算。
+- [x] 报告明确区分 framework orchestration 与 application policy。
 
-- [ ] 实现 `render_report(comparisons) -> str`，只写脱敏共同指标。
-- [ ] 实现 runner CLI，默认离线并安全写入报告。
-- [ ] 填写四案例表格，不保留 `TODO`。
-- [ ] 填写职责边界表，不声称 LangChain 自动提供了 D09 安全机制。
-- [ ] 写出自己的结论：框架减少了哪些编排代码、应用仍负责什么。
+以上表示轻量开发与报告收口完成，不表示独立 runner 测试或学习者脱稿自检已完成。
+
+## 实际执行记录
+
+- 整理与复核日期：2026-09-16。
+- D08 验证：四个固定案例离线运行成功；未补独立 runner 自动化测试。
+- 全量测试：207 passed，另有一条 Starlette / AnyIO 弃用警告。
+- D07 Step7：脚本语法检查通过，未请求真实模型。
+- D05-02：Manual completed；LangChain returned；双方一条成功报价结果。
+- D05-06：Manual insufficient_information；LangChain returned；双方工具参数校验失败。
+- D05-07：Manual insufficient_information；LangChain returned；未知工具没有执行路径。
+- D05-10：Manual budget_exhausted，两条成功工具结果；LangChain GraphRecursionError，三条成功工具结果。
+- LangChain 接管：模型与工具调度、工具消息回填、model → tool → model 循环。
+- 应用仍负责：白名单、业务 schema、资料来源、证据校验、预算、超时和错误边界。
+- D09 已有：ToolStrategy 验证脚本、工具证据 ID、allowed_ids 收集、脚本证据校验、业务拒绝和工具超时 middleware、取消传播测试。
+- D09 剩余：模型轮数 / 工具次数预算、任务总超时、统一模型和输出错误终态、公共运行入口证据校验、运行事件与最终结果记录。
 
 运行命令：
 
 ```bash
-PYTHONPATH=backend/src \
-backend/.venv/bin/python \
-evals/run_agent_comparison.py
+PYTHONPATH=backend/src backend/.venv/bin/python evals/run_agent_comparison.py
 ```
-
-## Step 7：离线测试（35～45 分钟）
-
-文件：`backend/tests/test_agent_comparison.py`
-
-- [ ] 案例选择严格且顺序稳定。
-- [ ] 两种 observation 只包含共同、安全、可序列化字段。
-- [ ] 正常报价的工具名、参数、fixture 和 handler 次数可核对。
-- [ ] 非法参数与未知工具不会进入 handler。
-- [ ] 重复工具案例会在有限边界内结束，不挂住测试。
-- [ ] 每个案例结束后 registry handler 恢复。
-- [ ] 测试导入和执行均不读取密钥、不创建真实模型、不访问网络。
-
-## Step 8：回归、复盘与面试表达（25～35 分钟）
-
-- [ ] 运行 D08 新增测试。
-- [ ] 运行全量 pytest 并记录结果。
-- [ ] 确认 D07 Step7 脚本仍能通过语法检查，但不再次请求模型。
-- [ ] 填写本文档实际执行记录、差异摘要和遗留 D09 项目。
-- [ ] 能脱稿回答：LangChain 替代了 Manual Agent 的哪部分代码？
-- [ ] 能脱稿回答：为什么用了 LangChain 后仍需要 whitelist、Pydantic、
-  timeout、budget、evidence 和安全错误映射？
-
-## D08 完成标准
-
-- [ ] 四个固定案例都产生 Manual/LangChain 两条观察记录。
-- [ ] 对照数据来自同一 D05 案例和同一 registry，没有复制业务逻辑。
-- [ ] 报告记录调用次数、错误、工具顺序和消息类型差异。
-- [ ] 未知工具和非法参数没有执行 handler。
-- [ ] 重复工具案例有有限测试边界，不会无限运行。
-- [ ] 能准确区分 framework orchestration 与 application policy。
-
-## 实际执行记录（完成后填写）
-
-- 完成时间：
-- D08 测试：
-- 全量测试：
-- 四案例结果：
-- 主要差异：
-- LangChain 接管：
-- 应用仍负责：
-- D09 遗留：

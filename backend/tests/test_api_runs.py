@@ -275,7 +275,7 @@ def test_importing_app_does_not_call_runner_or_create_http_client():
 import httpx
 from unittest.mock import patch
 
-import stock_agent.agents.manual_runner as manual_runner
+import stock_agent.agents.manual.manual_runner as manual_runner
 
 runner_called = False
 

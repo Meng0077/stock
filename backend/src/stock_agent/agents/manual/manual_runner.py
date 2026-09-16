@@ -21,7 +21,7 @@ import os
 from pathlib import Path
 from uuid import UUID
 
-from stock_agent.agents.manual_agent import model_loop
+from stock_agent.agents.manual.manual_agent import model_loop
 from stock_agent.agents.run_errors import error_code_from_exception
 from stock_agent.api.schemas import AgentRunResult
 from stock_agent.llm_client import LLMClient, get_llm_config
@@ -81,7 +81,7 @@ def build_initial_messages(request: ResearchRequest) -> list[dict[str, object]]:
     ]
 
 
-BACKEND = Path(__file__).resolve().parents[3]
+BACKEND = Path(__file__).resolve().parents[4]
 TASK_TIMEOUT_SECONDS = 300
 
 

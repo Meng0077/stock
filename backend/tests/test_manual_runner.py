@@ -8,13 +8,13 @@ from uuid import UUID
 import httpx
 import pytest
 
-from stock_agent.agents import manual_runner
-from stock_agent.agents.manual_runner import (
+from stock_agent.agents.manual import manual_runner
+from stock_agent.agents.manual.manual_runner import (
     build_initial_messages,
     failed_run,
     result_from_agent_state,
 )
-from stock_agent.agents.manual_agent import record_run_finished
+from stock_agent.agents.manual.manual_agent import record_run_finished
 from stock_agent.agents.run_errors import (
     error_code_from_exception,
     safe_message_from_exception,

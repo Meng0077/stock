@@ -25,7 +25,7 @@ def load_agent():
 def test_cli_reuses_packaged_model_loop():
     agent = load_agent()
 
-    assert agent.model_loop.__module__ == "stock_agent.agents.manual_agent"
+    assert agent.model_loop.__module__ == "stock_agent.agents.manual.manual_agent"
 
 
 def configure_agent(monkeypatch, agent):

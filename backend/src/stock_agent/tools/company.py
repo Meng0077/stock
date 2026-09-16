@@ -1,5 +1,7 @@
 """公司资料工具练习：以下为本地教学数据，不是实时查询结果。"""
 
+from stock_agent.tools.errors import UnsupportedCompanyError
+
 COMPANY_PROFILE = {
     "company_id": "NVDA",
     "company_name": "NVIDIA（英伟达）",
@@ -14,7 +16,7 @@ COMPANY_PROFILE = {
 # 返回字典副本（COMPANY_PROFILE.copy()），避免调用者修改这份固定数据。
 def get_company_profile(company_id: str) -> dict:
     if company_id != "NVDA":
-        raise ValueError(f"不支持的公司标识：{company_id}")
+        raise UnsupportedCompanyError(f"不支持的公司标识：{company_id}")
     return COMPANY_PROFILE.copy()
 
 if __name__ == "__main__":

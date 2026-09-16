@@ -5,7 +5,7 @@ import asyncio
 import pytest
 from pydantic import ValidationError
 
-from stock_agent.agents import langchain_tools
+from stock_agent.agents.langchain import langchain_tools
 from stock_agent.schemas.tool_params import CompanyToolParams
 from stock_agent.tools.registry import TOOL_REGISTRY, execute_tool
 
@@ -75,6 +75,8 @@ def test_adapter_result_matches_execute_tool(tool_name, company_id):
 
     adapter_result, registry_result = asyncio.run(invoke_both())
 
+    evidence_id = adapter_result.pop("evidence_id")
+    assert evidence_id.startswith("E-")
     assert adapter_result == registry_result
     assert adapter_result["company_id"] == "NVDA"
     assert adapter_result["data_mode"] == "fixture"
@@ -94,6 +96,7 @@ def test_adapter_only_delegates_to_execute_tool(monkeypatch, tool_name):
         tools_by_name()[tool_name].ainvoke({"company_id": "  NVDA  "})
     )
 
+    assert result.pop("evidence_id").startswith("E-")
     assert result == {"delegated": True}
     assert calls == [(tool_name, {"company_id": "NVDA"})]
 

@@ -27,7 +27,7 @@ from pathlib import Path
 import sys
 import uuid
 
-from stock_agent.agents.manual_agent import (
+from stock_agent.agents.manual.manual_agent import (
     MAX_MODEL_ROUNDS,
     MAX_OUTPUT_TOKENS,
     MAX_TOOL_CALLS,

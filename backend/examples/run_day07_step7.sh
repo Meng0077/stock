@@ -16,11 +16,11 @@ from pathlib import Path
 from langchain.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_deepseek import ChatDeepSeek
 
-from stock_agent.agents.langchain_agent import (
+from stock_agent.agents.langchain.langchain_agent import (
     build_langchain_agent,
     invoke_langchain_agent,
 )
-from stock_agent.agents.langchain_tools import build_langchain_tools
+from stock_agent.agents.langchain.langchain_tools import build_langchain_tools
 from stock_agent.llm_client import get_llm_config
 from stock_agent.schemas.research import ResearchRequest
 
@@ -70,12 +70,7 @@ async def main() -> int:
         max_tokens=500,
         extra_body={"thinking": {"type": "disabled"}},
     )
-    quote_tool = next(
-        tool
-        for tool in build_langchain_tools()
-        if tool.name == "get_quote"
-    )
-    agent = build_langchain_agent(model, [quote_tool])
+    agent = build_langchain_agent(model)
     request = ResearchRequest(
         company_id="NVDA",
         question=(
@@ -171,7 +166,7 @@ async def main() -> int:
                 "temperature": 0,
                 "timeout_seconds": 30,
                 "max_retries": 0,
-                "authorized_tools": [quote_tool.name],
+                "authorized_tools": [tool.name for tool in build_langchain_tools()],
                 "trace": trace,
                 "tool_result": tool_result,
                 "final_answer": final_answer,

@@ -1,5 +1,7 @@
 """报价工具练习：价格完全虚构，不代表 NVDA 的真实或历史行情。"""
 
+from stock_agent.tools.errors import UnsupportedCompanyError
+
 QUOTE = {
     "company_id": "NVDA",
     "price": 100.00,
@@ -15,7 +17,7 @@ QUOTE = {
 # 返回字典副本（QUOTE.copy()），避免调用者修改这份固定数据。
 def get_quote(company_id: str) -> dict:
     if company_id != "NVDA":
-        raise ValueError(f"不支持的公司标识：{company_id}")
+        raise UnsupportedCompanyError(f"不支持的公司标识：{company_id}")
     return QUOTE.copy()
 
 if __name__ == "__main__":

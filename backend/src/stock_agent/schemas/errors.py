@@ -4,6 +4,21 @@ from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+import httpx
+
+from langchain.agents.middleware.tool_call_limit import (
+    ToolCallLimitExceededError,
+)
+from langchain.agents.middleware.model_call_limit import (
+    ModelCallLimitExceededError,
+)
+
+from langchain.agents.structured_output import (
+    StructuredOutputValidationError,
+)
+
+from stock_agent.agents.structured_output import EvidenceValidationError
+
 ErrorCode = Literal[
     "invalid_json",
     "invalid_output",
@@ -62,3 +77,25 @@ def make_public_error(code: ErrorCode) -> PublicError:
         raise ValueError("未知公开错误码")
     stage, message = details
     return PublicError(code=code, message=message, stage=stage)
+
+
+def map_error(error: Exception) -> ErrorCode:
+    """把 LangChain 运行和证据校验异常映射到现有公开错误码。"""
+    if isinstance(error, (ModelCallLimitExceededError, ToolCallLimitExceededError)):
+        return "budget_exhausted"
+
+    if isinstance(error, EvidenceValidationError):
+        if error.code == "data_mode_mismatch":
+            return "data_mode_mismatch"
+        return "invalid_evidence"
+
+    if isinstance(error, StructuredOutputValidationError):
+        return "invalid_output"
+
+    if isinstance(error, httpx.TimeoutException):
+        return "model_timeout"
+
+    if isinstance(error, TimeoutError):
+        return "total_timeout"
+
+    return "model_error"
