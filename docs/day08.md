@@ -3,7 +3,7 @@
 - 开发日：D08。
 - 今日状态：轻量 runner、四案例离线验证和对照报告已完成；独立 runner 测试未补，脱稿复盘待自检。
 - 整理与复核日期：2026-09-16。
-- 前置基线：D07 提交 3e50d2d，当时全量测试 191 passed；当前回归 207 passed，已包含部分 D09 增量。
+- 前置基线：D07 提交 3e50d2d，当时全量测试 191 passed；D08 复核时回归 207 passed，已包含部分 D09 增量。后续 D09 状态见 [D09 执行记录](day09.md)。
 - 参考：[Week 2 计划](week2.md)、[Python 总开发计划](../stock-agent-python-development-plan.md)。
 - 产出：[Manual / LangChain 对照报告](day08/report.md)。
 
@@ -113,8 +113,8 @@
 - D05-10：Manual budget_exhausted，两条成功工具结果；LangChain GraphRecursionError，三条成功工具结果。
 - LangChain 接管：模型与工具调度、工具消息回填、model → tool → model 循环。
 - 应用仍负责：白名单、业务 schema、资料来源、证据校验、预算、超时和错误边界。
-- D09 已有：ToolStrategy 验证脚本、工具证据 ID、allowed_ids 收集、脚本证据校验、业务拒绝和工具超时 middleware、取消传播测试。
-- D09 剩余：模型轮数 / 工具次数预算、任务总超时、统一模型和输出错误终态、公共运行入口证据校验、运行事件与最终结果记录。
+- 后续 D09 已完成：ToolStrategy、公共入口证据校验、模型／工具预算、超时、统一安全终态、运行事件与结果、截断保护；最新回归 226 passed，见 [D09 执行记录](day09.md)。
+- D09 遗留：无 choices／非法 JSON 的 LangChain 路径专项验收，按用户要求暂不处理。本节其他结果保留 D08 复核时的记录。
 
 运行命令：
 

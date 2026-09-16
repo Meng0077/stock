@@ -802,6 +802,8 @@ AIMessage
 
 # D09：结构化输出 + 安全边界
 
+当前核心整合和截断保护已验证，执行记录见 [D09 文档](day09.md)。无 choices／非法 JSON 的 LangChain 路径专项验收按用户要求遗留，尚未全部验收完成。以下保留教学说明。
+
 这一天是 Week 2 技术含量最高的一天。
 
 ## 第一部分：ResearchOutput

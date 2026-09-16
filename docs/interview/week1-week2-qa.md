@@ -1,7 +1,7 @@
 # Stock Agent Week 1～Week 2 面试问题与口语化答案
 
-> 使用范围：基于本项目 D01～D07 的实际实现，以及刚开始的 D08 对照工作。
-> D09 的安全机制迁移和 D10 的 LangChain API 接入还没有完成，面试时不要说成已上线。
+> 使用范围：基于本项目 D01～D09 的实际实现与离线验证。
+> D09 核心安全迁移和截断保护已完成；无 choices／非法 JSON 的 LangChain 专项验收按要求遗留。D10 的 LangChain API 接入未完成，不能说成已上线。详情见 [D09 记录](../day09.md)。
 
 ## 一分钟项目介绍
 
@@ -18,9 +18,9 @@ evidence ID 也必须来自本次输入或成功的工具结果。我还加了�
 第二周我先把 Manual Agent 接到 FastAPI，做成 `POST /api/runs`，然后让
 LangChain `create_agent` 复用同一个 `TOOL_REGISTRY`。目前 LangChain 的真实
 工具往返已经跑通，完整轨迹是 HumanMessage、带 tool calls 的 AIMessage、
-ToolMessage、最终 AIMessage。现在我正在用相同固定案例对照 Manual 和
-LangChain，重点分析框架替代了哪些 orchestration，以及哪些安全和业务责任仍然
-必须由应用代码负责。
+ToolMessage、最终 AIMessage。我已用相同固定案例对照 Manual 和 LangChain，
+并迁移了证据校验、预算、超时、安全终态和事件记录，补上截断响应保护。
+无 choices／非法 JSON 的 LangChain 专项验收暂时遗留，API 联调留给 D10。
 
 ## Week 1～Week 2 做了什么
 
@@ -33,7 +33,8 @@ LangChain，重点分析框架替代了哪些 orchestration，以及哪些安全
 | D05 | 10 个固定案例、scripted model、事件记录、自动检查与人工事实复核 | eval、可复现、故障注入、人工复核 |
 | D06 | `POST /api/runs`、请求/响应契约、runner、依赖注入、安全错误映射 | FastAPI、422、run_id、薄接口 |
 | D07 | LangChain Tool adapter、`create_agent`、DeepSeek 真实工具往返 | Agent runtime、ToolMessage、最小权限 |
-| D08 | 正在用 D05-02/06/07/10 对照 Manual 与 LangChain | 公平比较、行为指标、职责边界 |
+| D08 | 已用 D05-02/06/07/10 对照 Manual 与 LangChain | 公平比较、行为指标、职责边界 |
+| D09 | 核心安全迁移与截断保护已验证；无 choices／非法 JSON 专项验收遗留 | evidence、预算、timeout、明确终态、事件 |
 
 当前可公开的验证结果：D07 收口时全量测试为 `191 passed`；LangChain 新增测试
 共 27 个。真实 LangChain 案例使用 DeepSeek 调用 `get_quote`，返回 NVDA 的
@@ -482,18 +483,18 @@ Agent 框架、Pydantic 和模型 integration 更新都比较快，不锁版本�
 口语回答：
 
 现在只有 NVDA 的本地 fixture，没有真实行情、数据库、RAG 或交易执行；LangChain
-也还没有接入生产 FastAPI runner。D07 只验证了标准工具循环，Manual Agent 已有
-的 timeout、budget、evidence 和安全错误还要在 D09 明确迁移。这个限制是有意的，
-因为我先保证边界可测试，再逐步增加数据和功能。
+也还没有接入主 FastAPI runner。D09 已迁移 timeout、budget、evidence 和安全
+错误，并补上截断保护，但无 choices／非法 JSON 的 LangChain 专项验收暂时遗留。
+离线边界验证不等于真实模型准确率或生产就绪。
 
-### 49. D09 准备做什么？
+### 49. D09 完成到什么程度？
 
 口语回答：
 
-D09 会把 `ResearchOutput`、证据校验、模型和工具超时、任务总超时、调用预算、
-取消以及安全错误语义整合进 LangChain 路径。重点不是假设框架已经替我处理，而是
-为每个失败建立明确终态和测试矩阵。比如 invalid args、unknown tool、重复调用和
-伪造 evidence 都要有可观察且安全的结果。
+D09 已把 `ResearchOutput`、证据校验、超时、调用预算、安全错误和运行事件
+整合进 LangChain 路径，并验证取消传播。截断响应明确返回 incomplete_response，
+不会执行截断工具调用或继续请求模型修复。当前回归 226 passed，但无 choices／
+非法 JSON 的 LangChain 专项验收按要求遗留，所以不说全部验收完成。
 
 ### 50. D10 准备做什么？
 
@@ -550,7 +551,7 @@ runner，不需要重写整个 API。
 - 不要说“LangChain 自动解决了安全问题”；它主要解决标准 orchestration。
 - 不要说“evidence ID 合法就证明事实正确”；语义仍需核对。
 - 不要说“离线 10/10 证明模型准确率 100%”；它证明固定案例下程序行为符合预期。
-- 不要说“Week 2 已全部完成”；当前 D08 在进行，D09/D10 尚未实现。
+- 不要说“Week 2 已全部完成”；D08 对照报告已完成，D09 核心整合已验证但有专项验收遗留，D10 尚未联调。
 - 不知道具体数字时可以说 unavailable，不要编造 token、耗时或通过率。
 
 ## 三分钟回答顺序
@@ -563,7 +564,7 @@ runner，不需要重写整个 API。
 4. Week 2：FastAPI 薄接口，再把工具接入 LangChain，保持同一个 registry。
 5. 安全边界：prompt 是软约束，程序控制白名单、参数、业务规则和公开错误。
 6. 验证：scripted 离线案例保证可复现，少量真实请求证明集成，人工复核补语义判断。
-7. 取舍：LangChain 接管 orchestration，但 D09 仍要迁移安全策略，D10 再接主 API。
+7. 取舍：LangChain 接管 orchestration，应用在 D09 显式迁移安全策略；专项验收遗留公开记录，D10 再接主 API。
 
 最后可以用这一句收尾：
 

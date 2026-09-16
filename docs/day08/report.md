@@ -13,6 +13,8 @@
 本次复核使用当前工作区代码，其中已经包含部分 D09 增量（工具证据 ID、业务错误和工具超时 middleware），不是纯 D07 快照。
 D08 runner 没有配置 ResearchOutput，也没有执行最终证据校验；这些能力不能仅凭本报告判定完成。
 
+以下表格保留 D08 复核时的行为快照，不代表后续 D09 的最新安全边界；最新实现与验收见 [D09 执行记录](../day09.md)。
+
 ## 固定案例终态
 
 | 案例 | 场景 | Manual 终态 / 错误 | LangChain 终态 / 错误 | 主要差异 |
@@ -63,9 +65,9 @@ LangChain 的 system prompt 在模型调用时加入，也不意味着缺少系�
 | 参数校验 | CompanyToolParams | LangChain 参数 schema + registry 校验 | 应用定义 schema，框架负责工具输入适配 |
 | 公司与 fixture 限制 | 原工具 handler | 相同 handler | 应用业务逻辑 |
 | 预期工具错误 | execute_tool_and_return 捕获并回填错误 | 默认工具节点 + 应用 middleware | 应用决定哪些异常可交给模型，非预期异常不应一律吞掉 |
-| evidence 校验 | 成功工具登记 ID，最终 validate_evidence | adapters 已附加 ID；验证脚本收集并校验，公共入口尚未统一接入 | 应用；ToolStrategy 不验证引用来源 |
-| budget | 显式轮数、工具次数限制 | D08 只有 recursion_limit=6，尚未迁移业务预算 | 应用，D09 剩余项 |
-| timeout / cancel | 工具与模型限时，取消传播 | 已有单工具限时和取消传播；任务总超时与统一模型超时终态待补 | 应用，D09 部分完成 |
+| evidence 校验 | 成功工具登记 ID，最终 validate_evidence | D08 快照：adapters 附加 ID，脚本校验；后续 D09 公共入口已接入 | 应用；ToolStrategy 不验证引用来源 |
+| budget | 显式轮数、工具次数限制 | D08 快照：recursion_limit=6；后续 D09 已迁移模型／工具业务预算 | 应用 |
+| timeout / cancel | 工具与模型限时，取消传播 | D08 快照：单工具限时和取消传播；后续 D09 已补任务总超时与模型超时终态 | 应用 |
 | 最终 schema | Pydantic 解析 JSON | D08 runner 返回原始 state；D09 验证脚本另用 ToolStrategy | 应用定义输出模型，框架辅助生成和校验 |
 
 ## 我的结论
@@ -87,4 +89,4 @@ LangChain 的 system prompt 在模型调用时加入，也不意味着缺少系�
 - 后端回归：207 passed，另有一条 Starlette / AnyIO 弃用警告。
 - D07 Step7 保存脚本：语法检查通过，未调用真实模型。
 - D08 独立 runner 自动化测试：尚未补充；test_agent_comparison.py 仍为旧方案测试清单，不计作已执行测试。
-- D09 剩余：模型轮数和工具次数预算、任务总超时、统一模型错误与输出错误终态、公共入口证据校验、运行事件与最终结果记录。
+- 后续 D09：核心整合和截断保护已完成，最新回归 226 passed；无 choices／非法 JSON 的 LangChain 路径专项验收按用户要求遗留，见 [D09 执行记录](../day09.md)。

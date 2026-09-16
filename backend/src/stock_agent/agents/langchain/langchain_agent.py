@@ -3,14 +3,23 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from typing import Any
 import uuid
 
 from langchain.agents import create_agent
-from langchain.agents.middleware import ModelCallLimitMiddleware, ToolCallLimitMiddleware
+from langchain.agents.middleware import (
+    ModelCallLimitMiddleware,
+    ModelRequest,
+    ModelResponse,
+    ToolCallLimitMiddleware,
+    wrap_model_call,
+)
+from langchain.messages import AIMessage
 
 from stock_agent.agents.structured_output import (
     EvidenceValidationError,
+    IncompleteResponseError,
     collect_evidence_ids,
     validate_evidence,
 )
@@ -42,6 +51,20 @@ MAX_MODEL_ROUNDS = 3
 MAX_TOOL_CALLS = 4
 
 TASK_TIMEOUT_SECONDS = 20
+
+
+@wrap_model_call
+async def reject_truncated_response(
+    request: ModelRequest,
+    handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
+) -> ModelResponse:
+    """模型节点提交结果前拒绝截断，不继续工具执行或下一轮格式修复。"""
+    response = await handler(request)
+    for message in response.result:
+        if isinstance(message, AIMessage) and message.response_metadata.get("finish_reason") == "length":
+            raise IncompleteResponseError("模型响应被截断")
+    return response
+
 
 def build_agent_input(
     request: ResearchRequest,
@@ -78,7 +101,8 @@ def build_langchain_agent(
                 ToolCallLimitMiddleware(
                     run_limit=MAX_TOOL_CALLS,
                     exit_behavior="error"
-                )
+                ),
+                reject_truncated_response,
             ],
         
     )

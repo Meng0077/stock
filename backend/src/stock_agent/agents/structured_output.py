@@ -6,6 +6,11 @@ from typing import Literal
 from stock_agent.schemas.research_output import ResearchOutput
 from langchain.messages import ToolMessage
 
+
+class IncompleteResponseError(ValueError):
+    """模型响应被截断，不能作为完整结果或继续执行工具。"""
+
+
 class EvidenceValidationError(ValueError):
     _MESSAGES = {
         "unknown_evidence_id": "未知 evidence_id",

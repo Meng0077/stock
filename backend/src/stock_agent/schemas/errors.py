@@ -17,7 +17,7 @@ from langchain.agents.structured_output import (
     StructuredOutputValidationError,
 )
 
-from stock_agent.agents.structured_output import EvidenceValidationError
+from stock_agent.agents.structured_output import EvidenceValidationError, IncompleteResponseError
 
 ErrorCode = Literal[
     "invalid_json",
@@ -81,6 +81,9 @@ def make_public_error(code: ErrorCode) -> PublicError:
 
 def map_error(error: Exception) -> ErrorCode:
     """把 LangChain 运行和证据校验异常映射到现有公开错误码。"""
+    if isinstance(error, IncompleteResponseError):
+        return "incomplete_response"
+
     if isinstance(error, (ModelCallLimitExceededError, ToolCallLimitExceededError)):
         return "budget_exhausted"
 
@@ -90,6 +93,8 @@ def map_error(error: Exception) -> ErrorCode:
         return "invalid_evidence"
 
     if isinstance(error, StructuredOutputValidationError):
+        if error.ai_message.response_metadata.get("finish_reason") == "length":
+            return "incomplete_response"
         return "invalid_output"
 
     if isinstance(error, httpx.TimeoutException):

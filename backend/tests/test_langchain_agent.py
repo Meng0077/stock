@@ -78,12 +78,13 @@ def test_build_agent_uses_internal_tools_and_system_prompt(monkeypatch):
 
     assert build_langchain_agent("offline-model") is sentinel
     middleware = captured.pop("middleware")
-    assert len(middleware) == 3
+    assert len(middleware) == 4
     assert middleware[0] is tool_middleware.handle_tool_errors
     assert isinstance(middleware[1], ModelCallLimitMiddleware)
     assert middleware[1].run_limit == langchain_agent.MAX_MODEL_ROUNDS
     assert isinstance(middleware[2], ToolCallLimitMiddleware)
     assert middleware[2].run_limit == langchain_agent.MAX_TOOL_CALLS
+    assert middleware[3] is langchain_agent.reject_truncated_response
     assert captured == {
         "model": "offline-model",
         "tools": build_langchain_tools(),
@@ -548,3 +549,83 @@ def test_run_research_enforces_real_budget(research_request, budget):
         event for event in result["events"] if event["type"] == "tool_succeeded"
     ]
     assert len(completed_tools) == (3 if budget == "model" else 1)
+
+
+@pytest.mark.parametrize("kind, handle_errors", [
+    ("text", True),
+    ("tool", True),
+    ("structured", True),
+    ("invalid_structured", True),
+    ("invalid_structured", False),
+])
+def test_run_research_rejects_truncation_without_tools_or_retry(
+    monkeypatch, research_request, kind, handle_errors,
+):
+    def unexpected_handler(company_id):
+        raise AssertionError("截断响应不能触发工具执行")
+
+    monkeypatch.setitem(TOOL_REGISTRY["get_quote"], "handler", unexpected_handler)
+    output_data = {
+        "status": "insufficient_information",
+        "facts": [],
+        "inferences": [],
+        "missing_information": ["缺少资料"],
+        "data_mode": "fixture",
+    }
+    tool_calls = []
+    if kind == "tool":
+        tool_calls = [{
+            "name": "get_quote", "args": {"company_id": "NVDA"}, "id": "truncated-call",
+        }]
+    elif kind in {"structured", "invalid_structured"}:
+        tool_calls = [{
+            "name": "ResearchOutput",
+            "args": output_data if kind == "structured" else {"status": "completed"},
+            "id": "truncated-output",
+        }]
+
+    model = ToolCallingFakeModel(responses=[
+        AIMessage(
+            content="部分回答" if kind == "text" else "",
+            tool_calls=tool_calls,
+            response_metadata={"finish_reason": "length"},
+        ),
+        AIMessage(content="", tool_calls=[{
+            "name": "ResearchOutput", "args": output_data, "id": "retry-output",
+        }]),
+    ])
+    agent = build_langchain_agent(
+        model, response_format=ToolStrategy(ResearchOutput, handle_errors=handle_errors),
+    )
+
+    result = asyncio.run(run_research(agent, research_request))
+
+    assert result["status"] == "failed"
+    assert result["output"] is None
+    assert result["error"] == make_public_error("incomplete_response").model_dump()
+    assert [event["type"] for event in result["events"]] == [
+        "run_started", "run_finished",
+    ]
+    assert result["events"][-1]["error"] == result["error"]
+    assert model.i == 1  # 第二条预设响应未被调用，格式修复不能绕过截断保护。
+
+
+def test_truncation_preserves_previous_tool_events(research_request):
+    model = ToolCallingFakeModel(responses=[
+        AIMessage(content="", tool_calls=[{
+            "name": "get_quote", "args": {"company_id": "NVDA"}, "id": "call-quote",
+        }]),
+        AIMessage(content="部分回答", response_metadata={"finish_reason": "length"}),
+        AIMessage(content="不应继续调用"),
+    ])
+
+    result = asyncio.run(run_research(build_langchain_agent(model), research_request))
+
+    assert result["status"] == "failed"
+    assert result["output"] is None
+    assert result["error"] == make_public_error("incomplete_response").model_dump()
+    assert [event["type"] for event in result["events"]] == [
+        "run_started", "tool_requested", "tool_succeeded", "run_finished",
+    ]
+    assert all(event["run_id"] == result["run_id"] for event in result["events"])
+    assert model.i == 2
