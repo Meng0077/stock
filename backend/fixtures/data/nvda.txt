@@ -1,0 +1,13 @@
+NVIDIA Corporation
+
+Ticker: NVDA
+
+NVIDIA designs GPUs and accelerated computing platforms.
+
+Its major business areas include data center, gaming,
+professional visualization and automotive.
+
+Data center revenue is strongly related to demand for AI computing
+infrastructure.
+
+This document is local teaching data and is not real-time market data.

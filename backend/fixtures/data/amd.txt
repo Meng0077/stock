@@ -1,0 +1,11 @@
+Advanced Micro Devices
+
+Ticker: AMD
+
+AMD develops CPUs, GPUs and data center processors.
+
+Its major product families include Ryzen, EPYC and Radeon.
+
+AMD competes in data center, personal computing and graphics markets.
+
+This document is local teaching data and is not real-time market data.

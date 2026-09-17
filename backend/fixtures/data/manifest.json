@@ -1,0 +1,34 @@
+{
+  "documents": [
+    {
+      "document_id": "fomc_2026_09_16",
+      "path": "fomc_2026_09_16.txt",
+      "title": "2026 年 9 月美联储议息决议",
+      "source_url": "https://www.federalreserve.gov/newsevents/pressreleases/monetary20260916a.htm",
+      "company": null,
+      "report_period": "2026-09-15/2026-09-16",
+      "published_at": "2026-09-16T14:00:00-04:00",
+      "source_updated_at": "2026-09-16",
+      "content_type": "official_summary",
+      "version": 1,
+      "data_mode": "historical",
+      "retrieved_on": "2026-09-17",
+      "sha256": "fa5d678f04089cb713fa0ffecc519c03be8821c105cb592ac0f422a524f61934"
+    },
+    {
+      "document_id": "monetary_policy_and_stocks",
+      "path": "monetary_policy_and_stocks.txt",
+      "title": "货币政策如何影响股市",
+      "source_url": "https://www.federalreserve.gov/monetarypolicy/monetary-policy-what-are-its-goals-how-does-it-work.htm",
+      "company": null,
+      "report_period": null,
+      "published_at": null,
+      "source_updated_at": "2021-07-29",
+      "content_type": "official_summary_with_labeled_inferences",
+      "version": 1,
+      "data_mode": "historical",
+      "retrieved_on": "2026-09-17",
+      "sha256": "142d13b710a08eb6de0e1d8df3142bca2884163aaa395fc2b7eb30cdbe5f7b2c"
+    }
+  ]
+}
