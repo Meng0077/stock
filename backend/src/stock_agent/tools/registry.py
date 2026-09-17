@@ -1,4 +1,7 @@
-"""D03 练习：工具白名单与统一执行入口（目前只有要求，尚未实现）。
+"""D03/D12：工具白名单与统一执行入口。
+
+D12 新增 retrieve_knowledge，参数通过 KnowledgeToolParams 校验。
+以下保留 D03 原练习说明。
 
 前置小修：tool_params.py 的案例统计尚未使用 expected。
 请让实际通过/拒绝与 expected 比较，再统计符合预期的数量。
@@ -43,7 +46,8 @@
 # TODO：导入函数及参数模型。
 from stock_agent.tools.company import get_company_profile
 from stock_agent.tools.quote import get_quote
-from stock_agent.schemas.tool_params import CompanyToolParams
+from stock_agent.schemas.tool_params import CompanyToolParams, KnowledgeToolParams
+from stock_agent.retrieval.knowledge import retrieve_knowledge
 from collections.abc import Callable
 import inspect
 
@@ -57,7 +61,11 @@ TOOL_REGISTRY = {
     "get_quote": {
         "handler": get_quote,
         "params_model": CompanyToolParams,
-    }
+    },
+    "retrieve_knowledge": {
+        "handler": retrieve_knowledge,
+        "params_model": KnowledgeToolParams,
+    },
 }
 
 # TODO：实现 execute_tool。
@@ -65,7 +73,7 @@ async def execute_tool(
     tool_name: str,
     arguments: dict,
     before_execute: Callable[[], None] | None = None,
-) -> dict:
+) -> dict | list[dict]:
     """校验通过后通知调用方计数，再启动工具 handler。"""
     if tool_name not in TOOL_REGISTRY:
         raise ValueError(f"未知工具：{tool_name}")
@@ -73,7 +81,7 @@ async def execute_tool(
     request = tool["params_model"].model_validate(arguments)
     if before_execute is not None:
         before_execute()
-    result = tool["handler"](request.company_id)
+    result = tool["handler"](**request.model_dump())
     if inspect.isawaitable(result):
         return await result
     return result

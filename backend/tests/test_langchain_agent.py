@@ -15,6 +15,8 @@ from langchain.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.language_models.fake_chat_models import (
     FakeMessagesListChatModel,
 )
+from langchain_core.embeddings import DeterministicFakeEmbedding
+from langchain_core.vectorstores import InMemoryVectorStore
 from pydantic import Field
 
 from stock_agent.agents.langchain import langchain_agent, langchain_tools, tool_middleware
@@ -31,6 +33,7 @@ from stock_agent.schemas.research import ResearchRequest
 from stock_agent.schemas.research_output import ResearchOutput
 from stock_agent.schemas.errors import make_public_error
 from stock_agent.tools.registry import TOOL_REGISTRY
+from stock_agent.retrieval import knowledge
 
 
 class ToolCallingFakeModel(FakeMessagesListChatModel):
@@ -115,7 +118,7 @@ def test_fake_model_completes_real_langchain_tool_loop(research_request):
     state = asyncio.run(invoke_langchain_agent(agent, research_request))
     messages = state["messages"]
 
-    assert model.bound_tool_names == ["get_quote", "get_company_profile"]
+    assert model.bound_tool_names == ["get_quote", "get_company_profile", "retrieve_knowledge"]
     assert [type(message) for message in messages] == [
         HumanMessage,
         AIMessage,
@@ -137,6 +140,50 @@ def test_fake_model_completes_real_langchain_tool_loop(research_request):
         "note": "固定虚构报价，仅用于验证工具调用；报价时间也是预设的教学时间。",
     }
     assert messages[3].tool_calls == []
+
+
+@pytest.mark.parametrize("company_id", ["NVDA", "TSLA"])
+def test_rag_tool_result_and_missing_documents_complete_agent_flow(monkeypatch, tmp_path, company_id):
+    monkeypatch.setattr(knowledge, "KNOWLEDGE_DIR", tmp_path)
+    (tmp_path / "nvda.txt").write_text("Data center revenue depends on AI infrastructure demand.")
+    monkeypatch.setattr(knowledge, "build_vector_store", lambda documents: (
+        InMemoryVectorStore.from_documents(documents, DeterministicFakeEmbedding(size=16))
+    ))
+    has_documents = company_id == "NVDA"
+    output = ResearchOutput(
+        status="completed" if has_documents else "insufficient_information",
+        facts=[{
+            "text": "数据中心收入与 AI 基础设施需求相关。",
+            "evidence_ids": ["rag:NVDA:nvda.txt:0"],
+        }] if has_documents else [],
+        inferences=[],
+        missing_information=[] if has_documents else ["本地没有 TSLA 的公司资料。"],
+        data_mode="fixture",
+    )
+    model = ToolCallingFakeModel(responses=[
+        AIMessage(content="", tool_calls=[{
+            "name": "retrieve_knowledge",
+            "args": {"company_id": company_id, "question": "What drives data center revenue?"},
+            "id": "call-rag",
+        }]),
+        AIMessage(content="", tool_calls=[{
+            "name": "ResearchOutput",
+            "args": output.model_dump(),
+            "id": "call-output",
+        }]),
+    ])
+    agent = build_langchain_agent(model, response_format=ToolStrategy(ResearchOutput))
+    request = ResearchRequest(
+        company_id=company_id,
+        question="What drives data center revenue?",
+        data_mode="fixture",
+        as_of="2026-09-17T00:00:00+08:00",
+    )
+    result = asyncio.run(run_research(agent, request))
+    assert result["error"] is None
+    assert result["status"] == output.status
+    assert result["output"] == output
+    assert not any(event["type"] == "tool_failed" for event in result["events"])
 
 
 @pytest.mark.parametrize("tool_name", ["get_quote", "get_company_profile"])

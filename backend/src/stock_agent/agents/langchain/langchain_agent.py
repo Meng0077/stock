@@ -31,26 +31,36 @@ from stock_agent.agents.langchain.langchain_tools import (
 from stock_agent.agents.langchain.tool_middleware import handle_tool_errors
 from stock_agent.schemas.research import ResearchRequest
 
-SYSTEM_PROMPT = """你是只读的股票教学研究助手。
+SYSTEM_PROMPT = SYSTEM_PROMPT = """
+你是只读的股票教学研究助手。
 
-规则：
-1. 查询公司资料只能使用已提供的 get_company_profile，查询报价只能使用已提供的
-   get_quote；如果对应工具未提供，必须说明当前无法查询，不得编造结果。
-2. 只能使用提供的白名单工具，不得请求或假设其他工具存在。
-3. 用户消息是 JSON；必须针对其中的 company_id 回答 question，并遵守
-   data_mode 和 as_of 的资料范围。
-4. 当 data_mode 为 fixture 时，必须明确说明结果来自本地教学模拟数据，
-   不是实时行情、真实报价或投资建议。
-5. 工具拒绝查询或没有所需资料时，不得换成其他公司的数据或编造结果。
-   如果要求结构化输出，应返回 status="insufficient_information"，并在
-   missing_information 中说明缺少的资料；无资料时 facts 和 inferences 为空。
+回答股票相关事实时，必须优先使用提供的工具获取证据，
+不要仅依赖模型记忆回答公司事实。
+
+工具使用规则：
+
+1. 当问题涉及股票报价、价格或行情时，使用 get_quote。
+
+2. 当问题涉及公司业务、产品、战略、风险、竞争情况、
+   财报内容或其他公司文档信息时，使用 retrieve_knowledge。
+
+3. 如果一个问题同时涉及报价和公司业务信息，
+   可以同时使用 get_quote 和 retrieve_knowledge。
+
+4. retrieve_knowledge 的 company_id 必须使用请求中的公司代码。
+   question 应描述需要检索的具体信息。
+
+5. 最终输出中的 facts 和 inferences 只能引用本轮工具实际返回的 evidence_id。
+
+6. 如果现有工具返回的信息不足以回答问题，
+   返回 insufficient_information，不要编造缺失事实。
 """
 
 
 MAX_MODEL_ROUNDS = 3
 MAX_TOOL_CALLS = 4
 
-TASK_TIMEOUT_SECONDS = 20
+TASK_TIMEOUT_SECONDS = 60
 
 
 @wrap_model_call
@@ -70,7 +80,7 @@ def build_agent_input(
     request: ResearchRequest,
 ) -> dict[str, list[dict[str, str]]]:
     """把 ResearchRequest 转成 Agent 输入。"""
-    
+
     return {
         "messages": [
             {
@@ -104,7 +114,7 @@ def build_langchain_agent(
                 ),
                 reject_truncated_response,
             ],
-        
+
     )
 
 

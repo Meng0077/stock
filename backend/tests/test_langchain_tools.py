@@ -1,12 +1,13 @@
 """D07 Step 5：离线验证 LangChain Tool adapter 与现有 registry 的边界。"""
 
 import asyncio
+import json
 
 import pytest
 from pydantic import ValidationError
 
 from stock_agent.agents.langchain import langchain_tools
-from stock_agent.schemas.tool_params import CompanyToolParams
+from stock_agent.schemas.tool_params import CompanyToolParams, KnowledgeToolParams
 from stock_agent.tools.registry import TOOL_REGISTRY, execute_tool
 
 
@@ -21,8 +22,8 @@ def tools_by_name():
 def test_build_langchain_tools_returns_exact_allowlist():
     tools = langchain_tools.build_langchain_tools()
 
-    assert [tool.name for tool in tools] == list(TOOL_NAMES)
-    assert len({tool.name for tool in tools}) == len(TOOL_NAMES)
+    assert [tool.name for tool in tools] == [*TOOL_NAMES, "retrieve_knowledge"]
+    assert len({tool.name for tool in tools}) == len(TOOL_NAMES) + 1
 
 
 @pytest.mark.parametrize("tool_name", TOOL_NAMES)
@@ -116,3 +117,24 @@ def test_unknown_tool_has_no_langchain_or_registry_execution_path():
 
     with pytest.raises(ValueError, match="未知工具"):
         asyncio.run(execute_tool("delete_file", {"company_id": "NVDA"}))
+
+
+def test_knowledge_adapter_delegates_to_registry(monkeypatch):
+    calls = []
+    documents = [{"evidence_id": "rag:NVDA:nvda.txt:2", "content": "AI infrastructure demand"}]
+
+    async def fake_execute_tool(name, arguments):
+        calls.append((name, arguments))
+        return documents
+
+    monkeypatch.setattr(langchain_tools, "execute_tool", fake_execute_tool)
+    tool = tools_by_name()["retrieve_knowledge"]
+    assert tool.args_schema is KnowledgeToolParams
+    result = asyncio.run(tool.ainvoke({
+        "company_id": " NVDA ",
+        "question": " What drives data center revenue? ",
+    }))
+    assert calls == [("retrieve_knowledge", {
+        "company_id": "NVDA", "question": "What drives data center revenue?",
+    })]
+    assert json.loads(result) == documents

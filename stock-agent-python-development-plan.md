@@ -3,7 +3,7 @@
 - 版本：v3.1，2026-09-17；真实 RAG 调整为任意美股 ticker 的按需索引。
 - 定位：面向 Agent 开发岗位的可演示项目；模型负责理解问题、调用只读工具、检索资料和解释结果，行情计算、决策规则与仓位风险检查由可复现的 Python 模块完成。
 - 排期：面试版 10 周、50 个开发日、约 200 小时；按每天 4 小时、每周 5 天估算。若 Python 异步、数据源接入或部署比预期慢，另留 1–2 周缓冲。
-- 当前进度：已推进至 D11，本地 Document → Chunk → Embedding → Vector Store → Retriever 基础链路已跑通；中文检索仍有失败案例。D08/D09 的完成与遗留项见对应文档，早期未验收项继续保留。下一步 D12 将 RAG Tool 接入 Agent。保留现有 Manual Agent、工具注册表和学习文档。
+- 当前进度：D11 本地 RAG 基础链路及 D12 通用 Knowledge Tool 接入已完成，Day12 的 256 项自动测试和四个真实模型案例通过，见 docs/day12.md；中文检索仍有失败案例。D08/D09 的完成与遗留项见对应文档，早期未验收项继续保留。下一步 D13 接入 SEC Document Provider。保留现有 Manual Agent、工具注册表和学习文档。
 
 本文是拟开发计划。目录、接口和演示能力只有在代码实现并验收后才算完成；不能把 fixture、历史数据或延迟数据标成实时行情。
 
@@ -139,7 +139,7 @@ D04/D05 的未验收项继续按对应文档追踪，不因进入 RAG 阶段而�
 | 开发日 | 任务 | 完成标准 |
 | --- | --- | --- |
 | D11 | 保留 Document → Chunk → Embedding → Vector Store → Retriever 本地基础练习 | 基础链路已跑通；公司过滤与 evidence_id 已验证，中文检索失败如实保留，见 docs/day11.md。来源时间 / 版本 / hash 元数据接入按用户要求暂缓至真实资料阶段 |
-| D12 | 将通用 retrieve_knowledge(company_id, question) 接入现有 Tool 注册表和 LangChain Agent | 使用 fixture；检索 → ToolMessage → Agent → ResearchOutput 跑通。只引用本次返回的 evidence_id，无对应资料时说明不足；不增加 retrieve_nvda_knowledge 等公司专用工具 |
+| D12 | 将通用 retrieve_knowledge(company_id, question) 接入现有 Tool 注册表和 LangChain Agent | fixture 接入已完成；检索 → ToolMessage → Agent → ResearchOutput 跑通，本次引用归属与无资料路径已验证。256 项自动测试和四个真实模型案例通过，见 docs/day12.md；不代表真实按需索引已完成 |
 | D13 | 实现 SEC Document Provider：ticker 解析、CIK 映射和 filing 发现 | 输入未预置 ticker 即可找出截止 as_of 可用的 filing 元数据；覆盖美国及外国发行人的适用表单，必要时读取历史清单。记录来源、报告期、接受 / 可用时间、accession 和主文档；无匹配时明确返回缺失原因 |
 | D14 | 下载必要 filing，解析与清洗正文，并保留引用上下文 | 先处理 SEC 可用 HTML 主文档及必要附件；保留标题、表格单位和原文定位，补齐发布时间、版本和内容 hash。扫描件或无法解析的资料明确标为未覆盖，不悄悄生成空文档 |
 | D15 | 实现 ensure_company_index：首次查询不存在索引时才获取、分段和嵌入 | 首次查询一个未预置公司可建立索引并返回片段；重复调用不产生重复文档。文档身份、解析 / 分段 / Embedding 配置可追踪；阶段内先用本地索引状态，D16 完成跨进程持久化 |
@@ -359,7 +359,7 @@ HTTP 客户端在合适生命周期内复用；异步数据库 session 按请求
 - [ ] 现有 D01–D05 有对应真实 / 离线验收记录；未完成任务仍标为未完成。
 - [x] Manual Agent 与 LangChain Agent 共用只读工具契约，并有固定案例对照（D08 轻量 runner 与报告已完成）。
 - [x] D11 本地 RAG 基础链路跑通，已记录中文检索失败；不代表真实按需索引已完成。
-- [ ] Day12 通用 Knowledge Tool 接入 Agent，并有本次引用归属验证。
+- [x] Day12 通用 Knowledge Tool 接入统一注册表与 Agent，本次引用归属及无资料路径通过验证（见 docs/day12.md）。
 - [ ] 未预置 ticker 可动态解析并按需获取资料，无需增加公司白名单。
 - [ ] 原文、索引状态和向量持久化；重复查询及重启后复用，新增 filing / 修订增量更新可验证。
 - [ ] RAG 有小型资料集、关键词基线、向量 / 混合对照、证据定位与评估报告。
@@ -371,4 +371,4 @@ HTTP 客户端在合适生命周期内复用；异步数据库 session 按请求
 - [ ] README、启动环境、固定评估、故障记录和 5–8 分钟演示可供面试复现。
 - [ ] 首版无订单提交与自动交易路径；后续阶段以独立计划推进。
 
-从 D12 的通用 RAG Tool 接入继续推进；D01–D11 已有代码与记录保留，未验收项仍需追踪。真实数据工程按 D13–D17 逐步落地，不在 Day12 提前实现 Provider、持久化缓存或增量更新。50 个开发日的主框架保留，数据覆盖与解析工作量超出每日时限时使用原有缓冲，不以减少支持的公司数量代替产品目标。
+从 D13 的 SEC Document Provider 继续推进；D01–D12 已有代码与记录保留，未验收项仍需追踪。真实数据工程按 D13–D17 逐步落地，Day12 未提前实现 Provider、持久化缓存或增量更新。50 个开发日的主框架保留，数据覆盖与解析工作量超出每日时限时使用原有缓冲，不以减少支持的公司数量代替产品目标。

@@ -8,5 +8,9 @@ class CompanyToolParams(BaseModel):
         str_strip_whitespace=True,
         validate_assignment=True
     )
-    
+
     company_id: str = Field(min_length=1, max_length=80)
+
+
+class KnowledgeToolParams(CompanyToolParams):
+    question: str = Field(min_length=1)

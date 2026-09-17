@@ -1,15 +1,16 @@
 
 import asyncio
+import json
 from pathlib import Path
 
 from langchain.agents.structured_output import ToolStrategy
 from langchain_deepseek import ChatDeepSeek
-from langchain.agents.middleware.model_call_limit import (
-    ModelCallLimitExceededError
-)
-from langchain.agents.middleware.tool_call_limit import (
-    ToolCallLimitExceededError
-)
+# from langchain.agents.middleware.model_call_limit import (
+#     ModelCallLimitExceededError
+# )
+# from langchain.agents.middleware.tool_call_limit import (
+#     ToolCallLimitExceededError
+# )
 
 from stock_agent.agents.langchain.langchain_agent import run_research
 from stock_agent.agents.structured_output import collect_evidence_ids, validate_evidence
@@ -25,8 +26,8 @@ MODEL_TIMEOUT_SECONDS = 30
 
 async def main():
     request = ResearchRequest(
-        company_id="TSLA",
-        question="查询教学模拟报价",
+        company_id="NVDA",
+        question="NVDA 的数据中心业务主要靠什么",
         data_mode="fixture",
         as_of="2026-09-15T16:00:00+08:00",
     )
@@ -42,10 +43,12 @@ async def main():
     # 使用工具调用生成结构化结果，避免接口不支持原生 response_format。
     agent = build_langchain_agent(model, response_format=ToolStrategy(ResearchOutput))
     result = await run_research(agent, request)
-    print(result)
-    
-    
-    
+    if result["output"] is not None:
+        result["output"] = result["output"].model_dump(mode="json")
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+
+
+
 
 
 if __name__ == "__main__":

@@ -15,7 +15,7 @@ def test_execute_tool_valid(tool_name, company_id):
     result = asyncio.run(execute_tool(tool_name, {"company_id": company_id}))
     assert result["company_id"] == "NVDA"
     assert result["data_mode"] == "fixture"
-    
+
 
 @pytest.mark.parametrize("input,field,error_type", [
     ({"company_id": ''}, "company_id", "string_too_short"),
@@ -27,7 +27,7 @@ def test_execute_tool_invalid_params(input, field, error_type):
         asyncio.run(execute_tool("get_quote", input))
     errors = caught.value.errors(include_input=False)
     assert any(e["loc"] == (field,) and e["type"] == error_type for e in errors)
-    
+
 def test_execute_tool_unknown_tool():
     with pytest.raises(ValueError, match="未知工具"):
         asyncio.run(execute_tool("delete_file", {"company_id": "NVDA"}))
@@ -46,3 +46,20 @@ def test_execute_tool_awaits_async_handler(monkeypatch):
 
     result = asyncio.run(execute_tool("get_quote", {"company_id": " NVDA "}))
     assert result == {"company_id": "NVDA", "data_mode": "fixture"}
+
+
+def test_execute_knowledge_tool_passes_both_validated_arguments(monkeypatch):
+    calls = []
+    documents = [{"evidence_id": "rag:NVDA:nvda.txt:2", "content": "AI infrastructure demand"}]
+
+    def handler(company_id, question):
+        calls.append((company_id, question))
+        return documents
+
+    monkeypatch.setitem(TOOL_REGISTRY["retrieve_knowledge"], "handler", handler)
+    result = asyncio.run(execute_tool("retrieve_knowledge", {
+        "company_id": " NVDA ",
+        "question": " What drives data center revenue? ",
+    }))
+    assert result is documents
+    assert calls == [("NVDA", "What drives data center revenue?")]

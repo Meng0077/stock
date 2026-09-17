@@ -7,7 +7,7 @@ def load_text_file(path: Path, company_id) -> Document:
     text = path.read_text(encoding="utf-8")
 
     return Document(
-        page_content=path.read_text(encoding="utf-8"),
+        page_content=text,
         metadata={
             "source": str(path),
             "company_id": company_id,
@@ -15,17 +15,18 @@ def load_text_file(path: Path, company_id) -> Document:
     )
 
 
-documents = [
-    load_text_file(
-        Path("backend/fixtures/data/nvda.txt"),
-        "NVDA",
-    ),
-    load_text_file(
-        Path("backend/fixtures/data/amd.txt"),
-        "AMD",
-    ),
-]
+if __name__ == "__main__":
+    documents = [
+        load_text_file(
+            Path("backend/fixtures/data/nvda.txt"),
+            "NVDA",
+        ),
+        load_text_file(
+            Path("backend/fixtures/data/amd.txt"),
+            "AMD",
+        ),
+    ]
 
-# for document in documents:
-#     print(document.metadata)
-#     print(document.page_content)
+    # for document in documents:
+    #     print(document.metadata)
+    #     print(document.page_content)

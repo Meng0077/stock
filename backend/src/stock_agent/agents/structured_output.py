@@ -35,7 +35,28 @@ class EvidenceValidationError(ValueError):
             message += f": {self.context}"
 
         super().__init__(message)
-        
+
+
+def extract_evidence_ids(value) -> set[str]:
+    if isinstance(value, dict):
+        evidence_id = value.get("evidence_id")
+
+        return (
+            {evidence_id}
+            if evidence_id
+            else set()
+        )
+
+    if isinstance(value, list):
+        evidence_ids = set()
+
+        for item in value:
+            evidence_ids |= extract_evidence_ids(item)
+
+        return evidence_ids
+
+    return set()
+
 
 def collect_evidence_ids(messages) -> set[str]:
     evidence_ids = set()
@@ -43,19 +64,21 @@ def collect_evidence_ids(messages) -> set[str]:
     for message in messages:
         if not isinstance(message, ToolMessage):
             continue
-        
-        if message.name not in {"get_quote", "get_company_profile"}:
+        if message.name not in {"get_quote", "get_company_profile", "retrieve_knowledge"}:
             continue
+        content = message.content
 
         if message.status != "success":
             continue
 
-        data = json.loads(message.content)
 
-        evidence_id = data.get("evidence_id")
+        if isinstance(content, str):
+            try:
+                content = json.loads(content)
+            except json.JSONDecodeError:
+                continue
 
-        if evidence_id:
-            evidence_ids.add(evidence_id)
+        evidence_ids |= extract_evidence_ids(content)
 
     return evidence_ids
 
@@ -69,7 +92,7 @@ def validate_evidence(
     if output.data_mode != expected_data_mode:
         raise EvidenceValidationError("data_mode_mismatch")
 
-  
+
     for claim in output.facts + output.inferences:
         if not set(claim.evidence_ids) <= allowed_ids:
             invalid_ids = set(claim.evidence_ids) - allowed_ids

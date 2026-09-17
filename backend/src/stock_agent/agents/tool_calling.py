@@ -21,6 +21,7 @@ def build_tool_definitions() -> list[dict[str, Any]]:
     descriptions = {
         "get_quote": "只读工具；当前仅支持 NVDA，返回本地 fixture 教学模拟报价，不是真实行情。",
         "get_company_profile": "只读工具；当前仅支持 NVDA，返回本地 fixture 公司名称和业务简介。",
+        "retrieve_knowledge": "只读工具；检索本地公司教学文档并返回证据片段，无可用资料时返回空列表。",
     }
     tool_definitions = []
     for name, info in TOOL_REGISTRY.items():

@@ -27,7 +27,7 @@ def test_preview_is_offline_and_shows_request_contract(monkeypatch, capsys):
     assert preview["response_format"] == {"type": "json_object"}
     assert preview["research_output_schema"]["title"] == "ResearchOutput"
     assert {tool["function"]["name"] for tool in preview["tools"]} == {
-        "get_company_profile", "get_quote"
+        "get_company_profile", "get_quote", "retrieve_knowledge"
     }
     assert preview["messages"][0]["role"] == "system"
     assert "PREVIEW_TEST_SECRET" not in json.dumps(preview)
