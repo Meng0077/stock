@@ -19,6 +19,8 @@ from stock_agent.api.dependencies import AgentRunner, get_agent_runner
 from stock_agent.api.schemas import RunResponse
 from stock_agent.schemas.research import ResearchRequest
 
+from stock_agent.api.research import router as research_router
+
 
 def new_run_id() -> UUID:
     """无输入；为每个 HTTP 请求生成新的 UUID；输出 UUID 对象。"""
@@ -73,6 +75,9 @@ def create_app() -> FastAPI:
         "/api/runs",
         response_model=RunResponse,
     )(create_run)
+    
+    application.include_router(research_router)
+    
     return application
 
 
