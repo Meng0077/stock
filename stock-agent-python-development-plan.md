@@ -1,42 +1,71 @@
 # AI 辅助美股研究与仓位风险 Agent · Python 开发计划
 
-- 版本：v3.0，2026-09-13。
+- 版本：v3.1，2026-09-17；真实 RAG 调整为任意美股 ticker 的按需索引。
 - 定位：面向 Agent 开发岗位的可演示项目；模型负责理解问题、调用只读工具、检索资料和解释结果，行情计算、决策规则与仓位风险检查由可复现的 Python 模块完成。
 - 排期：面试版 10 周、50 个开发日、约 200 小时；按每天 4 小时、每周 5 天估算。若 Python 异步、数据源接入或部署比预期慢，另留 1–2 周缓冲。
-- 当前进度：D01–D03 已有运行与验收记录；D04 正在练习，D05 尚未验收。保留现有 Manual Agent、工具注册表和第一周文档，不推倒重来。
+- 当前进度：已推进至 D11，本地 Document → Chunk → Embedding → Vector Store → Retriever 基础链路已跑通；中文检索仍有失败案例。D08/D09 的完成与遗留项见对应文档，早期未验收项继续保留。下一步 D12 将 RAG Tool 接入 Agent。保留现有 Manual Agent、工具注册表和学习文档。
 
 本文是拟开发计划。目录、接口和演示能力只有在代码实现并验收后才算完成；不能把 fixture、历史数据或延迟数据标成实时行情。
 
 ## 1. 首版目标与边界
 
-首版回答一个具体问题：用户给出股票、投资期限和自己的仓位后，系统结合最新可获得的报价、近几日走势、已发布的 CPI/PPI、近期重大事件以及公司资料，给出有依据的条件性研究判断和仓位风险分析。
+首版支持用户询问任意美股公司的 ticker，无需提前把该公司加入白名单或准备资料。系统按问题选择行情、结构化财务、新闻或公司文档；公司文档不存在于本地时按需获取并索引，已有索引可复用并增量更新。用户给出投资期限和仓位后，再结合最新可获得的报价、近几日走势、已发布的 CPI/PPI、近期重大事件以及公司资料，给出有依据的条件性研究判断和仓位风险分析。一般公司研究不要求先填写仓位。
 
 一次完整结果应包含：数据截至时间、资料来源、事实与推断、市场判断、当前仓位风险、假设调整仓位后的风险、反对理由、失效条件，以及资料不足时的明确停止。模型的文字解释不能覆盖程序计算出的数值或风险否决。
 
-首版范围固定为 1–2 只美股、一个行情提供方、日线及最新报价、CPI/PPI 两类宏观指标、一个近期新闻来源、约 10–20 份公司资料，以及最多 10 项用户手动录入或只读导入的持仓。首版按单用户本地演示设计，不把组合数据接口直接公开到互联网；多用户身份、授权和账户隔离需另行实现与验收。没有可靠来源或时间信息时，宁可返回信息不足。
+首版不固定支持的公司数量，也不预先为全市场建库。保留一个行情提供方、日线及最新报价、一个结构化财务来源（先使用 SEC XBRL Company Facts）、CPI/PPI 两类宏观指标、一个近期新闻来源，以及最多 10 项用户手动录入或只读导入的持仓。SEC 为公司文档的首个 Document Provider；一次只获取当前问题范围内必要的 filings。少量固定股票和 fixture 仅用于学习与可复现评估，不能成为产品的公司白名单。
+
+“任意 ticker”指可以提交未预置的美股公司代码，并动态解析和查询；数据可用性由各提供方实际覆盖决定。无效代码、无法匹配发行人、无可用 filing 或供应商缺少数据时，分别返回明确的缺失原因。不能因本地没有索引就拒绝该公司，也不能用其他公司的数据补齐。美股上市的外国发行人需考虑 20-F、40-F、6-K 等资料，不能只找 10-K/10-Q。首版按单用户本地演示设计，不把组合数据接口直接公开到互联网；多用户身份、授权和账户隔离需另行实现与验收。
 
 首版没有订单提交、自动交易、PaperBroker、券商写权限或收益承诺。回测、模拟成交、订单状态机、券商接入和完整自动交易工程进入第二阶段。仓位“假设买入”只计算情景风险，不产生订单。
 
-### 1.1 四类信息走不同路径
+### 1.1 各类信息走不同路径
 
 | 信息 | 获取方式 | 主要校验 |
 | --- | --- | --- |
 | 报价、近几日日线 | 市场数据提供方的结构化接口 | 交易所覆盖、事件时间、接收时间、是否延迟、缺 K 线 |
+| 营收、利润等精确财务指标 | Financial Tool → 结构化财务提供方，先接 SEC Company Facts | 指标口径、币种和单位、报告期、累计与单季口径、filing 及修订版本 |
 | CPI/PPI | 官方已发布数据和发布日程 | 统计期、发布时间、修订版本；不能称为实时跳动指标 |
-| 财报、公告、近期新闻 | 文档导入与检索；近期新闻先按时间过滤，再取原文 | 公司、来源、发布时间、可用时间、证据 ID、正文是否支持结论 |
+| 业务说明、风险因素、管理层讨论等文档内容 | Knowledge Tool → Document Provider → 按需索引 → 检索 | 公司、filing、报告期、可用时间、版本、证据 ID、原文是否支持结论 |
+| 近期新闻 | News/Search Tool → 新闻提供方；先按时间过滤，再取原文 | 关联标的、来源、发布时间、可用时间、冲突与重复内容 |
 | 用户现金和持仓 | 手动录入或只读快照 | 币种、数量、成本、快照时间、是否覆盖全部相关账户 |
 
-RAG 用于非结构化资料和可追溯引用；报价、K 线、CPI/PPI 和仓位金额从结构化接口读取，不让模型从文章中猜精确数字。近期地缘事件由模型提取可核对的事实与潜在影响，最终风险处理仍遵守显式规则；不把一个标题直接映射成 BUY 或 SELL。
+RAG 用于非结构化资料和可追溯引用；报价、K 线、精确财务指标、CPI/PPI 和仓位金额从结构化接口读取，不让模型从文章中猜精确数字。Market Tool、Financial Tool、Knowledge Tool 和 News/Search Tool 分别提供独立来源，模型按问题组合调用。近期地缘事件由模型提取可核对的事实与潜在影响，最终风险处理仍遵守显式规则；不把一个标题直接映射成 BUY 或 SELL。
 
-### 1.2 Agent、决策和风险的职责
+### 1.2 任意 ticker 的按需索引
+
+```text
+retrieve_knowledge(company_id, question)
+    ↓
+ensure_company_index(company_id) ← 任务上下文中的 as_of
+    ↓
+Document Provider：ticker → 发行人 / CIK → 截至 as_of 可用的 filings
+    ↓
+检查本地索引
+    ├─ 无索引 → 获取必要文档 → 解析 → chunk → embedding → indexing
+    ├─ 文档与索引配置一致 → 复用
+    └─ 有新增 filing / 修订 → 仅索引新增或变化文档
+    ↓
+Persistent Vector Store → 按发行人和时间过滤 → retrieve
+    ↓
+本次实际返回的片段与 evidence_id
+```
+
+Agent 只使用 `retrieve_knowledge(company_id: str, question: str)`，不接触本地文件名、SEC 下载细节或 VectorStore。Day12 内部使用本地 fixture；后续替换为 ensure_company_index 和真实 Provider，Agent 的调用接口保持一致。company_id 在工具边界接受规范化 ticker，内部用 CIK 标识 SEC 发行人；行情仍按证券 ticker 查询，不能把不同股类的报价合并。
+
+索引按需建立，首次询问未预置公司时允许产生下载与索引开销；再次查询检查 filing 清单后复用现有索引。初始文档范围明确限制为截至 as_of 最近的年报、最近的可用中期报告及问题需要的近期披露，记录实际覆盖范围；历史问题按所问报告期选择资料，不只查当前最新文件。6-K 等披露不能一律当作季度财报。
+
+Freshness 以 Provider 返回的可用 filing 清单与本地已索引清单比较，记录检查时间；“最新”指声明的文档范围内截至任务 as_of 的可用版本。新增 accession 才触发新增文档处理；修订文件保留独立版本。未变文档不重复下载、分段或生成向量。Embedding 或分段配置变化时重建受影响索引，失败或只完成部分导入不能被标记为最新可用索引。索引是可重建的本地缓存，原文、版本和引用仍需保留。
+
+### 1.3 Agent、决策和风险的职责
 
 1. LangChain Agent 识别用户意图，调用白名单只读工具，并决定是否需要检索更多证据。
-2. 检索层返回本次实际提供的文档片段及证据 ID；应用层校验引用归属和资料时间。
+2. Knowledge Tool 内部负责索引检查、必要的获取和更新；检索层返回本次实际提供的文档片段及证据 ID，应用层校验引用归属和资料时间。
 3. Python 决策模块根据已验证的行情与固定规则生成市场观点和 Decision Trace。分数只是规则分数；未经校准不能称为获利概率。
 4. Python 风险模块比较当前组合与用户指定金额的假设组合。超出用户配置的约束时，即使市场观点偏积极，也可以给出“不宜增加该仓位”。
 5. 模型把上述结构化结果解释给用户，不得改变风险结论。投资期限、风险偏好或组合信息缺失时，输出一般研究观点并说明无法给出个人仓位判断。
 
-### 1.3 数据时间与保密边界
+### 1.4 数据时间与保密边界
 
 每个外部输入至少记录 source、data_mode、event_at 或统计期、published_at（如适用）、received_at 和任务 as_of；所有具体时间带时区。研究只使用截至 as_of 已可获得的信息；历史评估不能把后来发布的新闻、财报修订或模型知识伪装成当时已知。
 
@@ -50,10 +79,10 @@ RAG 用于非结构化资料和可追溯引用；报价、K 线、CPI/PPI 和仓
 | API | FastAPI + Pydantic | 请求校验、只读任务接口、情景分析、错误与结果契约 |
 | Agent | LangChain Python | 模型、工具、结构化输出、调用预算和事件记录 |
 | 工作流 | 小范围 LangGraph | 取数、检索、校验、决策、解释的条件分支和一次 checkpoint 演示 |
-| RAG | 关键词基线 + Embedding / pgvector | 小资料集检索、元数据过滤、引用定位和固定评估 |
-| 数据 | 一个行情适配器、BLS 数据接口、一个近期新闻来源 | 统一标的、来源、数据模式和时间字段 |
+| RAG | Document Provider + 按需索引 + 关键词 / Embedding / pgvector | 动态发行人解析、索引复用与增量更新、元数据过滤、引用定位和固定评估 |
+| 数据 | 一个行情适配器、SEC 文档及 Company Facts、BLS 数据接口、一个近期新闻来源 | 各工具独立取数，统一标的、来源、数据模式和时间字段 |
 | 决策与风险 | Python 纯函数 / 显式规则 | 走势因子、市场观点、仓位集中度和假设买入风险 |
-| 存储 | PostgreSQL + SQLAlchemy；向量阶段使用 pgvector | 资料版本、研究结果、评估和组合快照；按阶段引入 |
+| 存储 | PostgreSQL + SQLAlchemy；向量阶段使用 pgvector | 发行人映射、filing / 索引状态、原文和片段版本、向量、研究结果、评估和组合快照；按阶段引入 |
 | 验证 | pytest + 固定评估案例 | 规则、权限、检索、证据、时间和完整链路检查 |
 
 手写 Manual Agent 保留为教学对照；D06 之后的主应用使用 LangChain，不能复制两套各自维护的工具业务逻辑。LangGraph 只围绕确实需要条件分支和 checkpoint 的步骤使用；首版不承诺多 worker 可靠领取、复杂人工审批或任意进程故障恢复。
@@ -66,8 +95,8 @@ API 可先同步返回完整结果，随后根据演示需要加有限的流式�
 | --- | --- | --- | --- |
 | 第 1 周 | D01–D05 | 模型调用、Pydantic、Manual Agent、结构化输出与验收 | 可复现的命令行 Agent 和失败案例 |
 | 第 2 周 | D06–D10 | FastAPI 薄接口与 LangChain 迁移 | 同一只读工具在手写和框架 Agent 中通过契约案例 |
-| 第 3 周 | D11–D15 | 资料导入、关键词基线和有引用的 RAG | 财报问题能定位到文档片段 |
-| 第 4 周 | D16–D20 | Embedding、混合检索和 RAG 评估 | 关键词与语义检索有固定对照和错误分析 |
+| 第 3 周 | D11–D15 | 保留 RAG 基础与 Tool 接入；真实 Provider、解析和按需索引 | 未预置 ticker 首次查询能获取必要文档并返回原文片段 |
+| 第 4 周 | D16–D20 | 持久化复用、增量更新、工具组合和检索评估 | 重启后复用索引；新增 filing 只增量处理；固定案例有错误分析 |
 | 第 5 周 | D21–D25 | 最新报价、近几日走势、CPI/PPI 与时间校验 | 数据时间、延迟和统计期清楚可见 |
 | 第 6 周 | D26–D30 | 近期新闻与事件风险 | 有来源的事件摘要；失效或冲突资料不产生确定判断 |
 | 第 7 周 | D31–D35 | 确定性因子、Decision Trace 与市场观点 | 相同快照产生相同观点，原因可追踪 |
@@ -91,7 +120,7 @@ API 可先同步返回完整结果，随后根据演示需要加有限的流式�
 | D04 | 结构化输出、证据归属、格式修复、超时与取消 | 完成 docs/day04.md 的离线与真实验证；不能把 TODO 当完成 |
 | D05 | 10 个固定案例及人工事实复核 | 每个案例有明确终态，自动规则检查与人工证据复核分开，见 docs/day05.md |
 
-当前先完成 D04/D05。D04 的 ResearchOutput 和 EvidenceClaim 是研究回答模型；后面新增市场、组合与风险模型，不要求现在把所有领域对象塞进一个 schema。
+D04/D05 的未验收项继续按对应文档追踪，不因进入 RAG 阶段而标为完成。D04 的 ResearchOutput 和 EvidenceClaim 是研究回答模型；后面新增市场、组合与风险模型，不要求现在把所有领域对象塞进一个 schema。
 
 ### 第 2 周：FastAPI 与 LangChain
 
@@ -105,36 +134,38 @@ API 可先同步返回完整结果，随后根据演示需要加有限的流式�
 
 周门槛：不是只把旧函数包上 @tool；能说明模型提出工具请求、框架执行工具和应用校验输出分别发生在哪里。
 
-### 第 3 周：RAG 基线
+### 第 3 周：RAG 基础与真实资料按需获取
 
 | 开发日 | 任务 | 完成标准 |
 | --- | --- | --- |
-| D11 | 导入 1–2 家公司的 10–20 份财报、公告或收益资料 | 文档来源、公司、报告期、发布时间、版本与内容 hash 可追踪 |
-| D12 | 分段并保留页码、标题、表格单位等上下文 | 每个片段能回到原文；重复导入不产生重复文档 |
-| D13 | 建关键词检索基线，先按公司和 as_of 过滤 | 不把别家公司或未来发布的资料混入本次回答 |
-| D14 | 完成两步 RAG：检索片段、生成有 evidence_id 的回答 | 无证据时说信息不足；合法 ID 仍需人工核对是否支持句子 |
-| D15 | 准备固定问题与必需证据标注 | 正常、无资料、报告期错误和来源冲突均有案例 |
+| D11 | 保留 Document → Chunk → Embedding → Vector Store → Retriever 本地基础练习 | 基础链路已跑通；公司过滤与 evidence_id 已验证，中文检索失败如实保留，见 docs/day11.md。来源时间 / 版本 / hash 元数据接入按用户要求暂缓至真实资料阶段 |
+| D12 | 将通用 retrieve_knowledge(company_id, question) 接入现有 Tool 注册表和 LangChain Agent | 使用 fixture；检索 → ToolMessage → Agent → ResearchOutput 跑通。只引用本次返回的 evidence_id，无对应资料时说明不足；不增加 retrieve_nvda_knowledge 等公司专用工具 |
+| D13 | 实现 SEC Document Provider：ticker 解析、CIK 映射和 filing 发现 | 输入未预置 ticker 即可找出截止 as_of 可用的 filing 元数据；覆盖美国及外国发行人的适用表单，必要时读取历史清单。记录来源、报告期、接受 / 可用时间、accession 和主文档；无匹配时明确返回缺失原因 |
+| D14 | 下载必要 filing，解析与清洗正文，并保留引用上下文 | 先处理 SEC 可用 HTML 主文档及必要附件；保留标题、表格单位和原文定位，补齐发布时间、版本和内容 hash。扫描件或无法解析的资料明确标为未覆盖，不悄悄生成空文档 |
+| D15 | 实现 ensure_company_index：首次查询不存在索引时才获取、分段和嵌入 | 首次查询一个未预置公司可建立索引并返回片段；重复调用不产生重复文档。文档身份、解析 / 分段 / Embedding 配置可追踪；阶段内先用本地索引状态，D16 完成跨进程持久化 |
 
-周门槛：用户可从回答打开原文片段；“命中一个 ID”和“句子受证据支持”分开检查。
+周门槛：Day12 的 Agent 接口保持不变，Day15 可在内部切换到真实 Provider；未预置公司无需新增工具或修改公司列表。用户可回到证据原文；“命中一个 ID”和“句子受证据支持”分开检查。
 
-### 第 4 周：向量检索与评估
+SEC 接入通过后端完成，按官方要求声明 User-Agent 并遵守访问频率限制；只获取所需资料，不批量扫描全市场。Submissions、XBRL 与访问约束见 [SEC API 文档](https://www.sec.gov/search-filings/edgar-application-programming-interfaces)和 [EDGAR 访问说明](https://www.sec.gov/search-filings/edgar-search-assistance/accessing-edgar-data)。
+
+### 第 4 周：持久化索引、增量更新与评估
 
 | 开发日 | 任务 | 完成标准 |
 | --- | --- | --- |
-| D16 | 锁定一个 Embedding 配置并生成向量 | 嵌入模型、版本和维度可追踪；资料变化能触发重建 |
-| D17 | 引入 pgvector 或同等已锁定向量存储 | 公司、时间和文档版本过滤在向量路径上同样生效 |
-| D18 | 合并关键词与语义检索，去重和限制 k | 关键词、向量和混合路径能用同一问题对照 |
-| D19 | 用开发集与保留集计算 Recall@k、引用可访问率 | 指标有样本清单和分母，保留集不用于反复调参 |
-| D20 | 人工复核事实支持、数字和单位，记录失败类型 | 没有改善可保留关键词方案，不捏造提升比例 |
+| D16 | 将原文、filing 清单、索引状态、片段与向量存入 PostgreSQL / pgvector | 重启后能检索已有公司，未变文档不重复嵌入；按发行人、可用时间和文档版本过滤。索引配置含模型、revision、维度和分段版本，引用可回到保存的原文 |
+| D17 | 实现 Freshness 检查和新增 filing / 修订的增量更新 | 无新增时复用；模拟新增 filing 时只处理新增文档；修订不覆盖历史证据。任务 as_of 之后的文档不能参与检索，获取或索引失败不能声称索引已最新 |
+| D18 | 明确 Market / Financial / Knowledge / News Tool 独立边界；接入最小结构化财务查询 | SEC Company Facts 先提供少量精确指标，保留单位、报告期和 filing 来源；Agent 能组合财务指标与文档证据。行情先复用现有 fixture，真实行情在 D21–D25 接入，真实新闻在 D26–D30 接入，未接入能力明确标记 |
+| D19 | 建关键词基线，准备开发集 / 保留集及必需证据标注 | 关键词与向量使用同一资料版本和过滤条件；案例覆盖公司、中文问题、报告期、冷启动、复用、增量与无资料；实现一个简单混合检索对照 |
+| D20 | 计算 Recall@k、引用可访问率，并人工复核事实支持 | 对关键词、向量和混合结果给出原始计数与失败分析；检查精确指标的口径。记录首次索引与复用耗时，不捏造检索提升或全市场覆盖比例 |
 
-周门槛：展示 RAG 的数据处理、检索、生成与评估，而不只是项目里出现向量库。
+周门槛：使用一个未预置公司展示首次索引、重启后的复用，再用固定新增 filing 样例展示增量更新。持久化复用不会省略 freshness 检查；检索能运行不代表全部问题都能回答。
 
 ### 第 5 周：行情与宏观
 
 | 开发日 | 任务 | 完成标准 |
 | --- | --- | --- |
-| D21 | 定义 MarketDataProvider、Quote 和 Bar 契约 | fixture、historical、live 模式与延迟属性分别记录；上层不依赖供应商字段 |
-| D22 | 接入一个提供方的最新报价和近几日已完成日线 | 保存市场事件时间和本地接收时间；识别休市与延迟 |
+| D21 | 定义 MarketDataProvider、Quote 和 Bar 契约，支持动态 ticker | fixture、historical、live 模式与延迟属性分别记录；证券 ticker 与发行人 CIK 分开，上层不依赖供应商字段 |
+| D22 | 接入一个提供方的最新报价和近几日已完成日线 | 未预置 ticker 无需改代码即可查询；保存市场事件时间和本地接收时间，识别休市、延迟与供应商未覆盖标的 |
 | D23 | 计算少量可复核走势指标，如 5 日变化、均线与波动 | 不使用未完成 K 线，不从模型文本提取价格 |
 | D24 | 接入 BLS 已发布 CPI/PPI 与发布日期 | 统计期和发布时间分开；缺少预期值时不声称“超预期” |
 | D25 | 建数据新鲜度和缺失检查 | 过期报价、缺 K 线或未来时间资料会降低结论级别或停止个人判断 |
@@ -145,7 +176,7 @@ API 可先同步返回完整结果，随后根据演示需要加有限的流式�
 
 | 开发日 | 任务 | 完成标准 |
 | --- | --- | --- |
-| D26 | 选一个可用的近期新闻来源和只读检索接口 | 保存原文链接、发布时间、获取时间、来源和关联标的 |
+| D26 | 选一个可用的近期新闻来源和独立 News/Search Tool | 按动态 ticker / 公司身份检索；保存原文链接、发布时间、获取时间、来源和关联标的 |
 | D27 | 按时间和相关性过滤、去重近期新闻 | 旧闻、重复转载和未来发布内容不冒充当前事件 |
 | D28 | 用模型提取事件事实、涉及对象和不确定性 | 结构化输出有来源；模型不能自行编造事件或发布时间 |
 | D29 | 建有限的事件风险规则，例如事件未确认时降低确定性 | 地缘标题不能自动转为方向性买卖信号 |
@@ -183,7 +214,7 @@ API 可先同步返回完整结果，随后根据演示需要加有限的流式�
 | --- | --- | --- |
 | D41 | 建 LangGraph 状态和取数、检索、校验、决策、解释节点 | 证据不足最多补查一次，随后明确结束 |
 | D42 | 加一个 checkpoint 与取消 / 恢复演示 | 能指出哪些节点会重跑；不会误称已完成多 worker 容灾 |
-| D43 | 完善 React 对话输入和结构化结果页面 | 显示行情时间、宏观统计期、引用和不确定性 |
+| D43 | 完善 React 对话输入和结构化结果页面 | 接受未预置 ticker；首次资料获取 / 索引期间显示任务进度，显示行情时间、宏观统计期、引用和不确定性 |
 | D44 | 展示 Decision Trace、当前仓位与假设后风险 | 市场观点和个人风险结论在界面上清楚分开 |
 | D45 | 演示正常、资料不足、风险否决及取消路径 | 旧任务结果不会覆盖当前页面；状态与最终结果一致 |
 
@@ -195,7 +226,7 @@ API 可先同步返回完整结果，随后根据演示需要加有限的流式�
 | --- | --- | --- |
 | D46 | 固定模型、提示、资料、行情、规则和风险配置版本 | 相同离线案例可复现；真实接口案例明确标记 |
 | D47 | 汇总 Agent / RAG 指标和人工支持性复核 | 工具选择、证据命中、引用支持、缺资料处理各自有结果 |
-| D48 | 汇总时间与组合风险故障案例 | 过期报价、未来新闻、缺组合、重仓和币种错误不会被悄悄忽略 |
+| D48 | 汇总时间、索引与组合风险故障案例 | 无效 ticker、无 filing、索引未完成、未来资料、过期报价、缺组合、重仓和币种错误不会被悄悄忽略 |
 | D49 | 按 README 从干净环境启动；整理部署和密钥配置 | 示例不暴露凭据，功能边界和数据来源清楚 |
 | D50 | 完成 5–8 分钟演示、架构图和模拟面试问答 | 能现场走完 Agent → RAG / 数据工具 → 决策 → 组合风险 → 解释 |
 
@@ -218,12 +249,27 @@ API 可先同步返回完整结果，随后根据演示需要加有限的流式�
 
 首版不定义下单、撤单、订单查询或券商写权限接口。任意 URL 抓取不开放给模型；导入器使用允许的来源并校验输入。
 
+Agent 的只读工具边界：
+
+| 工具 | 职责 | 实现阶段 |
+| --- | --- | --- |
+| retrieve_knowledge(company_id, question) | 非结构化资料与本次 evidence_id；内部确保所需索引可用 | D12 用 fixture，D13–D17 接真实 Provider、持久化和更新 |
+| get_quote / get_price_bars(company_id) | 精确报价、日线和时间属性 | 已有报价 fixture，D21–D25 接真实市场数据 |
+| get_financial_metrics(company_id, 指标, 报告期) | 结构化财务数值、单位和口径 | D18 接最小 SEC Company Facts 查询 |
+| search_news(company_id, question) | 近期事件原文、来源与时间 | D26–D30 接真实新闻来源 |
+
+工具命名不带特定公司。公司解析、按需索引和 freshness 属于工具内部实现；任务 as_of、data_mode 由应用层的请求上下文传入，不能由模型绕过。fixture 工具仍可限定教学资料，但真实 Provider 不能沿用只允许 NVDA 的判断。宏观文档与公司 filings 分开标识，不伪造所属公司；当前 None 宏观过滤保留为本地练习。
+
 ### 5.2 关键领域对象
 
 | 对象 | 必要内容 | 主要业务校验 |
 | --- | --- | --- |
 | ResearchOutput | status、facts、inferences、missing_information、data_mode | 本次证据 ID、资料模式与事实支持 |
+| CompanyIdentity | 查询 ticker、规范 ticker、发行人 CIK、公司名、来源 | 未预置代码可解析；不同股类可共享发行人文档，报价仍分别查询 |
+| FilingDocument | CIK、accession、form、主文档及必要附件、报告期、接受 / 可用时间、来源、版本与 hash | 获取范围与任务匹配；修订和原文独立可追踪，文档位置可回查 |
+| CompanyIndexState | 发行人、已索引文档版本、索引配置、覆盖范围、检查时间与完成状态 | 配置匹配才复用；未完成的索引不冒充最新；未来 filing 不进入历史研究 |
 | Quote / Bar | 标的、价格或 OHLCV、币种、event_at、received_at、source、feed | 数据时效、交易时段、完整 K 线 |
+| FinancialMetric | 指标、taxonomy / concept、数值、单位、币种、报告期、filing、来源和可用时间 | 年度、单季与累计口径不混用；缺少对应指标时明确缺失 |
 | MacroObservation | 指标、统计期、数值、published_at、source | 只使用已发布版本；修订可追踪 |
 | NewsEvidence | 标题、原文、标的、published_at、received_at、source | 时间过滤、去重、可访问性与支持关系 |
 | DecisionResult | market_view、factors、guards、trace、rule_version | 规则可复现；缺数据不强行输出方向 |
@@ -240,8 +286,9 @@ API 可先同步返回完整结果，随后根据演示需要加有限的流式�
 | --- | --- |
 | backend/src/stock_agent/agents/ | LangChain Agent 与 Manual Agent 对照 |
 | backend/src/stock_agent/tools/ | 白名单只读工具和注册表 |
-| backend/src/stock_agent/knowledge/ | 文档导入、分段、检索、引用 |
+| backend/src/stock_agent/retrieval/ | 复用 D11 代码；Document Provider、按需索引、分段、持久化检索和引用，不再新建平行 knowledge 包 |
 | backend/src/stock_agent/market_data/ | 报价、日线、时间和来源适配 |
+| backend/src/stock_agent/financial_data/ | SEC Company Facts 结构化财务指标与口径归一化 |
 | backend/src/stock_agent/macro/ | CPI/PPI 发布数据 |
 | backend/src/stock_agent/news/ | 近期新闻检索与事件提取 |
 | backend/src/stock_agent/decision/ | 因子、Guard 和 Decision Trace |
@@ -253,7 +300,9 @@ API 可先同步返回完整结果，随后根据演示需要加有限的流式�
 | frontend/src/ | React 输入、引用、决策与风险展示 |
 | backend/tests/、evals/、docs/ | 确定性测试、固定评估和面试资料 |
 
-目录随开发日逐步创建，不预建空包。存储至少区分 runs / run_results、document_revisions / chunks / embeddings、market_snapshots / macro_observations / news_evidence、portfolio_snapshots / risk_profiles / risk_assessments。没有订单表或模拟成交表。
+目录随开发日逐步创建，不预建空包；Provider 与索引协调逻辑先放在现有 retrieval 模块内，不额外搭建索引服务。存储至少区分 runs / run_results、company_identities / filings / index_states、document_revisions / chunks / embeddings、market_snapshots / financial_metrics / macro_observations / news_evidence、portfolio_snapshots / risk_profiles / risk_assessments。没有订单表或模拟成交表。
+
+SEC 文档用发行人 CIK、accession、文档名和内容版本标识；片段引用另包含分段版本与原文位置。Embedding 配置版本参与向量索引身份；同一份未变文档在同一配置下只嵌入一次，不因不同 ticker 指向同一发行人而重复索引。程序重启后仍可打开历史回答对应的证据版本。
 
 HTTP 客户端在合适生命周期内复用；异步数据库 session 按请求或任务隔离。模型日志只保存允许的事件、用量、结果引用和安全错误，不保存密钥、账户号、原始异常或隐藏思维链。
 
@@ -265,6 +314,9 @@ HTTP 客户端在合适生命周期内复用；异步数据库 session 按请求
 4. 决策与风险模块用固定输入做确定性测试；同一快照、规则版本和用户约束必须得到同一结果。模型解释若与结构化风险结论冲突，整体结果不能通过验收。
 5. 历史样例只用该时点已发布资料。实时接口样例与离线 fixture 分开标记；无法证明的数据新鲜度不写成实时。没有完整回测时，不报告策略收益率或胜率。
 6. 面试报告保留失败案例，不用一组演示问答充当完整评估。样本小就给出原始计数和局限，不捏造提升比例。
+7. 任意 ticker 能力必须用未预置公司验收：无需编辑股票列表，首次查询完成按需索引；再次查询和重启后不重复下载或嵌入未变文档。用记录的 Provider 输入计数验证实际复用，不只看响应更快。
+8. 固定样例覆盖同一发行人的不同股类、外国发行人适用表单、无效 ticker、无 filing、报告期错误、新增 filing、修订与索引配置变化。只处理应更新文档；更新失败、部分索引和资料不足均有明确结果。
+9. 分别验证 Market / Financial / Knowledge / News 工具选择。精确财务数值不能由 RAG 摘要替代，新闻也不能冒充 SEC 披露。首次获取和复用耗时分开记录；离线评估固定 filing 清单，不能让真实 freshness 更新改变资料版本。
 
 ## 7. 后续阶段：模拟与自动交易
 
@@ -274,12 +326,14 @@ HTTP 客户端在合适生命周期内复用；异步数据库 session 按请求
 
 ## 8. 面试演示与讲解重点
 
-演示顺序：提出问题和用户仓位 → LangChain Agent 选择只读工具 → RAG 展示可打开的原文证据 → 行情 / CPI / 新闻显示来源与时间 → 决策追踪展示固定规则 → 风险模块比较当前与假设后仓位 → Agent 解释结论及失效条件。再展示一个过期行情、虚构引用或高集中度的失败分支。
+演示顺序：输入一个本地无索引的美股公司 ticker → LangChain Agent 调用通用 Knowledge Tool → Provider 获取必要资料并首次索引 → 展示可打开的原文证据 → 重复查询 / 重启后复用索引 → 用固定新增 filing 样例展示增量更新。再结合行情 / 结构化财务 / CPI / 新闻及用户仓位，展示决策追踪、假设后风险和解释；保留一个过期行情、虚构引用或高集中度的失败分支。
 
 准备说明：
 
 - 手写工具循环与 LangChain 的边界：框架做了什么，白名单、预算与业务校验仍由谁负责。
 - RAG 的关键词基线、向量 / 混合检索、过滤顺序和支持性评估。
+- 为什么不用全市场预建库；Document Provider、ensure_company_index、持久化缓存与增量更新分别做什么，首次查询成本与复用如何验证。
+- ticker 与发行人 CIK 的区别；为什么 SEC 文档检索、结构化财务、行情与新闻要走不同工具。
 - LangGraph checkpoint 与业务结果存储的区别，以及首版没有实现的多 worker 恢复。
 - 为什么报价、宏观数值和仓位计算不交给模型猜；为什么新闻只能在有来源、有时间的条件下参与判断。
 - 为什么市场观点与用户组合风险可能相反；规则分数不能直接称为收益概率。
@@ -293,6 +347,7 @@ HTTP 客户端在合适生命周期内复用；异步数据库 session 按请求
 | --- | --- |
 | LangChain Agent 与工具 | [Agents](https://docs.langchain.com/oss/python/langchain/agents)、[Tools](https://docs.langchain.com/oss/python/langchain/tools) |
 | RAG 与评估 | [知识库 / 检索教程](https://docs.langchain.com/oss/python/langchain/knowledge-base)、[RAG 评估](https://docs.langchain.com/langsmith/evaluate-rag-tutorial) |
+| SEC 文档、发行人映射及结构化财务 | [Submissions / XBRL APIs](https://www.sec.gov/search-filings/edgar-application-programming-interfaces)、[ticker / CIK 与开发者说明](https://www.sec.gov/about/webmaster-frequently-asked-questions)、[EDGAR 访问要求](https://www.sec.gov/search-filings/edgar-search-assistance/accessing-edgar-data) |
 | LangGraph 持久化 | [Persistence](https://docs.langchain.com/oss/python/langgraph/persistence) |
 | Pydantic 与异步 | [Models](https://pydantic.dev/docs/validation/latest/concepts/models/)、[asyncio Tasks](https://docs.python.org/3/library/asyncio-task.html) |
 | 行情接口示例 | [最新报价](https://docs.alpaca.markets/us/reference/stocklatestquotesingle-1)、[历史 K 线](https://docs.alpaca.markets/us/reference/stockbarsingle-1) |
@@ -303,8 +358,12 @@ HTTP 客户端在合适生命周期内复用；异步数据库 session 按请求
 
 - [ ] 现有 D01–D05 有对应真实 / 离线验收记录；未完成任务仍标为未完成。
 - [x] Manual Agent 与 LangChain Agent 共用只读工具契约，并有固定案例对照（D08 轻量 runner 与报告已完成）。
+- [x] D11 本地 RAG 基础链路跑通，已记录中文检索失败；不代表真实按需索引已完成。
+- [ ] Day12 通用 Knowledge Tool 接入 Agent，并有本次引用归属验证。
+- [ ] 未预置 ticker 可动态解析并按需获取资料，无需增加公司白名单。
+- [ ] 原文、索引状态和向量持久化；重复查询及重启后复用，新增 filing / 修订增量更新可验证。
 - [ ] RAG 有小型资料集、关键词基线、向量 / 混合对照、证据定位与评估报告。
-- [ ] 报价、近几日日线、CPI/PPI 和近期新闻均有来源、时间与数据模式。
+- [ ] Market / Financial / Knowledge / News 工具独立；报价、日线、精确财务、CPI/PPI 和新闻均有来源、时间与数据模式。
 - [ ] 决策规则、Decision Trace、仓位风险及假设买入前后对比可复算。
 - [ ] 信息不足、过期数据、冲突新闻、虚构引用和风险否决能进入明确终态。
 - [ ] React 页面可显示市场观点、个人风险结论、引用、数据时间和条件。
@@ -312,4 +371,4 @@ HTTP 客户端在合适生命周期内复用；异步数据库 session 按请求
 - [ ] README、启动环境、固定评估、故障记录和 5–8 分钟演示可供面试复现。
 - [ ] 首版无订单提交与自动交易路径；后续阶段以独立计划推进。
 
-从当前进度继续完成 D04 Task 1–8 和 D05 验收，再进入 D06；新方向不会跳过已经开始的结构化输出与证据校验。
+从 D12 的通用 RAG Tool 接入继续推进；D01–D11 已有代码与记录保留，未验收项仍需追踪。真实数据工程按 D13–D17 逐步落地，不在 Day12 提前实现 Provider、持久化缓存或增量更新。50 个开发日的主框架保留，数据覆盖与解析工作量超出每日时限时使用原有缓冲，不以减少支持的公司数量代替产品目标。
