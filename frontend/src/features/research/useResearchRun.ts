@@ -1,11 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import type { CreateResearchRunRequest } from '../../api/contracts'
-import type { CreateRun } from '../../api/runTransport'
+import { createRun } from '../../api/runTransport'
 import type { ResearchHistoryEntry, ResearchViewState } from './type'
 
-export function useResearchRun(
-  createRun: CreateRun,
-): {
+export function useResearchRun(): {
   readonly state: ResearchViewState
   readonly history: readonly ResearchHistoryEntry[]
   readonly submit: (request: CreateResearchRunRequest) => Promise<void>
@@ -41,7 +39,10 @@ export function useResearchRun(
     setState({ kind: 'submitting', requestId, userMessage: message })
 
     try {
-      const response = await createRun({ ...request, message }, controller.signal)
+      const response = await createRun(
+        { ...request, message },
+        controller.signal,
+      )
       if (controller.signal.aborted) {
         return
       }

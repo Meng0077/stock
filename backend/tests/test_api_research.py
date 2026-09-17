@@ -113,20 +113,30 @@ def test_production_dependency_configures_structured_output_and_non_thinking(
     assert strategy.schema is ResearchOutput
 
 
-def test_natural_language_is_normalized_on_server():
+@pytest.mark.parametrize("message", [
+    "查询 NVDA 教学报价",
+    "NVDA今日行情如何",
+    "nvda今日行情如何",
+])
+def test_natural_language_is_normalized_on_server(message):
     before = datetime.now(timezone.utc)
-    request = build_research_request(ResearchInput(message="查询 NVDA 教学报价"))
+    request = build_research_request(ResearchInput(message=message))
     after = datetime.now(timezone.utc)
 
     assert request.company_id == "NVDA"
-    assert request.question == "查询 NVDA 教学报价"
+    assert request.question == message
     assert request.data_mode == "fixture"
     assert before <= request.as_of <= after
     assert request.as_of.utcoffset().total_seconds() == 0
 
 
+@pytest.mark.parametrize("message", [
+    "查询 NVDA 教学报价",
+    "NVDA今日行情如何",
+    "nvda今日行情如何",
+])
 def test_research_api_runs_real_tool_and_returns_public_result(
-    monkeypatch, offline_config,
+    monkeypatch, offline_config, message,
 ):
     monkeypatch.setattr(langchain_tools, "uuid4", lambda: EVIDENCE_UUID)
     model = OfflineToolModel(responses=[
@@ -137,7 +147,7 @@ def test_research_api_runs_real_tool_and_returns_public_result(
 
     # 不替换 Agent 依赖：让生产依赖真实创建配置了 ToolStrategy 的 graph。
     with TestClient(create_app()) as client:
-        response = client.post("/api/research", json={"message": "查询 NVDA 教学报价"})
+        response = client.post("/api/research", json={"message": message})
 
     assert response.status_code == 200
     body = response.json()

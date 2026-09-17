@@ -11,12 +11,12 @@ from typing import Annotated
 router = APIRouter()
 
 def extract_company_id(message: str) -> str:
-    match = re.search(r"\b[A-Z]{1,5}\b", message)
+    match = re.search(r"(?<![A-Za-z0-9_])[A-Za-z]{1,5}(?![A-Za-z0-9_])", message)
 
     if not match:
         raise ValueError("没有识别到股票代码")
 
-    return match.group()
+    return match.group().upper()
     
 def build_research_request(
     input: ResearchInput,

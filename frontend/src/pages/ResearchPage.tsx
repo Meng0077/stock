@@ -1,14 +1,9 @@
-import type { RunTransport } from '../api/runTransport'
 import { ResearchComposer } from '../features/research/ResearchComposer'
 import { ResearchConversation } from '../features/research/ResearchConversation'
 import { useResearchRun } from '../features/research/useResearchRun'
 
-interface ResearchPageProps {
-  readonly runTransport: RunTransport
-}
-
-export function ResearchPage({ runTransport }: ResearchPageProps) {
-  const { state, history, submit, reset } = useResearchRun(runTransport.createRun)
+export function ResearchPage() {
+  const { state, history, submit, reset } = useResearchRun()
 
   return (
     <main className="min-h-screen bg-slate-950 px-4 py-8 text-slate-100 sm:px-6 sm:py-10">
@@ -21,7 +16,7 @@ export function ResearchPage({ runTransport }: ResearchPageProps) {
             对话式股票研究
           </h1>
           <p className="mt-3 max-w-2xl text-slate-400">
-            输入自然语言问题。当前页面使用本地教学 Mock，不代表实时行情或投资建议。
+            输入自然语言问题。当前使用后端教学模拟数据，不代表实时行情或投资建议。
           </p>
         </header>
         {history.map((entry) => (

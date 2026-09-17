@@ -35,7 +35,7 @@ export function ResearchComposer({ disabled, onSubmit }: ResearchComposerProps) 
         <textarea
           id={inputId}
           name="message"
-          placeholder="例如：帮我看看英伟达最近怎么样…"
+          placeholder="例如：查询 NVDA 教学报价"
           disabled={disabled}
           rows={2}
           className="min-h-20 max-h-[300px] min-w-0 flex-1 resize-none overflow-y-auto rounded-xl border border-white/10 bg-slate-900 p-3 text-slate-100 outline-none placeholder:text-slate-500 focus:border-cyan-400 disabled:cursor-not-allowed disabled:opacity-60 [field-sizing:content]"
