@@ -140,7 +140,7 @@ D04/D05 的未验收项继续按对应文档追踪，不因进入 RAG 阶段而�
 | --- | --- | --- |
 | D11 | 保留 Document → Chunk → Embedding → Vector Store → Retriever 本地基础练习 | 基础链路已跑通；公司过滤与 evidence_id 已验证，中文检索失败如实保留，见 docs/day11.md。来源时间 / 版本 / hash 元数据接入按用户要求暂缓至真实资料阶段 |
 | D12 | 将通用 retrieve_knowledge(company_id, question) 接入现有 Tool 注册表和 LangChain Agent | fixture 接入已完成；检索 → ToolMessage → Agent → ResearchOutput 跑通，本次引用归属与无资料路径已验证。256 项自动测试和四个真实模型案例通过，见 docs/day12.md；不代表真实按需索引已完成 |
-| D13 | 实现 SEC Document Provider：ticker 解析、CIK 映射和 filing 发现 | 输入未预置 ticker 即可找出截止 as_of 可用的 filing 元数据；覆盖美国及外国发行人的适用表单，必要时读取历史清单。记录来源、报告期、接受 / 可用时间、accession 和主文档；无匹配时明确返回缺失原因 |
+| D13 | 实现 SEC Document Provider：ticker 解析、CIK 映射和 filing 发现 | ticker / CIK、recent filing 发现、美国及外国发行人表单与修订、带时区的 accepted_at / as_of 筛选已实现；保留报告期、accession、主文档和来源 URL。历史清单读取、无匹配资料的具体原因按用户要求遗留，不标记全部完成，见 docs/day13.md |
 | D14 | 下载必要 filing，解析与清洗正文，并保留引用上下文 | 先处理 SEC 可用 HTML 主文档及必要附件；保留标题、表格单位和原文定位，补齐发布时间、版本和内容 hash。扫描件或无法解析的资料明确标为未覆盖，不悄悄生成空文档 |
 | D15 | 实现 ensure_company_index：首次查询不存在索引时才获取、分段和嵌入 | 首次查询一个未预置公司可建立索引并返回片段；重复调用不产生重复文档。文档身份、解析 / 分段 / Embedding 配置可追踪；阶段内先用本地索引状态，D16 完成跨进程持久化 |
 
