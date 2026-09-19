@@ -64,11 +64,12 @@ def filing_file(filing):
 
 
 def extract_text(html):
-    soup = sec_loader.parse_filing_html(html)
-    sec_loader.remove_obvious_noise(soup)
-    return sec_loader.normalize_filing_text(
-        sec_loader.extract_filing_text(soup)
+    root = sec_loader.parse_source_html(html)
+    content, _ = sec_loader.build_filing_blocks(
+        "document",
+        sec_loader.extract_source_blocks(root),
     )
+    return content
 
 
 def test_extracts_headings_table_units_and_removes_noise(filing_html):
@@ -116,6 +117,63 @@ def test_load_filing_document_keeps_metadata_and_hash(
     assert document.is_primary is True
     assert document.source_url == filing_file.document_url
     assert document.content_hash == sec_loader.build_content_hash(document.content)
+    assert document.blocks
+    assert document.content.count("Inner") == 1
+    for index, block in enumerate(document.blocks):
+        assert block.block_id == f"{document.document_id}:block:{index}"
+        assert block.document_id == document.document_id
+        assert document.content[block.start_char:block.end_char] == block.text
+        assert block.source_xpath.startswith("/")
+
+
+def test_attachment_document_uses_its_own_source_url(
+    filing,
+    filing_file,
+    filing_html,
+    monkeypatch,
+):
+    attachment = filing_file.model_copy(
+        update={
+            "document_name": "exhibit991.htm",
+            "document_type": "EX-99.1",
+            "document_url": "https://example.com/exhibit991.htm",
+            "is_primary": False,
+        }
+    )
+    monkeypatch.setattr(
+        sec_loader,
+        "download_filing_html",
+        lambda filing_file: filing_html,
+    )
+
+    document = sec_loader.load_filing_document(filing, attachment)
+
+    assert document.source_url == attachment.document_url
+    assert document.document_name == attachment.document_name
+    assert document.document_type == attachment.document_type
+    assert document.is_primary is False
+
+
+def test_source_blocks_preserve_text_around_nested_and_ignored_elements():
+    html = """
+    <html><body>
+      <div>Lead<p>Paragraph</p>Tail</div>
+      <p>Before<script>noise</script> After</p>
+    </body></html>
+    """
+
+    root = sec_loader.parse_source_html(html)
+    source_blocks = sec_loader.extract_source_blocks(root)
+    content, blocks = sec_loader.build_filing_blocks("document", source_blocks)
+
+    assert content == "Lead\n\nParagraph\n\nTail\n\nBefore After"
+    assert [block.text for block in blocks] == [
+        "Lead",
+        "Paragraph",
+        "Tail",
+        "Before After",
+    ]
+    assert all(content[block.start_char:block.end_char] == block.text for block in blocks)
 
 
 def test_unsupported_format_is_rejected_before_download(

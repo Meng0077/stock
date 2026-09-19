@@ -1,20 +1,21 @@
 from datetime import date
 from typing import Literal
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 Form = Literal[
-        "10-K",
-        "10-Q",
-        "20-F",
-        "40-F",
-        "6-K",
-        "10-K/A",
-        "10-Q/A",
-        "20-F/A",
-        "40-F/A",
-        "6-K/A",
-    ]
+    "10-K",
+    "10-Q",
+    "20-F",
+    "40-F",
+    "6-K",
+    "10-K/A",
+    "10-Q/A",
+    "20-F/A",
+    "40-F/A",
+    "6-K/A",
+]
+
 
 class FilingMetadata(BaseModel):
     model_config = ConfigDict(
@@ -35,6 +36,7 @@ class FilingMetadata(BaseModel):
     primary_document: str
     document_url: str
 
+
 class FilingBlock(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
@@ -42,6 +44,7 @@ class FilingBlock(BaseModel):
     )
 
     block_id: str
+    document_id: str
 
     block_type: Literal[
         "text",
@@ -50,10 +53,10 @@ class FilingBlock(BaseModel):
 
     text: str
 
-    start_char: int
-    end_char: int
+    start_char: int = Field(ge=0)
+    end_char: int = Field(ge=0)
 
-    source_xpath: str | None = None
+    source_xpath: str
 
 
 class FilingDocument(BaseModel):
@@ -84,7 +87,8 @@ class FilingDocument(BaseModel):
     content: str
     content_hash: str
 
-    # blocks: list[FilingBlock]
+    blocks: list[FilingBlock]
+
 
 class FilingFile(BaseModel):
     model_config = ConfigDict(

@@ -1,9 +1,10 @@
-
 from datetime import date, datetime, timezone
-
-from stock_agent.documents.schemas import FilingMetadata
+from pathlib import Path
 
 import httpx
+from bs4 import BeautifulSoup
+
+from stock_agent.documents.schemas import FilingFile, FilingMetadata
 
 
 SEC_TICKERS_URL = (
@@ -34,6 +35,18 @@ SUPPORTED_FORMS = {
 SEC_ARCHIVES_URL = (
     "https://www.sec.gov/Archives/edgar/data"
 )
+
+
+ATTACHMENT_FORMS = {
+    "6-K",
+    "6-K/A",
+}
+
+SUPPORTED_HTML_SUFFIXES = {
+    ".htm",
+    ".html",
+}
+
 
 class UnknownTickerError(ValueError):
     def __init__(self, company_id: str):
@@ -164,3 +177,122 @@ def get_recent_filings(
     )
 
     return filings[:limit]
+
+
+def get_filing_files(
+    filing: FilingMetadata,
+) -> list[FilingFile]:
+    index_url = build_document_url(
+        cik=filing.cik,
+        accession_number=filing.accession_number,
+        document_name=f"{filing.accession_number}-index.html",
+    )
+    response = httpx.get(
+        index_url,
+        headers=SEC_HEADERS,
+        timeout=30.0,
+    )
+    response.raise_for_status()
+
+    soup = BeautifulSoup(
+        response.text,
+        "lxml",
+    )
+
+    files = []
+
+    for table in soup.select("table.tableFile"):
+        for row in table.find_all("tr"):
+            cells = row.find_all("td")
+            if len(cells) < 4:
+                continue
+
+            link = cells[2].find("a")
+
+            if link is None:
+                continue
+
+            document_name = (
+                link.get_text(strip=True)
+            )
+
+            if not document_name:
+                continue
+
+            sequence = cells[0].get_text(" ", strip=True) or None
+
+            description = (
+                cells[1]
+                .get_text(
+                    " ",
+                    strip=True,
+                )
+                or None
+            )
+
+            document_type = (
+                cells[3]
+                .get_text(
+                    " ",
+                    strip=True,
+                )
+            )
+
+            files.append(
+                FilingFile(
+                    sequence=sequence,
+                    document_name=(
+                        document_name
+                    ),
+                    document_type=(
+                        document_type
+                    ),
+                    description=description,
+                    document_url=build_document_url(
+                        cik=filing.cik,
+                        accession_number=filing.accession_number,
+                        document_name=document_name,
+                    ),
+                    is_primary=(
+                        document_name
+                        == filing.primary_document
+                    ),
+                )
+            )
+
+    return files
+
+
+def select_relevant_filing_files(
+    filing: FilingMetadata,
+    files: list[FilingFile],
+) -> list[FilingFile]:
+    selected = []
+
+    for file in files:
+        if file.is_primary:
+            selected.append(file)
+            continue
+
+        if (
+            filing.form
+            not in ATTACHMENT_FORMS
+        ):
+            continue
+
+        suffix = Path(
+            file.document_name
+        ).suffix.lower()
+
+        if (
+            suffix
+            not in SUPPORTED_HTML_SUFFIXES
+        ):
+            continue
+
+        if file.document_type.upper().startswith(
+            "EX-99"
+        ):
+            selected.append(file)
+
+    return selected

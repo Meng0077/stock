@@ -1,45 +1,45 @@
-from copy import deepcopy
+import hashlib
+from dataclasses import dataclass
 from pathlib import Path
 import re
 from typing import Literal
 
 import httpx
-from bs4 import BeautifulSoup, NavigableString, Tag
+from lxml import etree
+from lxml import html as lxml_html
 
-import hashlib
+from stock_agent.documents.schemas import (
+    FilingBlock,
+    FilingDocument,
+    FilingFile,
+    FilingMetadata,
+)
+from stock_agent.documents.sec_provider import (
+    SEC_HEADERS,
+    get_filing_files,
+    select_relevant_filing_files,
+)
 
-from stock_agent.documents.schemas import FilingFile, FilingMetadata, FilingDocument
-from stock_agent.documents.sec_provider import SEC_HEADERS, build_document_url
-
-BLOCK_TAGS = {
+TEXT_BLOCK_TAGS = {
     "address",
-    "article",
     "blockquote",
-    "br",
     "div",
-    "footer",
     "h1",
     "h2",
     "h3",
     "h4",
     "h5",
     "h6",
-    "header",
     "li",
-    "main",
     "p",
-    "section",
+    "pre",
 }
 
-ATTACHMENT_FORMS = {
-    "6-K",
-    "6-K/A",
-}
-
-SUPPORTED_HTML_SUFFIXES = {
+SUPPORTED_DOCUMENT_SUFFIXES = {
     ".htm",
     ".html",
 }
+
 
 class FilingLoadError(ValueError):
     def __init__(
@@ -58,18 +58,30 @@ class FilingLoadError(ValueError):
         )
 
 
+@dataclass(frozen=True)
+class SourceBlock:
+    block_type: Literal[
+        "text",
+        "table",
+    ]
+    text: str
+    source_xpath: str
+
+
 def check_supported_format(
     filing_file: FilingFile,
 ) -> None:
     suffix = Path(
         filing_file.document_name
     ).suffix.lower()
-    if suffix not in SUPPORTED_HTML_SUFFIXES:
-        raise FilingLoadError('unsupported_format', filing_file)
+    if suffix not in SUPPORTED_DOCUMENT_SUFFIXES:
+        raise FilingLoadError("unsupported_format", filing_file)
 
-def check_content( content: str, filing_file: FilingFile,) -> None:
+
+def check_content(content: str, filing_file: FilingFile) -> None:
     if not content.strip():
         raise FilingLoadError("empty_content", filing_file)
+
 
 def download_filing_html(
     filing_file: FilingFile,
@@ -78,98 +90,13 @@ def download_filing_html(
     response = httpx.get(
         filing_file.document_url,
         headers=SEC_HEADERS,
-        timeout=30.0
+        timeout=30.0,
     )
 
     response.raise_for_status()
 
     return response.text
 
-def parse_filing_html(
-    html: str,
-) -> BeautifulSoup:
-    html = re.sub(
-        r"^\s*<\?xml[^>]*\?>",
-        "",
-        html,
-        count=1,
-        flags=re.IGNORECASE,
-    )
-    return BeautifulSoup(html, "lxml")
-
-def remove_obvious_noise(
-    soup: BeautifulSoup,
-) -> BeautifulSoup:
-    for tag in soup.find_all(["script", "style", "noscript"]):
-        tag.decompose()
-    for tag in soup.find_all():
-        if tag.name == "ix:header" or (
-            tag.name == "header" and tag.prefix == "ix"
-        ):
-            tag.decompose()
-    return soup
-
-
-def extract_inline_text(
-    tag,
-) -> str:
-    text = "".join(str(value) for value in tag.strings)
-
-    return re.sub(r"\s+", " ", text).strip()
-
-def extract_dom_text(
-    root,
-) -> str:
-    parts = []
-    def add_newline():
-        if parts and not parts[-1].endswith("\n"):
-            parts.append("\n")
-
-    def walk(node):
-        if isinstance(node, NavigableString):
-            parts.append(str(node))
-            return
-        if not isinstance(node, Tag):
-            return
-
-        is_block = node.name in BLOCK_TAGS
-
-        if is_block:
-            add_newline()
-        for child in node.children:
-            walk(child)
-
-        if is_block:
-            add_newline()
-    walk(root)
-
-    return "".join(parts)
-
-def extract_table_text(
-    table,
-) -> str:
-    rows = []
-
-    for row in table.find_all("tr"):
-        cells = []
-        for cell in row.find_all(["th", "td"]):
-            text = extract_inline_text(cell)
-            if text:
-                cells.append(text)
-        if cells:
-            rows.append(" | ".join(cells))
-
-    return  "\n".join(rows)
-
-def extract_filing_text(
-    soup: BeautifulSoup,
-) -> str:
-    content = deepcopy(soup.body or soup)
-    for table in reversed(content.find_all("table")):
-        table_text = extract_table_text(table=table)
-
-        table.replace_with(f"\n{table_text}\n")
-    return extract_dom_text(content)
 
 def normalize_filing_text(
     text: str,
@@ -183,7 +110,7 @@ def normalize_filing_text(
     lines = []
 
     for raw_line in text.splitlines():
-        line = re.sub( r"[ \t]+", " ", raw_line ).strip()
+        line = re.sub(r"[ \t]+", " ", raw_line).strip()
 
         if line:
             lines.append(line)
@@ -213,21 +140,328 @@ def build_content_hash(
     ).hexdigest()
 
 
-def load_filing_document(filing: FilingMetadata, filing_file: FilingFile) -> FilingDocument:
+def parse_source_html(
+    html: str,
+):
+    html = re.sub(
+        r"^\s*<\?xml[^>]*\?>",
+        "",
+        html,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+    return lxml_html.fromstring(html)
+
+
+def get_tag_name(
+    element,
+) -> str:
+    tag = element.tag
+
+    if not isinstance(
+        tag,
+        str,
+    ):
+        return ""
+
+    if tag.startswith("{"):
+        return (
+            etree.QName(tag)
+            .localname
+            .lower()
+        )
+
+    if ":" in tag:
+        return (
+            tag
+            .rsplit(":", 1)[1]
+            .lower()
+        )
+
+    return tag.lower()
+
+
+def is_ix_tag(
+    element,
+    name: str,
+) -> bool:
+    raw_tag = element.tag
+
+    if not isinstance(
+        raw_tag,
+        str,
+    ):
+        return False
+
+    if (
+        raw_tag.lower()
+        == f"ix:{name}"
+    ):
+        return True
+
+    return (
+        getattr(
+            element,
+            "prefix",
+            None,
+        )
+        == "ix"
+        and
+        get_tag_name(element)
+        == name
+    )
+
+
+IGNORED_TAGS = {
+    "script",
+    "style",
+    "noscript",
+}
+
+
+def is_ignored_element(
+    element,
+) -> bool:
+    if get_tag_name(element) in IGNORED_TAGS:
+        return True
+
+    if is_ix_tag(element, "header"):
+        return True
+
+    if is_ix_tag(element, "hidden"):
+        return True
+
+    return False
+
+
+def extract_element_text(element) -> str:
+    parts = []
+
+    def walk(node):
+        if node.text:
+            parts.append(node.text)
+
+        for child in node:
+            if not is_ignored_element(child):
+                walk(child)
+            if child.tail:
+                parts.append(child.tail)
+
+    walk(element)
+
+    return re.sub(r"\s+", " ", "".join(parts)).strip()
+
+
+def extract_table_text(
+    table,
+) -> str:
+    rows = []
+
+    for row in table.iter():
+        if get_tag_name(row) != "tr":
+            continue
+
+        ancestor_tables = [
+            ancestor
+            for ancestor in row.iterancestors()
+            if get_tag_name(ancestor) == "table"
+        ]
+        if not ancestor_tables or ancestor_tables[0] is not table:
+            continue
+
+        cells = []
+
+        for cell in row:
+            if get_tag_name(cell) not in {"th", "td"}:
+                continue
+
+            text = extract_element_text(cell)
+
+            if text:
+                cells.append(text)
+
+        if cells:
+            rows.append(" | ".join(cells))
+
+    return "\n".join(rows)
+
+
+def extract_source_blocks(
+    root,
+) -> list[SourceBlock]:
+    blocks = []
+    tree = root.getroottree()
+
+    def add_text(text: str | None, element) -> None:
+        normalized = re.sub(r"\s+", " ", text or "").strip()
+        if normalized:
+            blocks.append(
+                SourceBlock(
+                    block_type="text",
+                    text=normalized,
+                    source_xpath=tree.getpath(element),
+                )
+            )
+
+    def contains_block(element) -> bool:
+        return any(
+            get_tag_name(descendant) in TEXT_BLOCK_TAGS
+            or get_tag_name(descendant) == "table"
+            for descendant in element.iterdescendants()
+            if not is_ignored_element(descendant)
+        )
+
+    def walk(element) -> None:
+        if is_ignored_element(element):
+            return
+
+        if get_tag_name(element) == "table":
+            text = extract_table_text(element)
+            if text:
+                blocks.append(
+                    SourceBlock(
+                        block_type="table",
+                        text=text,
+                        source_xpath=tree.getpath(element),
+                    )
+                )
+            return
+
+        buffer = [element.text or ""]
+
+        for child in element:
+            if is_ignored_element(child):
+                if child.tail:
+                    buffer.append(child.tail)
+                continue
+
+            child_name = get_tag_name(child)
+            child_is_block = (
+                child_name in TEXT_BLOCK_TAGS
+                or child_name == "table"
+                or contains_block(child)
+            )
+
+            if child_is_block:
+                add_text("".join(buffer), element)
+                buffer = []
+                walk(child)
+            else:
+                buffer.append(extract_element_text(child))
+
+            if child.tail:
+                buffer.append(child.tail)
+
+        add_text("".join(buffer), element)
+
+    body = next(iter(root.xpath("//body")), root)
+    walk(body)
+
+    return blocks
+
+def build_block_id(
+    document_id: str,
+    index: int,
+) -> str:
+    return (
+        f"{document_id}:"
+        f"block:{index}"
+    )
+
+
+def build_filing_blocks(
+    document_id: str,
+    source_blocks: list[SourceBlock],
+) -> tuple[str, list[FilingBlock]]:
+    content_parts = []
+    filing_blocks = []
+
+    cursor = 0
+
+    for source_block in source_blocks:
+        text = normalize_filing_text(
+            source_block.text
+        )
+
+        if not text:
+            continue
+
+        if content_parts:
+            separator = "\n\n"
+
+            content_parts.append(
+                separator
+            )
+
+            cursor += len(
+                separator
+            )
+
+        start_char = cursor
+
+        content_parts.append(
+            text
+        )
+
+        cursor += len(text)
+
+        end_char = cursor
+
+        block_index = len(
+            filing_blocks
+        )
+
+        filing_blocks.append(
+            FilingBlock(
+                block_id=build_block_id(
+                    document_id,
+                    block_index,
+                ),
+                document_id=document_id,
+                block_type=(
+                    source_block.block_type
+                ),
+                text=text,
+                start_char=start_char,
+                end_char=end_char,
+                source_xpath=(
+                    source_block.source_xpath
+                ),
+            )
+        )
+
+    content = "".join(
+        content_parts
+    )
+
+    return (
+        content,
+        filing_blocks,
+    )
+
+
+
+
+
+
+def load_filing_document(
+    filing: FilingMetadata,
+    filing_file: FilingFile,
+) -> FilingDocument:
     check_supported_format(filing_file)
 
     html = download_filing_html(filing_file)
 
-    soup = parse_filing_html(html)
-    cleaned_soup = remove_obvious_noise(soup=soup)
-    raw_text = extract_filing_text(cleaned_soup)
-    content = normalize_filing_text(raw_text)
+    document_id = build_document_id(filing, filing_file)
+    root = parse_source_html(html)
+    source_blocks = extract_source_blocks(root)
+    content, blocks = build_filing_blocks(document_id, source_blocks)
 
     check_content(content, filing_file)
 
     content_hash = build_content_hash(content=content)
     return FilingDocument(
-        document_id=build_document_id(filing, filing_file),
+        document_id=document_id,
         company_id=filing.company_id,
         cik=filing.cik,
         form=filing.form,
@@ -241,123 +475,13 @@ def load_filing_document(filing: FilingMetadata, filing_file: FilingFile) -> Fil
         source_url=filing_file.document_url,
         content=content,
         content_hash=content_hash,
+        blocks=blocks,
     )
 
 
-def get_filing_files(
+def load_relevant_filing_documents(
     filing: FilingMetadata,
-) -> list[FilingFile]:
-    index_url = build_document_url(
-        cik=filing.cik,
-        accession_number=filing.accession_number,
-        document_name=f"{filing.accession_number}-index.html",
-    )
-    response = httpx.get(
-        index_url,
-        headers=SEC_HEADERS,
-        timeout=30.0,
-    )
-    response.raise_for_status()
-
-    soup = BeautifulSoup(
-        response.text,
-        "lxml",
-    )
-
-    files = []
-
-    for table in soup.select("table.tableFile"):
-        for row in table.find_all("tr"):
-            cells = row.find_all("td")
-            if len(cells) < 4:
-                continue
-
-            link = cells[2].find("a")
-
-            if link is None:
-                continue
-
-            document_name = (
-                link.get_text(strip=True)
-            )
-
-            if not document_name:
-                continue
-
-            sequence = (cells[0].get_text( " ", strip=True,) or None)
-
-            description = (
-                cells[1]
-                .get_text(
-                    " ",
-                    strip=True,
-                )
-                or None
-            )
-
-            document_type = (
-                cells[3]
-                .get_text(
-                    " ",
-                    strip=True,
-                )
-            )
-
-            files.append(
-                FilingFile(
-                    sequence=sequence,
-                    document_name=(
-                        document_name
-                    ),
-                    document_type=(
-                        document_type
-                    ),
-                    description=description,
-                    document_url=build_document_url(
-                        cik=filing.cik,
-                        accession_number=filing.accession_number,
-                        document_name=document_name,
-                    ),
-                    is_primary=(
-                        document_name
-                        == filing.primary_document
-                    ),
-                )
-            )
-
-    return files
-
-
-def select_relevant_filing_files(
-    filing: FilingMetadata,
-    files: list[FilingFile],
-) -> list[FilingFile]:
-    selected = []
-
-    for file in files:
-        if file.is_primary:
-            selected.append(file)
-            continue
-
-        if (
-            filing.form
-            not in ATTACHMENT_FORMS
-        ):
-            continue
-
-        suffix = Path(
-            file.document_name
-        ).suffix.lower()
-
-        if (
-            suffix
-            not in SUPPORTED_HTML_SUFFIXES
-        ):
-            continue
-
-        if file.document_type.upper().startswith(
-            "EX-99"
-        ):
-            selected.append(file)
-
-    return selected
+) -> list[FilingDocument]:
+    filing_files = get_filing_files(filing)
+    relevant_files = select_relevant_filing_files(filing, files=filing_files)
+    return [load_filing_document(filing, filing_file) for filing_file in relevant_files]
