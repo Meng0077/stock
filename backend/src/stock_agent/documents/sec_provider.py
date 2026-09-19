@@ -79,14 +79,14 @@ def get_company_submissions(
 def build_document_url(
     cik: str,
     accession_number: str,
-    primary_document: str,
+    document_name: str,
 ) -> str:
     cik_path = str(int(cik))
     accession_path = accession_number.replace(
         "-",
         "",
     )
-    return f"{SEC_ARCHIVES_URL}/{cik_path}/{accession_path}/{primary_document}"
+    return f"{SEC_ARCHIVES_URL}/{cik_path}/{accession_path}/{document_name}"
 
 
 def build_filing_metadata(
@@ -110,7 +110,7 @@ def build_filing_metadata(
         report_date=(date.fromisoformat(report_date_text) if report_date_text else None),
         accession_number=accession_number,
         primary_document=primary_document,
-        document_url=build_document_url(cik=cik, accession_number=accession_number, primary_document=primary_document),
+        document_url=build_document_url(cik=cik, accession_number=accession_number, document_name=primary_document),
     )
 
 def build_recent_filings(
