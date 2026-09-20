@@ -4,7 +4,6 @@ from pathlib import Path
 import re
 from typing import Literal
 
-import httpx
 from lxml import etree
 from lxml import html as lxml_html
 
@@ -14,11 +13,8 @@ from stock_agent.documents.schemas import (
     FilingFile,
     FilingMetadata,
 )
-from stock_agent.documents.sec_provider import (
-    SEC_HEADERS,
-    get_filing_files,
-    select_relevant_filing_files,
-)
+from stock_agent.documents.sec_http import get_sec
+from stock_agent.documents.sec_provider import get_filing_files, select_relevant_filing_files
 
 TEXT_BLOCK_TAGS = {
     "address",
@@ -39,7 +35,6 @@ SUPPORTED_DOCUMENT_SUFFIXES = {
     ".htm",
     ".html",
 }
-
 
 class FilingLoadError(ValueError):
     def __init__(
@@ -87,13 +82,7 @@ def download_filing_html(
     filing_file: FilingFile,
 ) -> str:
 
-    response = httpx.get(
-        filing_file.document_url,
-        headers=SEC_HEADERS,
-        timeout=30.0,
-    )
-
-    response.raise_for_status()
+    response = get_sec(filing_file.document_url)
 
     return response.text
 

@@ -28,7 +28,7 @@ async def main():
     request = ResearchRequest(
         company_id="NVDA",
         question="NVDA 的数据中心业务主要靠什么",
-        data_mode="fixture",
+        data_mode="mixed",
         as_of="2026-09-15T16:00:00+08:00",
     )
     config = get_llm_config(ROOT / "backend" / ".env")

@@ -29,7 +29,7 @@ def insufficient_output() -> ResearchOutput:
         facts=[],
         inferences=[],
         missing_information=["缺少资料"],
-        data_mode="fixture",
+        data_mode=None,
     )
 
 

@@ -16,7 +16,7 @@ from stock_agent.llm_client import (
 
 VALID_OUTPUT = (
     '{"status":"insufficient_information","facts":[],"inferences":[],'
-    '"missing_information":["缺少资料"],"data_mode":"fixture"}'
+    '"missing_information":["缺少资料"],"data_mode":null}'
 )
 MISSING_FIELD_OUTPUT = (
     '{"status":"insufficient_information","facts":[],"inferences":[],'
@@ -123,11 +123,20 @@ def test_second_invalid_json_records_syntax_error_without_third_request():
 
 
 def test_data_mode_mismatch_is_distinct_from_unknown_evidence():
-    live_output = VALID_OUTPUT.replace('"fixture"', '"live"')
+    live_output = (
+        '{"status":"completed","facts":['
+        '{"text":"报价为 100 元","evidence_ids":["E1"]}],'
+        '"inferences":[],"missing_information":[],"data_mode":"live"}'
+    )
     client, requests = fake_client(response(live_output))
     events = []
 
-    assert asyncio.run(load_agent().model_loop(client, "offline", events=events)) == 1
+    assert asyncio.run(load_agent().model_loop(
+        client,
+        "offline",
+        events=events,
+        initial_evidence_ids={"E1"},
+    )) == 1
     assert len(requests) == 1
     assert events[0]["error"]["code"] == "data_mode_mismatch"
 

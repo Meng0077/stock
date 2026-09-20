@@ -1,9 +1,11 @@
 # from langchain_core.embeddings import FakeEmbeddings
 from langchain_huggingface import HuggingFaceEmbeddings
 
-def build_embeddings():
+def build_embeddings(
+    model_name: str = "sentence-transformers/all-mpnet-base-v2",
+):
     return HuggingFaceEmbeddings(
-        model_name="sentence-transformers/all-mpnet-base-v2",
+        model_name=model_name,
         model_kwargs={
             "device": "cpu",
         },

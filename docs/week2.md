@@ -882,7 +882,8 @@ output = result["structured_response"]
 validate_evidence(
     output,
     allowed_ids,
-    expected_data_mode,
+    evidence_modes,
+    request_mode,
 )
 ```
 

@@ -13,7 +13,7 @@
 - facts：EvidenceClaim 列表，保存资料中的事实。
 - inferences：EvidenceClaim 列表，保存有证据基础但仍属推断的内容。
 - missing_information：非空字符串组成的列表。
-- data_mode：fixture / historical / live；由程序与当前资料模式核对，不能信任模型随意标记。
+- data_mode：fixture / historical / live / mixed / null；由程序根据实际引用的证据核对，不能信任模型随意标记。没有引用证据时必须显式为 null。
 
 所有模型拒绝额外字段，清除字符串首尾空白；注意列表元素也需要声明约束。
 completed 至少有一条事实；insufficient_information 至少说明一项缺失信息，可保留已有事实。

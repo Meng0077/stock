@@ -60,9 +60,9 @@ CASES = [
     },
     {
         "name": "missing_documents",
-        "company_id": "TSLA",
+        "company_id": "ZZZZZ",
         "expected_status": "insufficient_information",
-        "question": "TSLA 的主要业务是什么？请依据本地公司文档回答。",
+        "question": "ZZZZZ 的主要业务是什么？请依据 SEC 公司文档回答。",
         "required_tools": {"retrieve_knowledge"},
         "required_evidence_prefixes": set(),
     },
@@ -101,7 +101,7 @@ async def verify_case(
     request = ResearchRequest(
         company_id=case["company_id"],
         question=case["question"],
-        data_mode="fixture",
+        data_mode="mixed",
         as_of=datetime.now(timezone.utc),
     )
     record = await run_research(agent, request)

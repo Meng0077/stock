@@ -1,10 +1,10 @@
 """D02：数据模型不是大语言模型，而是输入数据的规则。"""
 
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
-from stock_agent.schemas.research_output import ResearchOutput
+from stock_agent.schemas.research_output import RequestDataMode, ResearchOutput
 
 
 class ResearchRequest(BaseModel):
@@ -15,7 +15,7 @@ class ResearchRequest(BaseModel):
 
     company_id: str = Field(min_length=1, max_length=80)
     question: str = Field(min_length=1, max_length=2000)
-    data_mode: Literal["fixture", "historical", "live"]
+    data_mode: RequestDataMode
     # 允许带时区的日期字符串转换为 datetime；没有时区则拒绝。
     as_of: AwareDatetime
 
@@ -33,6 +33,4 @@ class ResearchResponse(BaseModel):
     status: str
     result: ResearchOutput | None
     error: dict[str, Any] | None
-
-
 

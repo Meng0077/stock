@@ -3,6 +3,8 @@ from typing import Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
+SEC_HTML_PARSER_VERSION = "sec-html-v1"
+
 Form = Literal[
     "10-K",
     "10-Q",
@@ -14,6 +16,7 @@ Form = Literal[
     "20-F/A",
     "40-F/A",
     "6-K/A",
+    "8-K",
 ]
 
 
@@ -103,3 +106,42 @@ class FilingFile(BaseModel):
 
     document_url: str
     is_primary: bool
+
+
+class DocumentChunk(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid"
+    )
+
+    chunk_id: str
+    document_id: str
+    document_content_hash: str
+    source_url: str
+
+    company_id: str
+
+    chunk_index: int = Field(ge=0)
+
+    start_char: int = Field(ge=0)
+
+    end_char: int = Field(ge=0)
+
+    content: str
+
+    source_block_ids: list[str]
+    source_xpaths: list[str]
+
+
+"""
+    evidence_id
+    ↓
+    DocumentChunk
+    ↓
+    source_block_ids
+    ↓
+    FilingBlock[]
+    ↓
+    source_xpath
+    ↓
+    SEC 原始 XHTML
+"""

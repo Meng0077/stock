@@ -139,7 +139,7 @@ def test_model_usage_is_recorded_for_the_request():
                 message=SimpleNamespace(
                     role="assistant", tool_calls=None, content=(
                         '{"status":"insufficient_information","facts":[],"inferences":[],'
-                        '"missing_information":["缺少资料"],"data_mode":"fixture"}'
+                        '"missing_information":["缺少资料"],"data_mode":null}'
                     ),
                 ),
             )],

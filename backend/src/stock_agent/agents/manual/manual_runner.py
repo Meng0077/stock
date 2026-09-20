@@ -40,6 +40,7 @@ SYSTEM_PROMPT = """
    不得描述为实时行情、真实报价或投资建议。
 5. 必须区分事实、推断和缺失信息。
 6. 最终只输出符合 ResearchOutput JSON Schema 的 JSON 对象。
+7. 最终没有引用任何证据时，data_mode 必须为 null。
 """
 
 

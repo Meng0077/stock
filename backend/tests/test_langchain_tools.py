@@ -1,12 +1,15 @@
 """D07 Step 5：离线验证 LangChain Tool adapter 与现有 registry 的边界。"""
 
 import asyncio
+from datetime import datetime, timezone
 import json
 
 import pytest
+from langchain.tools import ToolRuntime
 from pydantic import ValidationError
 
 from stock_agent.agents.langchain import langchain_tools
+from stock_agent.agents.context import ResearchContext
 from stock_agent.schemas.tool_params import CompanyToolParams, KnowledgeToolParams
 from stock_agent.tools.registry import TOOL_REGISTRY, execute_tool
 
@@ -119,22 +122,38 @@ def test_unknown_tool_has_no_langchain_or_registry_execution_path():
         asyncio.run(execute_tool("delete_file", {"company_id": "NVDA"}))
 
 
-def test_knowledge_adapter_delegates_to_registry(monkeypatch):
+def test_knowledge_adapter_uses_runtime_as_of(monkeypatch):
     calls = []
     documents = [{"evidence_id": "rag:NVDA:nvda.txt:2", "content": "AI infrastructure demand"}]
 
-    async def fake_execute_tool(name, arguments):
-        calls.append((name, arguments))
+    def fake_retrieve_knowledge(company_id, question, as_of):
+        calls.append((company_id, question, as_of))
         return documents
 
-    monkeypatch.setattr(langchain_tools, "execute_tool", fake_execute_tool)
+    monkeypatch.setattr(langchain_tools, "retrieve_knowledge", fake_retrieve_knowledge)
     tool = tools_by_name()["retrieve_knowledge"]
-    assert tool.args_schema is KnowledgeToolParams
-    result = asyncio.run(tool.ainvoke({
-        "company_id": " NVDA ",
-        "question": " What drives data center revenue? ",
-    }))
-    assert calls == [("retrieve_knowledge", {
-        "company_id": "NVDA", "question": "What drives data center revenue?",
-    })]
+    assert issubclass(tool.args_schema, KnowledgeToolParams)
+    assert set(tool.tool_call_schema.model_json_schema()["properties"]) == {
+        "company_id",
+        "question",
+    }
+    as_of = datetime(2026, 9, 17, tzinfo=timezone.utc)
+    runtime = ToolRuntime(
+        state={},
+        context=ResearchContext(as_of=as_of),
+        config={},
+        stream_writer=lambda _: None,
+        tool_call_id="call-rag",
+        store=None,
+    )
+    result = asyncio.run(tool.coroutine(
+        company_id="NVDA",
+        question="What drives data center revenue?",
+        runtime=runtime,
+    ))
+    assert calls == [(
+        "NVDA",
+        "What drives data center revenue?",
+        as_of,
+    )]
     assert json.loads(result) == documents

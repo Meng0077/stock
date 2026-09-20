@@ -6,13 +6,32 @@
 
 import asyncio
 import json
+from typing import Annotated
 from uuid import uuid4
 
-from langchain.tools import BaseTool, tool
+from langchain.tools import BaseTool, tool, ToolRuntime
+from langchain_core.tools import InjectedToolArg
 from langchain.messages import AIMessage, ToolMessage
+from pydantic import ConfigDict
+from pydantic.json_schema import SkipJsonSchema
 
+from stock_agent.agents.context import ResearchContext
+from stock_agent.retrieval.knowledge import retrieve_knowledge
 from stock_agent.schemas.tool_params import CompanyToolParams, KnowledgeToolParams
 from stock_agent.tools.registry import execute_tool
+
+
+class KnowledgeToolRuntimeParams(KnowledgeToolParams):
+    model_config = ConfigDict(
+        extra="forbid",
+        str_strip_whitespace=True,
+        arbitrary_types_allowed=True,
+    )
+
+    runtime: Annotated[
+        SkipJsonSchema[ToolRuntime[ResearchContext]],
+        InjectedToolArg,
+    ]
 
 
 @tool("get_quote", args_schema=CompanyToolParams)
@@ -35,20 +54,24 @@ async def get_company_profile_adapter(company_id: str) -> dict[str, object]:
         "evidence_id": f"E-{uuid4().hex}",
     }
 
-@tool("retrieve_knowledge", args_schema=KnowledgeToolParams)
-async def retrieve_knowledge_tool(company_id: str, question: str) -> str:
+@tool("retrieve_knowledge", args_schema=KnowledgeToolRuntimeParams)
+async def retrieve_knowledge_tool(
+    company_id: str,
+    question: str,
+    runtime: ToolRuntime[ResearchContext],
+) -> str:
     """
     Search company documents for information relevant to the question.
 
     Use this for company business, products, strategy, risks,
     and other information contained in company documents.
-    Returns local fixture evidence, not live data. An empty list means
-    no available local evidence; report insufficient_information.
+    Returns SEC filing evidence available by the request's as_of time.
+    An empty list means no available evidence; report insufficient_information.
     """
-
-    result = await execute_tool(
-        "retrieve_knowledge",
-        {"company_id": company_id, "question": question},
+    result = retrieve_knowledge(
+        company_id=company_id,
+        question=question,
+        as_of=runtime.context.as_of,
     )
     return json.dumps(result, ensure_ascii=False)
 

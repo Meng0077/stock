@@ -89,9 +89,13 @@ interface CreateResearchRunRequest {
 interface InternalResearchRequest {
   company_id: string;
   question: string;
-  data_mode: "fixture" | "historical" | "live";
+  data_mode: RequestDataMode;
   as_of: string;
 }
+
+type EvidenceDataMode = "fixture" | "historical" | "live";
+type RequestDataMode = EvidenceDataMode | "mixed";
+type OutputDataMode = EvidenceDataMode | "mixed";
 ```
 
 对话入口必须在服务端完成：
@@ -129,7 +133,7 @@ interface ResearchOutput {
   facts: EvidenceClaim[];
   inferences: EvidenceClaim[];
   missing_information: string[];
-  data_mode: DataMode;
+  data_mode: OutputDataMode | null;
 }
 
 type ErrorCode =

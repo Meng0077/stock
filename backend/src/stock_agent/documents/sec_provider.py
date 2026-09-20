@@ -1,19 +1,15 @@
 from datetime import date, datetime, timezone
 from pathlib import Path
 
-import httpx
 from bs4 import BeautifulSoup
 
 from stock_agent.documents.schemas import FilingFile, FilingMetadata
+from stock_agent.documents.sec_http import SEC_HEADERS, get_sec
 
 
 SEC_TICKERS_URL = (
     "https://www.sec.gov/files/company_tickers.json"
 )
-
-SEC_HEADERS = {
-    "User-Agent": "demo-agent 314885503@qq.com",
-}
 
 SEC_SUBMISSIONS_URL = (
     "https://data.sec.gov/submissions"
@@ -60,13 +56,7 @@ class UnknownTickerError(ValueError):
 def ticker_to_cik(
     company_id: str,
 ) -> str | None:
-    response = httpx.get(
-        SEC_TICKERS_URL,
-        headers=SEC_HEADERS,
-        timeout=30.0,
-    )
-
-    response.raise_for_status()
+    response = get_sec(SEC_TICKERS_URL)
     companies = response.json()
     ticker = company_id.upper()
 
@@ -80,12 +70,9 @@ def ticker_to_cik(
 def get_company_submissions(
     cik: str,
 ) -> dict:
-    response = httpx.get(
-            f"{SEC_SUBMISSIONS_URL}/CIK{cik}.json",
-            headers=SEC_HEADERS,
-            timeout=30.0,
-        )
-    response.raise_for_status()
+    response = get_sec(
+        f"{SEC_SUBMISSIONS_URL}/CIK{cik}.json"
+    )
 
     return response.json()
 
@@ -187,12 +174,7 @@ def get_filing_files(
         accession_number=filing.accession_number,
         document_name=f"{filing.accession_number}-index.html",
     )
-    response = httpx.get(
-        index_url,
-        headers=SEC_HEADERS,
-        timeout=30.0,
-    )
-    response.raise_for_status()
+    response = get_sec(index_url)
 
     soup = BeautifulSoup(
         response.text,

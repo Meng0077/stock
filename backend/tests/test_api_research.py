@@ -125,7 +125,7 @@ def test_natural_language_is_normalized_on_server(message):
 
     assert request.company_id == "NVDA"
     assert request.question == message
-    assert request.data_mode == "fixture"
+    assert request.data_mode == "mixed"
     assert before <= request.as_of <= after
     assert request.as_of.utcoffset().total_seconds() == 0
 
@@ -187,7 +187,7 @@ def test_unsupported_company_returns_insufficient_information():
         "facts": [],
         "inferences": [],
         "missing_information": ["当前仅支持 NVDA，缺少 TSLA 的教学模拟报价。"],
-        "data_mode": "fixture",
+        "data_mode": None,
     }
     model = OfflineToolModel(responses=[
         tool_message("get_quote", {"company_id": "TSLA"}, "call-tsla"),
@@ -259,13 +259,8 @@ def test_runtime_failure_returns_only_safe_public_fields(error, code):
     assert "traceback" not in response.text.casefold()
 
 
-@pytest.mark.parametrize("data_mode,code", [
-    ("fixture", "invalid_evidence"),
-    ("live", "data_mode_mismatch"),
-])
-def test_api_does_not_publish_output_that_fails_evidence_validation(data_mode, code):
+def test_api_does_not_publish_unknown_evidence():
     output = quote_output()
-    output["data_mode"] = data_mode
 
     class UnverifiedAgent:
         async def astream(self, state, **kwargs):
@@ -278,7 +273,7 @@ def test_api_does_not_publish_output_that_fails_evidence_validation(data_mode, c
     body = response.json()
     assert body["status"] == "failed"
     assert body["result"] is None
-    assert body["error"] == make_public_error(code).model_dump()
+    assert body["error"] == make_public_error("invalid_evidence").model_dump()
 
 
 def test_structured_verification_cli_can_run_offline(monkeypatch, capsys):
@@ -289,7 +284,7 @@ def test_structured_verification_cli_can_run_offline(monkeypatch, capsys):
     spec.loader.exec_module(cli)
     output = {
         "status": "insufficient_information", "facts": [], "inferences": [],
-        "missing_information": ["缺少 TSLA 的教学模拟报价。"], "data_mode": "fixture",
+        "missing_information": ["缺少 TSLA 的教学模拟报价。"], "data_mode": None,
     }
     model = OfflineToolModel(responses=[
         tool_message("get_quote", {"company_id": "TSLA"}, "call-tsla"),

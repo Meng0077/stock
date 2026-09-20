@@ -31,6 +31,18 @@ def test_valid_json_parses():
     assert result.data_mode == "fixture"
 
 
+def test_no_evidence_requires_explicit_null_data_mode():
+    result = ResearchOutput.model_validate({
+        "status": "insufficient_information",
+        "facts": [],
+        "inferences": [],
+        "missing_information": ["缺少资料"],
+        "data_mode": None,
+    })
+
+    assert result.data_mode is None
+
+
 @pytest.mark.parametrize(
     ("raw_json", "field", "error_type"),
     [

@@ -26,7 +26,7 @@ def build_research_request(
     return ResearchRequest(
         company_id=company_id,
         question=input.message,
-        data_mode="fixture",
+        data_mode="mixed",
         as_of=datetime.now(timezone.utc),
     )
 

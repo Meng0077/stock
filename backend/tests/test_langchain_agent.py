@@ -12,14 +12,14 @@ from langchain.agents.middleware.model_call_limit import ModelCallLimitExceededE
 from langchain.agents.middleware.tool_call_limit import ToolCallLimitExceededError
 from langchain.agents.structured_output import ToolStrategy
 from langchain.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.documents import Document
 from langchain_core.language_models.fake_chat_models import (
     FakeMessagesListChatModel,
 )
-from langchain_core.embeddings import DeterministicFakeEmbedding
-from langchain_core.vectorstores import InMemoryVectorStore
 from pydantic import Field
 
 from stock_agent.agents.langchain import langchain_agent, langchain_tools, tool_middleware
+from stock_agent.agents.context import ResearchContext
 from stock_agent.agents.langchain.langchain_agent import (
     SYSTEM_PROMPT,
     build_agent_input,
@@ -93,6 +93,7 @@ def test_build_agent_uses_internal_tools_and_system_prompt(monkeypatch):
         "tools": build_langchain_tools(),
         "system_prompt": SYSTEM_PROMPT,
         "response_format": None,
+        "context_schema": ResearchContext,
     }
 
 
@@ -143,13 +144,31 @@ def test_fake_model_completes_real_langchain_tool_loop(research_request):
 
 
 @pytest.mark.parametrize("company_id", ["NVDA", "TSLA"])
-def test_rag_tool_result_and_missing_documents_complete_agent_flow(monkeypatch, tmp_path, company_id):
-    monkeypatch.setattr(knowledge, "KNOWLEDGE_DIR", tmp_path)
-    (tmp_path / "nvda.txt").write_text("Data center revenue depends on AI infrastructure demand.")
-    monkeypatch.setattr(knowledge, "build_vector_store", lambda documents: (
-        InMemoryVectorStore.from_documents(documents, DeterministicFakeEmbedding(size=16))
-    ))
+def test_rag_tool_result_and_missing_documents_complete_agent_flow(monkeypatch, company_id):
     has_documents = company_id == "NVDA"
+
+    class FakeVectorStore:
+        def similarity_search(self, query, k):
+            if not has_documents:
+                return []
+            return [Document(
+                page_content="Data center revenue depends on AI infrastructure demand.",
+                metadata={
+                    "evidence_id": "rag:NVDA:nvda.txt:0",
+                    "company_id": "NVDA",
+                    "source_url": "https://example.com/nvda-filing.htm",
+                },
+            )]
+
+    class FakeIndexState:
+        vector_store = FakeVectorStore()
+
+    monkeypatch.setattr(
+        knowledge,
+        "ensure_company_index",
+        lambda actual_company_id, as_of=None: FakeIndexState(),
+    )
+
     output = ResearchOutput(
         status="completed" if has_documents else "insufficient_information",
         facts=[{
@@ -158,7 +177,7 @@ def test_rag_tool_result_and_missing_documents_complete_agent_flow(monkeypatch, 
         }] if has_documents else [],
         inferences=[],
         missing_information=[] if has_documents else ["本地没有 TSLA 的公司资料。"],
-        data_mode="fixture",
+        data_mode="historical" if has_documents else None,
     )
     model = ToolCallingFakeModel(responses=[
         AIMessage(content="", tool_calls=[{
@@ -176,7 +195,7 @@ def test_rag_tool_result_and_missing_documents_complete_agent_flow(monkeypatch, 
     request = ResearchRequest(
         company_id=company_id,
         question="What drives data center revenue?",
-        data_mode="fixture",
+        data_mode="mixed",
         as_of="2026-09-17T00:00:00+08:00",
     )
     result = asyncio.run(run_research(agent, request))
@@ -199,7 +218,7 @@ def test_unsupported_company_can_return_insufficient_information(tool_name):
         "facts": [],
         "inferences": [],
         "missing_information": ["当前仅支持 NVDA，缺少 TSLA 的教学模拟资料。"],
-        "data_mode": "fixture",
+        "data_mode": None,
     }
     model = ToolCallingFakeModel(responses=[
         AIMessage(content="", tool_calls=[{
@@ -227,7 +246,7 @@ def test_unsupported_company_can_return_insufficient_information(tool_name):
     assert output.model_dump() == output_data
     allowed_ids = collect_evidence_ids(result["messages"])
     assert allowed_ids == set()
-    assert validate_evidence(output, allowed_ids, request.data_mode) is output
+    assert validate_evidence(output, allowed_ids, {}, request.data_mode) is output
 
 
 @pytest.mark.parametrize("error_type", [ValueError, TypeError, RuntimeError, TimeoutError])
@@ -402,8 +421,9 @@ def test_invoke_returns_raw_state_without_d09_conversion(research_request):
     raw_state = {"messages": [AIMessage(content="raw")], "custom": object()}
 
     class FakeAgent:
-        async def ainvoke(self, state):
+        async def ainvoke(self, state, *, context):
             assert state == build_agent_input(research_request)
+            assert context == ResearchContext(as_of=research_request.as_of)
             return raw_state
 
     result = asyncio.run(invoke_langchain_agent(FakeAgent(), research_request))
@@ -429,7 +449,10 @@ def research_state():
                 "id": "call-quote",
             }]),
             ToolMessage(
-                content=json.dumps({"evidence_id": "E-quote"}),
+                content=json.dumps({
+                    "evidence_id": "E-quote",
+                    "data_mode": "fixture",
+                }),
                 name="get_quote",
                 tool_call_id="call-quote",
             ),
@@ -454,13 +477,14 @@ def test_run_research_returns_output_identity_and_events(
             facts=[],
             inferences=[],
             missing_information=["缺少公司资料"],
-            data_mode="fixture",
+            data_mode=None,
         )
 
     class FakeAgent:
-        async def astream(self, state, *, stream_mode):
+        async def astream(self, state, *, stream_mode, context):
             assert state == build_agent_input(research_request)
             assert stream_mode == "values"
+            assert context == ResearchContext(as_of=research_request.as_of)
             yield research_state
 
     result = asyncio.run(run_research(FakeAgent(), research_request))
@@ -617,7 +641,7 @@ def test_run_research_rejects_truncation_without_tools_or_retry(
         "facts": [],
         "inferences": [],
         "missing_information": ["缺少资料"],
-        "data_mode": "fixture",
+        "data_mode": None,
     }
     tool_calls = []
     if kind == "tool":

@@ -245,12 +245,20 @@ async def model_loop(
             return finish("failed", code)
 
         try:
-            validate_evidence(result, allowed_ids, expected_data_mode)
+            validate_evidence(
+                result,
+                allowed_ids,
+                {
+                    evidence_id: "fixture"
+                    for evidence_id in allowed_ids
+                },
+                expected_data_mode,
+            )
         except EvidenceValidationError as error:
             print(f"证据校验失败：{error}", file=sys.stderr)
             code = (
                 "data_mode_mismatch"
-                if error.code == "data_mode_mismatch"
+                if error.code in {"data_mode_mismatch", "data_mode_not_allowed"}
                 else "invalid_evidence"
             )
             return finish("failed", code)

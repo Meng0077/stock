@@ -88,7 +88,7 @@ def map_error(error: Exception) -> ErrorCode:
         return "budget_exhausted"
 
     if isinstance(error, EvidenceValidationError):
-        if error.code == "data_mode_mismatch":
+        if error.code in {"data_mode_mismatch", "data_mode_not_allowed"}:
             return "data_mode_mismatch"
         return "invalid_evidence"
 

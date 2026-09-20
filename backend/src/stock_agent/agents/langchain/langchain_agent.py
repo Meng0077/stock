@@ -17,9 +17,11 @@ from langchain.agents.middleware import (
 )
 from langchain.messages import AIMessage
 
+from stock_agent.agents.context import ResearchContext
 from stock_agent.agents.structured_output import (
     EvidenceValidationError,
     IncompleteResponseError,
+    collect_evidence_data_modes,
     collect_evidence_ids,
     validate_evidence,
 )
@@ -31,7 +33,7 @@ from stock_agent.agents.langchain.langchain_tools import (
 from stock_agent.agents.langchain.tool_middleware import handle_tool_errors
 from stock_agent.schemas.research import ResearchRequest
 
-SYSTEM_PROMPT = SYSTEM_PROMPT = """
+SYSTEM_PROMPT = """
 你是只读的股票教学研究助手。
 
 回答股票相关事实时，必须优先使用提供的工具获取证据，
@@ -54,6 +56,9 @@ SYSTEM_PROMPT = SYSTEM_PROMPT = """
 
 6. 如果现有工具返回的信息不足以回答问题，
    返回 insufficient_information，不要编造缺失事实。
+
+7. 最终 data_mode 根据实际引用的证据填写：只引用一种模式就使用该模式；
+   同时引用不同模式时使用 mixed；没有引用任何证据时使用 null。
 """
 
 
@@ -100,6 +105,7 @@ def build_langchain_agent(
     return create_agent(
         model=model,
         tools=build_langchain_tools(),
+        context_schema=ResearchContext,
         system_prompt=SYSTEM_PROMPT,
         response_format=response_format,
         middleware=[
@@ -125,7 +131,8 @@ async def invoke_langchain_agent(
     """运行 Agent。"""
     async with asyncio.timeout(TASK_TIMEOUT_SECONDS):
         return await agent.ainvoke(
-            build_agent_input(request)
+            build_agent_input(request),
+            context=ResearchContext(as_of=request.as_of),
         )
 
 
@@ -144,6 +151,7 @@ async def run_research(
             async for state in agent.astream(
                 latest_state,
                 stream_mode="values",
+                context=ResearchContext(as_of=request.as_of),
             ):
                 latest_state = state
     # 此运行边界负责把 runtime 异常转换成不含原始异常的公开失败。
@@ -158,9 +166,15 @@ async def run_research(
         public_error = make_public_error(map_error(runtime_error)).model_dump()
     else:
         output = latest_state["structured_response"]
-        allowed_ids = collect_evidence_ids(latest_state["messages"])
         try:
-            validate_evidence(output, allowed_ids, request.data_mode)
+            allowed_ids = collect_evidence_ids(latest_state["messages"])
+            evidence_modes = collect_evidence_data_modes(latest_state["messages"])
+            validate_evidence(
+                output,
+                allowed_ids,
+                evidence_modes,
+                request.data_mode,
+            )
         except EvidenceValidationError as error:
             public_error = make_public_error(map_error(error)).model_dump()
             output = None

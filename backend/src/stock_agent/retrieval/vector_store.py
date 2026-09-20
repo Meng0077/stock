@@ -1,10 +1,14 @@
 from langchain_core.vectorstores import InMemoryVectorStore
+from langchain_core.documents import Document
 
 from stock_agent.retrieval.embeddings import build_embeddings
 
 
-def build_vector_store(documents):
-    embeddings = build_embeddings()
+def build_vector_store(
+    documents: list[Document],
+    embedding_model: str = "sentence-transformers/all-mpnet-base-v2",
+) -> InMemoryVectorStore:
+    embeddings = build_embeddings(embedding_model)
     store = InMemoryVectorStore(
         embedding=embeddings
     )

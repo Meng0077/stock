@@ -24,7 +24,7 @@ ResearchRequest → Agent 流式运行 → 收集已发生的工具事件
 | --- | --- |
 | 结构化输出 | 合法结果可收口；不合法的结构化工具参数在关闭框架修复时返回 `invalid_output` |
 | 证据归属 | 只接受本次成功白名单工具结果中的 ID；虚构引用返回 `invalid_evidence` |
-| 资料模式 | 与请求的 `data_mode` 核对，不匹配返回 `data_mode_mismatch` |
+| 资料模式 | 请求模式限制本轮成功工具证据；最终模式由实际引用反推，不匹配返回 `data_mode_mismatch` |
 | 模型预算 | 最多 3 轮；实际 Agent 重复请求工具后返回 `budget_exhausted` |
 | 工具预算 | 最多 4 次；超预算批次停止，不继续执行；返回 `budget_exhausted` |
 | 超时 | 单工具超时返回错误 ToolMessage；模型请求超时映射为 `model_timeout`；任务总时限为 20 秒，到期取消流并返回 `total_timeout` |

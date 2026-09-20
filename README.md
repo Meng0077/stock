@@ -75,7 +75,57 @@ python backend/examples/hello_model.py --model deliberately-invalid-model
 
 SDK 参考：https://docs.bigmodel.cn/cn/guide/develop/python/introduction
 
-## D01 完成标准
 
-真实模型请求可重复运行，打印分析结果、耗时和可获得的用量；至少验证一种失败路径。
-能解释输入构造、请求发送、输出解析及错误处理的位置。完成情况记录在 `docs/day01.md`。
+┌─────────────────────────────────────────────┐
+│                  React UI                   │
+│         提问 / 展示结论 / Evidence          │
+└──────────────────────┬──────────────────────┘
+                       │
+                       ▼
+┌─────────────────────────────────────────────┐
+│                FastAPI API                  │
+│     ResearchInput → ResearchRequest         │
+│     ResearchResponse / RunRecord            │
+└──────────────────────┬──────────────────────┘
+                       │
+                       ▼
+┌─────────────────────────────────────────────┐
+│             LangChain Agent                 │
+│                                             │
+│   理解问题                                  │
+│   ↓                                         │
+│   决定调用什么工具                          │
+│   ↓                                         │
+│   综合工具结果                              │
+│   ↓                                         │
+│   输出 ResearchOutput + EvidenceClaim       │
+└──────────────┬────────────┬────────────┬────┘
+               │            │            │
+               ▼            ▼            ▼
+        Knowledge Tool   Market Tool   Financial Tool
+               │            │            │
+               │            │            │
+               ▼            ▼            ▼
+             RAG        行情/技术面     结构化财务
+               │
+               ▼
+       SEC Document Pipeline
+
+
+
+SEC Documents
+       │
+       ▼
+ FilingDocument
+       │
+       ▼
+ FilingBlock
+       │
+       ▼
+ DocumentChunk
+       │
+       ▼
+ Embedding
+       │
+       ▼
+ PostgreSQL / pgvector

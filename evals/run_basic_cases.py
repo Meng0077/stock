@@ -279,7 +279,9 @@ def check_record(record: dict, expected: dict | None = None) -> list[str]:
     if output is not None:
         if output.get("status") != terminal.get("status"):
             errors.append("output_status_mismatch")
-        if output.get("data_mode") != record["input_snapshot"]["data_mode"]:
+        claims = output.get("facts", []) + output.get("inferences", [])
+        expected_mode = record["input_snapshot"]["data_mode"] if claims else None
+        if output.get("data_mode") != expected_mode:
             errors.append("data_mode_mismatch")
         for claim in output.get("facts", []) + output.get("inferences", []):
             if not set(claim.get("evidence_ids", [])) <= allowed_ids:

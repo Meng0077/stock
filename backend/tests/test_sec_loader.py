@@ -2,7 +2,7 @@ from datetime import date, datetime
 
 import pytest
 
-from stock_agent.documents import sec_loader
+from stock_agent.documents import sec_loader, sec_provider
 from stock_agent.documents.schemas import FilingFile, FilingMetadata
 
 
@@ -228,11 +228,11 @@ def test_get_filing_files_builds_index_and_document_urls(filing, monkeypatch):
         def raise_for_status(self):
             return None
 
-    def get(url, **kwargs):
-        requested.append((url, kwargs))
+    def get(url):
+        requested.append(url)
         return Response()
 
-    monkeypatch.setattr(sec_loader.httpx, "get", get)
+    monkeypatch.setattr(sec_provider, "get_sec", get)
 
     files = sec_loader.get_filing_files(filing)
 
@@ -240,8 +240,7 @@ def test_get_filing_files_builds_index_and_document_urls(filing, monkeypatch):
         "https://www.sec.gov/Archives/edgar/data/1045810/"
         "000104581026000075/"
     )
-    assert requested[0][0] == archive + "0001045810-26-000075-index.html"
-    assert requested[0][1]["timeout"] == 30.0
+    assert requested[0] == archive + "0001045810-26-000075-index.html"
     assert [file.document_url for file in files] == [
         archive + "nvda-20260726.htm",
         archive + "exhibit991.htm",

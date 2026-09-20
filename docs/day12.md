@@ -26,7 +26,7 @@ KnowledgeToolParams 复用现有公司参数约束，增加非空 question。工
 - 报价及公司资料的证据 ID 为 `E-…`，RAG 片段为 `rag:{company_id}:{文件名}:{片段序号}`。
 - 只从成功的 get_quote、get_company_profile、retrieve_knowledge ToolMessage 收集证据 ID。
 - ResearchOutput 只是结构化回答提交工具，不是新的证据来源；失败工具也不提供证据。
-- 最终 facts / inferences 中的所有引用必须属于本次实际提供的证据，fixture 模式不能被改为 live。
+- 最终 facts / inferences 中的所有引用必须属于本次实际提供的证据；请求模式限制本轮成功工具证据，最终模式由实际引用反推。
 - 找不到对应本地文件时返回空列表，不加载 Embedding 模型。Agent 据此返回 insufficient_information，并说明缺少公司资料。
 
 本次恢复了被注释的证据工具白名单，避免将结构化回答中的 ID 纳入允许引用的来源。无资料判断只处理文件不存在的业务情况，其他读取或程序异常继续传播，不增加通用异常兜底。

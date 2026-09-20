@@ -38,12 +38,12 @@ response.model: glm-4.7-flash
 len(response.choices): 1
 response.choices[0].finish_reason: stop
 response.choices[0].message.content:
-{"status":"insufficient_information","data_mode":"fixture","missing_information":["NVDA 报价","NVDA 公司资料"],"facts":[],"inferences":[]}
+{"status":"insufficient_information","data_mode":null,"missing_information":["NVDA 报价","NVDA 公司资料"],"facts":[],"inferences":[]}
 ResearchOutput.model_validate_json(content): 通过，status=insufficient_information
 usage: prompt_tokens=424, completion_tokens=58, total_tokens=482
 ```
 
-`response` 是 SDK 的完成对象；应在检查 `choices`、结束原因和正文后，将 `message.content` 字符串交给 Pydantic。`data_mode` 是本次提示给模型的模式，完整流程仍需由程序与实际资料核对。
+`response` 是 SDK 的完成对象；应在检查 `choices`、结束原因和正文后，将 `message.content` 字符串交给 Pydantic。该示例没有引用证据，所以当前契约要求 `data_mode=null`；完整流程仍需由程序根据实际引用的证据核对最终模式。
 
 ## Task 2 后续验证（2026-09-13）
 
