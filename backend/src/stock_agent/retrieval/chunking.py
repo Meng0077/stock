@@ -104,6 +104,6 @@ def split_filing_document(
     return chunks
 
 def build_evidence_id(
-    chunk: DocumentChunk,
+    chunk_id: str,
 ) -> str:
-    return f"rag:{chunk.chunk_id}"
+    return f"rag:{chunk_id}"

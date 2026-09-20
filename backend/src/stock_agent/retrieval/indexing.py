@@ -18,6 +18,16 @@ from stock_agent.retrieval.schemas import (
     build_index_config_id,
 )
 from stock_agent.retrieval.vector_store import build_vector_store
+from sqlalchemy.engine import Engine
+from stock_agent.storage.blocks import save_filing_blocks
+from stock_agent.storage.chunks import save_document_chunks
+from stock_agent.storage.database import (
+    create_database_engine,
+    create_database_tables,
+)
+from stock_agent.storage.documents import save_filing_document
+from stock_agent.storage.embeddings import save_chunk_embeddings
+from stock_agent.storage.indexes import get_company_index, save_company_index
 
 
 KNOWLEDGE_FORMS = SUPPORTED_FORMS | {"8-K"}
@@ -25,10 +35,11 @@ KNOWLEDGE_FORMS = SUPPORTED_FORMS | {"8-K"}
 
 def to_langchain_document(chunk: DocumentChunk) -> Document:
     return Document(
+        id=chunk.chunk_id,
         page_content=chunk.content,
         metadata={
             "chunk_id": chunk.chunk_id,
-            "evidence_id": build_evidence_id(chunk),
+            "evidence_id": build_evidence_id(chunk.chunk_id),
             "document_id": chunk.document_id,
             "document_content_hash": chunk.document_content_hash,
             "company_id": chunk.company_id,
@@ -53,6 +64,7 @@ def build_company_vector_store(
     return build_vector_store(
         to_langchain_documents(chunks),
         embedding_model=config.embedding_model,
+        embedding_revision=config.embedding_revision,
     )
 
 
@@ -60,7 +72,12 @@ def build_company_index(
     company_id: str,
     as_of: datetime,
     config: IndexConfig,
+    engine: Engine | None = None,
 ) -> CompanyIndexState:
+    if engine is None:
+        engine = create_database_engine()
+    create_database_tables(engine)
+
     filings = get_recent_filings(
         company_id,
         as_of,
@@ -79,21 +96,50 @@ def build_company_index(
 
     chunks = []
     for document in documents:
+        save_filing_document(engine, document)
+
+        save_filing_blocks(engine, document)
+
         chunks.extend(split_filing_document(document, config))
 
     if not chunks:
         raise ValueError(f"no chunks created for {company_id}")
+    save_document_chunks(engine, chunks, config)
 
+
+    vector_store = build_company_vector_store(chunks, config)
+    vectors = [
+        vector_store.store[chunk.chunk_id]["vector"]
+        for chunk in chunks
+    ]
+
+    index_config_id = build_index_config_id(config)
+    save_chunk_embeddings(
+        engine,
+        chunks,
+        vectors,
+        config,
+        index_config_id,
+    )
+    document_versions = {
+        document.document_id: document.content_hash
+        for document in documents
+    }
+    save_company_index(
+        engine=engine,
+        company_id=company_id,
+        as_of=as_of,
+        index_config_id=index_config_id,
+        document_versions=document_versions,
+        chunk_count=len(chunks),
+    )
     state = CompanyIndexState(
         company_id=company_id,
         as_of=as_of,
         config=config,
-        config_id=build_index_config_id(config),
-        document_versions={
-            document.document_id: document.content_hash
-            for document in documents
-        },
-        vector_store=build_company_vector_store(chunks, config),
+        config_id=index_config_id,
+        document_versions=document_versions,
+        vector_store=vector_store,
         chunk_count=len(chunks),
     )
     save_company_index_state(state)
@@ -104,15 +150,43 @@ def ensure_company_index(
     company_id: str,
     as_of: datetime | None = None,
     config: IndexConfig = DEFAULT_INDEX_CONFIG,
-) -> CompanyIndexState:
+    engine: Engine | None = None,
+) -> dict:
     company_id = company_id.upper()
-    config_id = build_index_config_id(config)
-    existing = get_latest_company_index_state(company_id, config_id, as_of)
-
-    if existing is not None:
-        return existing
-
+    if engine is None:
+        engine = create_database_engine()
     if as_of is None:
         as_of = datetime.now(timezone.utc)
 
-    return build_company_index(company_id, as_of, config)
+    index_config_id = build_index_config_id(config)
+
+    stored = get_company_index(
+        engine=engine,
+        company_id=company_id,
+        as_of=as_of,
+        index_config_id=index_config_id,
+    )
+
+    if stored is not None:
+        return stored
+
+    build_company_index(
+        engine=engine,
+        company_id=company_id,
+        as_of=as_of,
+        config=config,
+    )
+
+    stored = get_company_index(
+        engine=engine,
+        company_id=company_id,
+        as_of=as_of,
+        index_config_id=index_config_id,
+    )
+
+    if stored is None:
+        raise RuntimeError(
+            "company index was not persisted"
+        )
+
+    return stored

@@ -3,6 +3,7 @@
 import asyncio
 import json
 from typing import Any
+from unittest.mock import Mock
 from uuid import UUID
 
 import httpx
@@ -12,7 +13,6 @@ from langchain.agents.middleware.model_call_limit import ModelCallLimitExceededE
 from langchain.agents.middleware.tool_call_limit import ToolCallLimitExceededError
 from langchain.agents.structured_output import ToolStrategy
 from langchain.messages import AIMessage, HumanMessage, ToolMessage
-from langchain_core.documents import Document
 from langchain_core.language_models.fake_chat_models import (
     FakeMessagesListChatModel,
 )
@@ -146,27 +146,27 @@ def test_fake_model_completes_real_langchain_tool_loop(research_request):
 @pytest.mark.parametrize("company_id", ["NVDA", "TSLA"])
 def test_rag_tool_result_and_missing_documents_complete_agent_flow(monkeypatch, company_id):
     has_documents = company_id == "NVDA"
-
-    class FakeVectorStore:
-        def similarity_search(self, query, k):
-            if not has_documents:
-                return []
-            return [Document(
-                page_content="Data center revenue depends on AI infrastructure demand.",
-                metadata={
-                    "evidence_id": "rag:NVDA:nvda.txt:0",
-                    "company_id": "NVDA",
-                    "source_url": "https://example.com/nvda-filing.htm",
-                },
-            )]
-
-    class FakeIndexState:
-        vector_store = FakeVectorStore()
-
+    engine = Mock()
+    embeddings = Mock()
+    embeddings.embed_query.return_value = [0.1] * 768
+    monkeypatch.setattr(knowledge, "create_database_engine", lambda: engine)
     monkeypatch.setattr(
         knowledge,
         "ensure_company_index",
-        lambda actual_company_id, as_of=None: FakeIndexState(),
+        lambda **kwargs: {
+            "document_versions": {"nvda.txt": "content-hash"},
+        },
+    )
+    monkeypatch.setattr(knowledge, "build_embeddings", lambda *args: embeddings)
+    monkeypatch.setattr(
+        knowledge,
+        "search_similar_chunks",
+        lambda **kwargs: [{
+            "chunk_id": "NVDA:nvda.txt:0",
+            "company_id": "NVDA",
+            "document_id": "nvda.txt",
+            "content": "Data center revenue depends on AI infrastructure demand.",
+        }] if has_documents else [],
     )
 
     output = ResearchOutput(

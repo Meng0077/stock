@@ -69,9 +69,11 @@ async def retrieve_knowledge_tool(
     An empty list means no available evidence; report insufficient_information.
     """
     result = retrieve_knowledge(
+        engine=runtime.context.engine,
         company_id=company_id,
         question=question,
         as_of=runtime.context.as_of,
+        config=runtime.context.index_config,
     )
     return json.dumps(result, ensure_ascii=False)
 

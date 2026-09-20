@@ -1,13 +1,21 @@
 # from langchain_core.embeddings import FakeEmbeddings
 from langchain_huggingface import HuggingFaceEmbeddings
 
+from stock_agent.retrieval.schemas import (
+    DEFAULT_EMBEDDING_MODEL,
+    DEFAULT_EMBEDDING_REVISION,
+)
+
+
 def build_embeddings(
-    model_name: str = "sentence-transformers/all-mpnet-base-v2",
+    model_name: str = DEFAULT_EMBEDDING_MODEL,
+    model_revision: str = DEFAULT_EMBEDDING_REVISION,
 ):
     return HuggingFaceEmbeddings(
         model_name=model_name,
         model_kwargs={
             "device": "cpu",
+            "revision": model_revision,
         },
         encode_kwargs={
             "normalize_embeddings": True,

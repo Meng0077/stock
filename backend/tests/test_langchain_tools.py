@@ -126,8 +126,8 @@ def test_knowledge_adapter_uses_runtime_as_of(monkeypatch):
     calls = []
     documents = [{"evidence_id": "rag:NVDA:nvda.txt:2", "content": "AI infrastructure demand"}]
 
-    def fake_retrieve_knowledge(company_id, question, as_of):
-        calls.append((company_id, question, as_of))
+    def fake_retrieve_knowledge(company_id, question, as_of, *, engine, config):
+        calls.append((company_id, question, as_of, engine, config))
         return documents
 
     monkeypatch.setattr(langchain_tools, "retrieve_knowledge", fake_retrieve_knowledge)
@@ -138,9 +138,15 @@ def test_knowledge_adapter_uses_runtime_as_of(monkeypatch):
         "question",
     }
     as_of = datetime(2026, 9, 17, tzinfo=timezone.utc)
+    engine = object()
+    index_config = ResearchContext(as_of=as_of).index_config
     runtime = ToolRuntime(
         state={},
-        context=ResearchContext(as_of=as_of),
+        context=ResearchContext(
+            as_of=as_of,
+            engine=engine,
+            index_config=index_config,
+        ),
         config={},
         stream_writer=lambda _: None,
         tool_call_id="call-rag",
@@ -155,5 +161,7 @@ def test_knowledge_adapter_uses_runtime_as_of(monkeypatch):
         "NVDA",
         "What drives data center revenue?",
         as_of,
+        engine,
+        index_config,
     )]
     assert json.loads(result) == documents
