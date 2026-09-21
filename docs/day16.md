@@ -141,7 +141,7 @@ PYTHONPATH=backend/src backend/.venv/bin/python -m pytest \
 - 查询只搜索 `company_indexes.document_versions` 指定的文档版本。
 - 进程重启后，`--mode reuse` 不重建索引也能返回结果和原始 SEC 来源。
 
-Day17 再处理 filing freshness 和增量更新；Day16 只负责完整索引的持久化与复用。
+Day16 只负责完整索引的持久化与复用；filing freshness 和增量更新已经在 [Day17](day17.md) 完成核心实现与固定验收。
 
 
 

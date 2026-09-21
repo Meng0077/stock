@@ -23,7 +23,10 @@ from stock_agent.storage.embeddings import (
     save_chunk_embeddings,
     search_similar_chunks,
 )
-from stock_agent.storage.indexes import get_company_index
+from stock_agent.storage.indexes import (
+    get_company_index,
+    get_latest_compatible_company_index,
+)
 
 
 def test_split_filing_document_returns_traceable_chunks():
@@ -293,78 +296,248 @@ def test_retrieve_knowledge_passes_runtime_dependencies_to_index(monkeypatch):
     }]
 
 
-def test_implicit_as_of_reuses_existing_stored_index(monkeypatch):
+def test_ensure_company_index_reuses_exact_snapshot(monkeypatch):
     engine = Mock()
-    calls = []
-    stored = {
+    as_of = datetime(2026, 9, 19, tzinfo=timezone.utc)
+    exact_index = {
         "company_id": "NVDA",
-        "as_of": datetime(2026, 9, 19, tzinfo=timezone.utc),
+        "as_of": as_of,
         "index_config_id": build_index_config_id(DEFAULT_INDEX_CONFIG),
         "document_versions": {"document": "hash"},
         "chunk_count": 1,
     }
-    query_results = iter([None, stored, stored])
+    latest = Mock()
+    build = Mock()
+    monkeypatch.setattr(indexing, "get_company_index", Mock(return_value=exact_index))
+    monkeypatch.setattr(indexing, "get_latest_compatible_company_index", latest)
+    monkeypatch.setattr(indexing, "build_company_index", build)
 
-    def fake_build_company_index(**kwargs):
-        calls.append(kwargs)
+    result = indexing.ensure_company_index(
+        "nvda",
+        as_of,
+        engine=engine,
+    )
 
-    monkeypatch.setattr(indexing, "create_database_engine", lambda: engine)
-    monkeypatch.setattr(indexing, "get_company_index", lambda **kwargs: next(query_results))
-    monkeypatch.setattr(indexing, "build_company_index", fake_build_company_index)
-
-    first = indexing.ensure_company_index("nvda")
-    second = indexing.ensure_company_index("NVDA")
-
-    assert first is second
-    assert len(calls) == 1
-    assert calls[0]["company_id"] == "NVDA"
-    assert calls[0]["as_of"].utcoffset() is not None
-    assert calls[0]["config"] == DEFAULT_INDEX_CONFIG
-    assert calls[0]["engine"] is engine
+    assert result is exact_index
+    latest.assert_not_called()
+    build.assert_not_called()
 
 
-def test_as_of_reuse_respects_time_boundary(monkeypatch):
+def test_ensure_company_index_full_builds_without_compatible_snapshot(monkeypatch):
     engine = Mock()
-    calls = []
-    stored_indexes = []
+    as_of = datetime(2026, 9, 19, tzinfo=timezone.utc)
+    stored = {"document_versions": {"document": "hash"}}
+    exact_results = iter([None, stored])
+    build = Mock()
+    sec_metadata = Mock()
+    monkeypatch.setattr(
+        indexing,
+        "get_company_index",
+        Mock(side_effect=lambda **kwargs: next(exact_results)),
+    )
+    monkeypatch.setattr(
+        indexing,
+        "get_latest_compatible_company_index",
+        Mock(return_value=None),
+    )
+    monkeypatch.setattr(indexing, "build_company_index", build)
+    monkeypatch.setattr(indexing, "get_recent_filings", sec_metadata)
 
-    def fake_get_company_index(engine, company_id, as_of, index_config_id):
-        matches = [
-            index
-            for index in stored_indexes
-            if index["company_id"] == company_id
-            and index["as_of"] <= as_of
-            and index["index_config_id"] == index_config_id
-        ]
-        return max(matches, key=lambda index: index["as_of"], default=None)
+    result = indexing.ensure_company_index(
+        "NVDA",
+        as_of,
+        engine=engine,
+    )
 
-    def fake_build_company_index(**kwargs):
-        calls.append(kwargs)
-        stored_indexes.append({
-            "company_id": kwargs["company_id"],
-            "as_of": kwargs["as_of"],
-            "index_config_id": build_index_config_id(kwargs["config"]),
-            "document_versions": {"document": "hash"},
-            "chunk_count": 1,
-        })
-
-    monkeypatch.setattr(indexing, "create_database_engine", lambda: engine)
-    monkeypatch.setattr(indexing, "get_company_index", fake_get_company_index)
-    monkeypatch.setattr(indexing, "build_company_index", fake_build_company_index)
-    first_as_of = datetime(2026, 9, 18, tzinfo=timezone.utc)
-    later_as_of = datetime(2026, 9, 19, tzinfo=timezone.utc)
-    earlier_as_of = datetime(2026, 9, 17, tzinfo=timezone.utc)
-
-    first = indexing.ensure_company_index("NVDA", first_as_of)
-    later = indexing.ensure_company_index("NVDA", later_as_of)
-    earlier = indexing.ensure_company_index("NVDA", earlier_as_of)
-
-    assert later is first
-    assert earlier is not first
-    assert len(calls) == 2
+    assert result is stored
+    build.assert_called_once_with(
+        engine=engine,
+        company_id="NVDA",
+        as_of=as_of,
+        config=DEFAULT_INDEX_CONFIG,
+    )
+    sec_metadata.assert_not_called()
 
 
-def test_get_company_index_selects_latest_version_before_as_of():
+def test_ensure_company_index_writes_snapshot_when_no_new_filings(monkeypatch):
+    engine = Mock()
+    as_of = datetime(2026, 9, 19, tzinfo=timezone.utc)
+    base_index = {
+        "document_versions": {"old-document": "old-hash"},
+        "chunk_count": 4,
+    }
+    stored = {**base_index, "as_of": as_of}
+    exact_results = iter([None, stored])
+    old_filing = Mock(accession_number="old-accession")
+    save_snapshot = Mock()
+    process = Mock()
+    embed = Mock()
+    monkeypatch.setattr(
+        indexing,
+        "get_company_index",
+        Mock(side_effect=lambda **kwargs: next(exact_results)),
+    )
+    monkeypatch.setattr(
+        indexing,
+        "get_latest_compatible_company_index",
+        Mock(return_value=base_index),
+    )
+    monkeypatch.setattr(
+        indexing,
+        "get_indexed_accession_numbers",
+        Mock(return_value={"old-accession"}),
+    )
+    monkeypatch.setattr(
+        indexing,
+        "get_recent_filings",
+        Mock(return_value=[old_filing]),
+    )
+    monkeypatch.setattr(indexing, "process_new_filings", process)
+    monkeypatch.setattr(indexing, "embed_new_chunks", embed)
+    monkeypatch.setattr(indexing, "save_company_index", save_snapshot)
+
+    result = indexing.ensure_company_index(
+        "NVDA",
+        as_of,
+        engine=engine,
+    )
+
+    assert result is stored
+    process.assert_not_called()
+    embed.assert_not_called()
+    save_snapshot.assert_called_once_with(
+        engine=engine,
+        company_id="NVDA",
+        as_of=as_of,
+        index_config_id=build_index_config_id(DEFAULT_INDEX_CONFIG),
+        document_versions=base_index["document_versions"],
+        chunk_count=4,
+    )
+
+
+def test_ensure_company_index_adds_new_filings_to_snapshot(monkeypatch):
+    engine = Mock()
+    as_of = datetime(2026, 9, 19, tzinfo=timezone.utc)
+    base_index = {
+        "document_versions": {"old-document": "old-hash"},
+        "chunk_count": 4,
+    }
+    stored = {
+        "document_versions": {
+            "old-document": "old-hash",
+            "new-document": "new-hash",
+        },
+        "chunk_count": 6,
+    }
+    exact_results = iter([None, stored])
+    old_filing = Mock(accession_number="old-accession")
+    new_filing = Mock(accession_number="new-accession")
+    new_chunks = [Mock(), Mock()]
+    process = Mock(
+        return_value=(
+            {"new-document": "new-hash"},
+            new_chunks,
+        ),
+    )
+    embed = Mock()
+    save_snapshot = Mock()
+    monkeypatch.setattr(
+        indexing,
+        "get_company_index",
+        Mock(side_effect=lambda **kwargs: next(exact_results)),
+    )
+    monkeypatch.setattr(
+        indexing,
+        "get_latest_compatible_company_index",
+        Mock(return_value=base_index),
+    )
+    monkeypatch.setattr(
+        indexing,
+        "get_indexed_accession_numbers",
+        Mock(return_value={"old-accession"}),
+    )
+    monkeypatch.setattr(
+        indexing,
+        "get_recent_filings",
+        Mock(return_value=[old_filing, new_filing]),
+    )
+    monkeypatch.setattr(indexing, "process_new_filings", process)
+    monkeypatch.setattr(indexing, "embed_new_chunks", embed)
+    monkeypatch.setattr(indexing, "save_company_index", save_snapshot)
+
+    result = indexing.ensure_company_index(
+        "NVDA",
+        as_of,
+        engine=engine,
+    )
+
+    assert result is stored
+    process.assert_called_once_with(
+        engine,
+        [new_filing],
+        DEFAULT_INDEX_CONFIG,
+    )
+    embed.assert_called_once_with(
+        engine,
+        new_chunks,
+        DEFAULT_INDEX_CONFIG,
+    )
+    save_snapshot.assert_called_once_with(
+        engine=engine,
+        company_id="NVDA",
+        as_of=as_of,
+        index_config_id=build_index_config_id(DEFAULT_INDEX_CONFIG),
+        document_versions={
+            "old-document": "old-hash",
+            "new-document": "new-hash",
+        },
+        chunk_count=6,
+    )
+
+
+def test_process_new_filings_persists_chunks_with_config(monkeypatch):
+    engine = Mock()
+    filing = Mock()
+    document = Mock(
+        document_id="new-document",
+        content_hash="new-hash",
+    )
+    chunks = [Mock()]
+    save_document = Mock()
+    save_blocks = Mock()
+    save_chunks = Mock()
+    monkeypatch.setattr(
+        indexing,
+        "load_relevant_filing_documents",
+        Mock(return_value=[document]),
+    )
+    monkeypatch.setattr(indexing, "save_filing_document", save_document)
+    monkeypatch.setattr(indexing, "save_filing_blocks", save_blocks)
+    monkeypatch.setattr(
+        indexing,
+        "split_filing_document",
+        Mock(return_value=chunks),
+    )
+    monkeypatch.setattr(indexing, "save_document_chunks", save_chunks)
+
+    document_versions, new_chunks = indexing.process_new_filings(
+        engine,
+        [filing],
+        DEFAULT_INDEX_CONFIG,
+    )
+
+    assert document_versions == {"new-document": "new-hash"}
+    assert new_chunks == chunks
+    save_document.assert_called_once_with(engine, document)
+    save_blocks.assert_called_once_with(engine, document)
+    save_chunks.assert_called_once_with(
+        engine,
+        chunks,
+        DEFAULT_INDEX_CONFIG,
+    )
+
+
+def test_get_company_index_selects_exact_snapshot():
     engine = MagicMock()
     connection = engine.connect.return_value.__enter__.return_value
     connection.execute.return_value.mappings.return_value.one_or_none.return_value = None
@@ -375,7 +548,28 @@ def test_get_company_index_selects_latest_version_before_as_of():
     statement = connection.execute.call_args.args[0]
     sql = str(statement)
     params = statement.compile().params
-    assert "company_indexes.as_of <=" in sql
+    assert "company_indexes.as_of =" in sql
+    assert "ORDER BY" not in sql
+    assert params["as_of_1"] == as_of
+
+
+def test_get_latest_compatible_company_index_selects_previous_snapshot():
+    engine = MagicMock()
+    connection = engine.connect.return_value.__enter__.return_value
+    connection.execute.return_value.mappings.return_value.one_or_none.return_value = None
+    as_of = datetime(2026, 9, 19, tzinfo=timezone.utc)
+
+    get_latest_compatible_company_index(
+        engine,
+        "NVDA",
+        as_of,
+        "config-id",
+    )
+
+    statement = connection.execute.call_args.args[0]
+    sql = str(statement)
+    params = statement.compile().params
+    assert "company_indexes.as_of <" in sql
     assert "ORDER BY company_indexes.as_of DESC" in sql
     assert params["as_of_1"] == as_of
     assert params["param_1"] == 1

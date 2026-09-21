@@ -47,7 +47,29 @@ def get_company_index(
         select(company_indexes)
         .where(
             company_indexes.c.company_id == company_id,
-            company_indexes.c.as_of <= as_of,
+            company_indexes.c.as_of == as_of,
+            company_indexes.c.index_config_id == index_config_id,
+        )
+    )
+
+    with engine.connect() as connection:
+        row = connection.execute(statement).mappings().one_or_none()
+
+    return dict(row) if row else None
+
+
+# 根据 company_id + as_of + index_config_id， 查找之前有没有存储过
+def get_latest_compatible_company_index(
+    engine: Engine,
+    company_id: str,
+    as_of: datetime,
+    index_config_id: str,
+) -> dict | None:
+    statement = (
+        select(company_indexes)
+        .where(
+            company_indexes.c.company_id == company_id,
+            company_indexes.c.as_of < as_of,
             company_indexes.c.index_config_id == index_config_id,
         )
         .order_by(company_indexes.c.as_of.desc())

@@ -1,6 +1,6 @@
 from sqlalchemy.engine import Engine
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy import select
+from sqlalchemy import select, tuple_
 
 from stock_agent.documents.schemas import FilingDocument
 from stock_agent.storage.tables import filing_documents
@@ -54,3 +54,45 @@ def get_filing_document(
         return None
 
     return dict(row)
+
+# 根据document_versions 查询 documents
+def get_document_versions(
+    engine: Engine,
+    document_versions: dict[str, str],
+) -> list[dict]:
+    if not document_versions:
+        return []
+
+    version_pairs = [
+        (
+            document_id,
+            content_hash,
+        )
+        for document_id, content_hash
+        in document_versions.items()
+    ]
+
+    statement = select(
+        filing_documents
+    ).where(
+        tuple_(
+            filing_documents.c.document_id,
+            filing_documents.c.content_hash,
+        ).in_(version_pairs)
+    )
+
+    with engine.connect() as connection:
+        rows = connection.execute(statement).mappings().all()
+
+    return [dict(row) for row in rows]
+
+# 根据document_versions 先查询 documents，最终得到accession_number
+def get_indexed_accession_numbers(
+    engine: Engine,
+    document_versions: dict[str, str],
+) -> set[str]:
+    documents = get_document_versions(engine, document_versions)
+    return {
+        document["accession_number"]
+        for document in documents
+    }
