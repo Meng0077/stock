@@ -3,7 +3,7 @@
 - 版本：v3.2，2026-09-21；保留任意美股 ticker 的按需索引，明确 Technical Analysis Engine 与 Decision Engine 的衔接。
 - 定位：面向 Agent 开发岗位的可演示项目；模型负责理解问题、调用只读工具、检索资料和解释结果，行情计算、决策规则与仓位风险检查由可复现的 Python 模块完成。
 - 排期：面试版 10 周、50 个开发日、约 200 小时；按每天 4 小时、每周 5 天估算。若 Python 异步、数据源接入或部署比预期慢，另留 1–2 周缓冲。
-- 当前进度：D11–D15 已完成本地 RAG、通用 Knowledge Tool、SEC Provider、HTML 解析和任意 ticker 的首次按需索引，见对应 day 文档；中文检索、SEC 历史清单及无匹配资料的细分原因等已记录遗留项继续保留。D16 已完成 PostgreSQL / pgvector 的原文、chunk、embedding 和索引快照持久化。D17 已完成 exact snapshot、latest compatible snapshot、按 accession 增量更新和历史检索时间边界。D18 已完成最小 SEC Company Facts、Financial Tool、精确数值存储及 Financial / Knowledge evidence 组合校验。D21 已完成 MarketDataProvider、Quote / Bar 契约和离线 Fixture 验收，见 docs/day21_22.md。D19、D20 延后，当前继续处理 D22 真实行情提供方。
+- 当前进度：D11–D15 已完成本地 RAG、通用 Knowledge Tool、SEC Provider、HTML 解析和任意 ticker 的首次按需索引，见对应 day 文档；中文检索、SEC 历史清单及无匹配资料的细分原因等已记录遗留项继续保留。D16 已完成 PostgreSQL / pgvector 的原文、chunk、embedding 和索引快照持久化。D17 已完成 exact snapshot、latest compatible snapshot、按 accession 增量更新和历史检索时间边界。D18 已完成最小 SEC Company Facts、Financial Tool、精确数值存储及 Financial / Knowledge evidence 组合校验。D21 已完成 MarketDataProvider、Quote / Bar 契约和离线 Fixture 验收。D22 已完成 Longbridge 适配器、离线测试及 NVDA / AMD 真实在线验收。D19、D20 延后。
 
 本文是拟开发计划。目录、接口和演示能力只有在代码实现并验收后才算完成；不能把 fixture、历史数据或延迟数据标成实时行情。
 
@@ -403,4 +403,4 @@ HTTP 客户端在合适生命周期内复用；异步数据库 session 按请求
 - [ ] README、启动环境、固定评估、故障记录和 5–8 分钟演示可供面试复现。
 - [ ] 首版无订单提交与自动交易路径；后续阶段以独立计划推进。
 
-D16–D18 的持久化、增量索引、最小结构化财务查询和 Financial / Knowledge evidence 组合核心链路已经完成。D21 的统一行情契约和离线 Fixture 验收已经完成；D19、D20 延后处理，下一步继续 D22 的真实行情提供方。D13 的历史清单和无匹配资料原因仍保留为遗留项。D14 的附件范围限制为 6-K / 6-K/A 的 HTML EX-99，其他附件不声称覆盖。D17 当前不声称覆盖完整 SEC 历史、并发生产构建锁或独立 freshness 监控。已有代码与记录继续保留，未验收项仍需追踪。
+D16–D18 的持久化、增量索引、最小结构化财务查询和 Financial / Knowledge evidence 组合核心链路已经完成。D21 的统一行情契约和离线 Fixture 验收已经完成。D22 的 Longbridge 适配器、离线测试及 NVDA / AMD 真实在线验收已经完成；D19、D20 延后处理。D13 的历史清单和无匹配资料原因仍保留为遗留项。D14 的附件范围限制为 6-K / 6-K/A 的 HTML EX-99，其他附件不声称覆盖。D17 当前不声称覆盖完整 SEC 历史、并发生产构建锁或独立 freshness 监控。已有代码与记录继续保留，未验收项仍需追踪。

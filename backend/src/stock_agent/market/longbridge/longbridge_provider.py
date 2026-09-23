@@ -101,7 +101,7 @@ class LongbridgeMarketDataProvider:
             raw_quote,
             received_at=received_at,
             as_of=as_of,
-            is_delayed=False
+            is_delayed=None,
         )
 
 
@@ -153,7 +153,10 @@ class LongbridgeMarketDataProvider:
 
         longbridge_symbol = to_longbridge_symbol(symbol)
         period = to_longbridge_period(timeframe)
-        request_count = min(limit, 1000)
+        request_count = min(
+            limit if include_incomplete else limit + 1,
+            1000,
+        )
         try:
             if include_incomplete:
                 raw_bars = self._quote_context.candlesticks(
@@ -175,10 +178,8 @@ class LongbridgeMarketDataProvider:
                 )
         except OpenApiException as exc:
             raise MarketDataProviderError(
-                f"Longbridge quote request failed: code={exc.code}, message={exc.message}"
+                f"Longbridge bar request failed: code={exc.code}, message={exc.message}"
             ) from exc
-
-
         received_at = datetime.now(timezone.utc)
 
         bars = [
@@ -188,15 +189,14 @@ class LongbridgeMarketDataProvider:
                 timeframe=timeframe,
                 received_at=received_at,
                 as_of=as_of,
-            ) for raw_bar in raw_bars
+            )
+            for raw_bar in raw_bars
         ]
-
-        # 当前 Day22 不做历史盘中 replay。
-        #
-        # completed-only 时，
-        # 只允许已经结束的 K 线。
-
-        if not include_incomplete:
-            bars = [ bar for bar in bars if bar.is_complete]
+        bars = [
+            bar
+            for bar in bars
+            if bar.start_at <= as_of
+            and (bar.is_complete or include_incomplete)
+        ]
         bars.sort(key=lambda bar: bar.start_at)
         return bars[-limit:]

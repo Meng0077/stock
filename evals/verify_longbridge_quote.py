@@ -9,15 +9,22 @@ from datetime import (
     timedelta,
     timezone,
 )
+from pathlib import Path
 
-from stock_agent.market.longbridge_provider import (
+from dotenv import load_dotenv
+
+from stock_agent.market.longbridge.config_factory import (
     build_longbridge_market_provider,
 )
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def verify_longbridge_quote() -> None:
     """验证 NVDA 能返回统一 Quote。"""
 
+    load_dotenv(ROOT / "backend" / ".env", override=False)
     provider = (
         build_longbridge_market_provider()
     )
