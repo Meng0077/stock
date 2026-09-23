@@ -13,7 +13,7 @@ from stock_agent.llm_client import (
 
 from stock_agent.tools.registry import TOOL_REGISTRY, execute_tool
 
-TOOL_TIMEOUT_SECONDS = 15
+TOOL_TIMEOUT_SECONDS = 30
 
 
 def build_tool_definitions() -> list[dict[str, Any]]:

@@ -16,6 +16,7 @@ def build_embeddings(
         model_kwargs={
             "device": "cpu",
             "revision": model_revision,
+            "local_files_only": True,
         },
         encode_kwargs={
             "normalize_embeddings": True,

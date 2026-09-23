@@ -30,4 +30,14 @@ def main():
     )
 
 if __name__ == "__main__":
+    from stock_agent.storage.database import (
+        create_database_engine,
+        create_database_tables,
+    )
+
+    engine = create_database_engine()
+
+    create_database_tables(engine)
+
+    print("tables created")
     main()

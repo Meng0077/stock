@@ -1,8 +1,10 @@
 """D07 Step 5：离线验证 LangChain Tool adapter 与现有 registry 的边界。"""
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+from decimal import Decimal
 import json
+from unittest.mock import Mock
 
 import pytest
 from langchain.tools import ToolRuntime
@@ -10,6 +12,7 @@ from pydantic import ValidationError
 
 from stock_agent.agents.langchain import langchain_tools
 from stock_agent.agents.context import ResearchContext
+from stock_agent.financial.schemas import FinancialFact
 from stock_agent.schemas.tool_params import CompanyToolParams, KnowledgeToolParams
 from stock_agent.tools.registry import TOOL_REGISTRY, execute_tool
 
@@ -25,8 +28,12 @@ def tools_by_name():
 def test_build_langchain_tools_returns_exact_allowlist():
     tools = langchain_tools.build_langchain_tools()
 
-    assert [tool.name for tool in tools] == [*TOOL_NAMES, "retrieve_knowledge"]
-    assert len({tool.name for tool in tools}) == len(TOOL_NAMES) + 1
+    assert [tool.name for tool in tools] == [
+        *TOOL_NAMES,
+        "retrieve_knowledge",
+        "get_financial_facts",
+    ]
+    assert len({tool.name for tool in tools}) == len(TOOL_NAMES) + 2
 
 
 @pytest.mark.parametrize("tool_name", TOOL_NAMES)
@@ -165,3 +172,66 @@ def test_knowledge_adapter_uses_runtime_as_of(monkeypatch):
         index_config,
     )]
     assert json.loads(result) == documents
+
+
+def test_financial_adapter_uses_runtime_context(monkeypatch):
+    fact = FinancialFact(
+        fact_id="financial:test",
+        company_id="NVDA",
+        concept="NetIncomeLoss",
+        value=Decimal("18775000000"),
+        unit="USD",
+        start_date=date(2026, 1, 26),
+        end_date=date(2026, 4, 26),
+        filed_date=date(2026, 5, 28),
+        form="10-Q",
+        accession_number="0001045810-26-000001",
+        fiscal_year=2027,
+        fiscal_period="Q1",
+        frame="CY2026Q1",
+    )
+    get_facts = Mock(return_value=[fact])
+    monkeypatch.setattr(langchain_tools, "get_financial_facts", get_facts)
+
+    as_of = datetime(2026, 9, 17, tzinfo=timezone.utc)
+    engine = object()
+    sec_client = object()
+    runtime = ToolRuntime(
+        state={},
+        context=ResearchContext(
+            as_of=as_of,
+            engine=engine,
+            sec_client=sec_client,
+        ),
+        config={},
+        stream_writer=lambda _: None,
+        tool_call_id="call-financial",
+        store=None,
+    )
+
+    tool = tools_by_name()["get_financial_facts"]
+    assert set(tool.tool_call_schema.model_json_schema()["properties"]) == {
+        "company_id",
+        "concept",
+        "unit",
+        "period_type",
+    }
+    result = tool.func(
+        company_id="NVDA",
+        concept="NetIncomeLoss",
+        unit="USD",
+        period_type="quarterly",
+        runtime=runtime,
+    )
+
+    get_facts.assert_called_once_with(
+        engine=engine,
+        client=sec_client,
+        company_id="NVDA",
+        concept="NetIncomeLoss",
+        unit="USD",
+        as_of=date(2026, 9, 17),
+        period_type="quarterly",
+    )
+    assert result["data_mode"] == "historical"
+    assert result["facts"][0]["evidence_id"] == "financial:test"

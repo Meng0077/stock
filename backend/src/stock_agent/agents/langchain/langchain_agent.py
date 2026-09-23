@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
+import json
 from typing import Any
 import uuid
 
@@ -17,13 +18,17 @@ from langchain.agents.middleware import (
 )
 from langchain.messages import AIMessage
 
+from stock_agent.agents.evidence import (
+    collect_evidence_data_modes,
+    validate_evidence,
+    collect_evidence_ids,
+)
+from stock_agent.documents.sec_http import SEC_CLIENT
+from stock_agent.storage.database import create_database_engine
 from stock_agent.agents.context import ResearchContext
 from stock_agent.agents.structured_output import (
     EvidenceValidationError,
     IncompleteResponseError,
-    collect_evidence_data_modes,
-    collect_evidence_ids,
-    validate_evidence,
 )
 from stock_agent.schemas.errors import make_public_error, map_error
 from stock_agent.agents.langchain.langchain_tools import (
@@ -38,6 +43,15 @@ SYSTEM_PROMPT = """
 
 回答股票相关事实时，必须优先使用提供的工具获取证据，
 不要仅依赖模型记忆回答公司事实。
+
+对于收入、净利润、资产、股东权益等明确的结构化财务数值，
+优先使用 Financial Tool，不要仅依靠 Filing 文本推测数值。
+
+对于管理层解释、业务原因、风险因素、MD&A 等文本信息，
+使用 Knowledge Tool。
+
+如果用户的问题同时要求财务数值和文本解释，
+可以同时调用 Financial Tool 和 Knowledge Tool。
 
 工具使用规则：
 
@@ -65,7 +79,7 @@ SYSTEM_PROMPT = """
 MAX_MODEL_ROUNDS = 3
 MAX_TOOL_CALLS = 4
 
-TASK_TIMEOUT_SECONDS = 60
+TASK_TIMEOUT_SECONDS = 300
 
 
 @wrap_model_call
@@ -127,31 +141,40 @@ def build_langchain_agent(
 async def invoke_langchain_agent(
     agent: Any,
     request: ResearchRequest,
+    engine=None,
 ) -> dict[str, Any]:
     """运行 Agent。"""
     async with asyncio.timeout(TASK_TIMEOUT_SECONDS):
         return await agent.ainvoke(
             build_agent_input(request),
-            context=ResearchContext(as_of=request.as_of),
+            context=ResearchContext(
+                as_of=request.as_of,
+                engine=engine,
+                sec_client=SEC_CLIENT,
+                ),
         )
 
 
 async def run_research(
     agent,
     request: ResearchRequest,
+    engine=None,
 ):
     """运行边界：统一返回运行身份、终态、结果、安全错误和事件。"""
     run_id = str(uuid.uuid4())
     events = [{"type": "run_started", "run_id": run_id}]
     latest_state = build_agent_input(request)
     runtime_error = None
-
     try:
         async with asyncio.timeout(TASK_TIMEOUT_SECONDS):
             async for state in agent.astream(
                 latest_state,
                 stream_mode="values",
-                context=ResearchContext(as_of=request.as_of),
+                context=ResearchContext(
+                        as_of=request.as_of,
+                        engine=engine,
+                        sec_client=SEC_CLIENT,
+                    ),
             ):
                 latest_state = state
     # 此运行边界负责把 runtime 异常转换成不含原始异常的公开失败。
@@ -161,19 +184,34 @@ async def run_research(
     events.extend(collect_tool_events(latest_state["messages"], run_id))
     output = None
     public_error = None
-
     if runtime_error is not None:
         public_error = make_public_error(map_error(runtime_error)).model_dump()
     else:
         output = latest_state["structured_response"]
+
+        # print(
+        #     json.dumps(
+        #         output,
+        #         ensure_ascii=False,
+        #         indent=2,
+        #         default=str,
+        #     )
+        # )
+
         try:
             allowed_ids = collect_evidence_ids(latest_state["messages"])
             evidence_modes = collect_evidence_data_modes(latest_state["messages"])
+            if engine is None and any(
+                evidence_id.startswith(("rag:", "financial:"))
+                for evidence_id in allowed_ids
+            ):
+                engine = create_database_engine()
             validate_evidence(
                 output,
                 allowed_ids,
                 evidence_modes,
                 request.data_mode,
+                engine=engine
             )
         except EvidenceValidationError as error:
             public_error = make_public_error(map_error(error)).model_dump()

@@ -21,8 +21,8 @@ from pydantic import ValidationError
 
 from stock_agent.agents.structured_output import (
     EvidenceValidationError,
-    validate_evidence,
 )
+from stock_agent.agents.evidence import validate_evidence
 from stock_agent.agents.tool_calling import (
     ToolCallProtocolError,
     build_tool_definitions,

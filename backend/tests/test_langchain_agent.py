@@ -28,7 +28,7 @@ from stock_agent.agents.langchain.langchain_agent import (
     run_research,
 )
 from stock_agent.agents.langchain.langchain_tools import build_langchain_tools
-from stock_agent.agents.structured_output import collect_evidence_ids, validate_evidence
+from stock_agent.agents.evidence import collect_evidence_ids, validate_evidence
 from stock_agent.schemas.research import ResearchRequest
 from stock_agent.schemas.research_output import ResearchOutput
 from stock_agent.schemas.errors import make_public_error
@@ -119,7 +119,12 @@ def test_fake_model_completes_real_langchain_tool_loop(research_request):
     state = asyncio.run(invoke_langchain_agent(agent, research_request))
     messages = state["messages"]
 
-    assert model.bound_tool_names == ["get_quote", "get_company_profile", "retrieve_knowledge"]
+    assert model.bound_tool_names == [
+        "get_quote",
+        "get_company_profile",
+        "retrieve_knowledge",
+        "get_financial_facts",
+    ]
     assert [type(message) for message in messages] == [
         HumanMessage,
         AIMessage,
@@ -168,6 +173,10 @@ def test_rag_tool_result_and_missing_documents_complete_agent_flow(monkeypatch, 
             "content": "Data center revenue depends on AI infrastructure demand.",
         }] if has_documents else [],
     )
+    monkeypatch.setattr(
+        "stock_agent.agents.evidence.resolve_rag_evidence",
+        lambda **kwargs: object(),
+    )
 
     output = ResearchOutput(
         status="completed" if has_documents else "insufficient_information",
@@ -198,7 +207,7 @@ def test_rag_tool_result_and_missing_documents_complete_agent_flow(monkeypatch, 
         data_mode="mixed",
         as_of="2026-09-17T00:00:00+08:00",
     )
-    result = asyncio.run(run_research(agent, request))
+    result = asyncio.run(run_research(agent, request, engine=engine))
     assert result["error"] is None
     assert result["status"] == output.status
     assert result["output"] == output

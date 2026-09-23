@@ -1,7 +1,7 @@
 from sqlalchemy import select, tuple_
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.engine import Engine
-
+from sqlalchemy.exc import SQLAlchemyError
 from stock_agent.documents.schemas import DocumentChunk
 from stock_agent.retrieval.schemas import IndexConfig
 from stock_agent.storage.tables import (
@@ -62,10 +62,24 @@ def save_chunk_embeddings(
     ).returning(
         chunk_embeddings.c.chunk_id,
     )
+    try:
+        with engine.begin() as connection:
+            result = connection.execute(statement)
+    except SQLAlchemyError as e:
+        """只打印数据库返回的真正错误，不打印整个巨大 SQL。"""
 
-    with engine.begin() as connection:
-        result = connection.execute(statement)
-        return len(result.all())
+        print("SQLAlchemy error:")
+        print(type(e).__name__)
+
+        print("\nDBAPI error:")
+        print(type(e.orig).__name__)
+        print(e.orig)
+
+        print("\nSQLAlchemy code:")
+        print(e.code)
+
+        raise
+    return len(result.all())
 
 def search_similar_chunks(
     engine: Engine,

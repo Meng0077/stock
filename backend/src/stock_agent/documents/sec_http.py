@@ -77,12 +77,18 @@ def retry_delay(attempt: int, response: httpx.Response | None = None) -> float:
     return (2 ** attempt) + random.uniform(0.0, 0.25)
 
 
-def get_sec(url: str) -> httpx.Response:
+def get_sec(
+    url: str,
+    *,
+    client: httpx.Client | None = None,
+) -> httpx.Response:
+    request_client = client or SEC_CLIENT
+
     for attempt in range(SEC_MAX_RETRIES + 1):
         wait_for_rate_limit()
 
         try:
-            response = SEC_CLIENT.get(url)
+            response = request_client.get(url)
         except httpx.ProxyError as error:
             if attempt == SEC_MAX_RETRIES:
                 raise SecProxyUnavailableError(

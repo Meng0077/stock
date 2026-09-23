@@ -9,8 +9,8 @@ from stock_agent.documents.sec_provider import SUPPORTED_FORMS, get_recent_filin
 from stock_agent.retrieval.chunking import build_evidence_id, split_filing_document
 from stock_agent.retrieval.index_state import (
     CompanyIndexState,
-    get_latest_company_index_state,
-    save_company_index_state,
+    # get_latest_company_index_state,
+    # save_company_index_state,
 )
 from stock_agent.retrieval.schemas import (
     DEFAULT_INDEX_CONFIG,
@@ -84,7 +84,6 @@ def build_company_index(
     if engine is None:
         engine = create_database_engine()
     create_database_tables(engine)
-
     filings = get_recent_filings(
         company_id,
         as_of,
@@ -93,7 +92,7 @@ def build_company_index(
     )
     if not filings:
         raise ValueError(f"no supported filings found for {company_id}")
-
+    print(len(filings))
     documents = []
     for filing in filings:
         documents.extend(load_relevant_filing_documents(filing))
@@ -149,7 +148,7 @@ def build_company_index(
         vector_store=vector_store,
         chunk_count=len(chunks),
     )
-    save_company_index_state(state)
+    # save_company_index_state(state)
     return state
 
 

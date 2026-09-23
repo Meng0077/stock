@@ -7,9 +7,11 @@ from langchain.messages import ToolMessage
 
 from stock_agent.agents.structured_output import (
     EvidenceValidationError,
+    resolve_output_data_mode,
+)
+from stock_agent.agents.evidence import (
     collect_evidence_data_modes,
     collect_evidence_ids,
-    resolve_output_data_mode,
     validate_evidence,
 )
 from stock_agent.schemas.research_output import ResearchOutput
