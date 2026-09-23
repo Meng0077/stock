@@ -113,6 +113,7 @@ def verify_completed_bars(
     assert all(
         bar.updated_at <= as_of
         for bar in bars
+        if bar.updated_at
     )
 
 
