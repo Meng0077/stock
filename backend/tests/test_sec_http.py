@@ -96,6 +96,49 @@ def test_non_retryable_http_error_is_not_retried(monkeypatch):
     assert len(calls) == 1
 
 
+def test_post_sec_sends_request_body(monkeypatch):
+    calls = []
+
+    def post(url, **kwargs):
+        calls.append((url, kwargs))
+        return make_response(200)
+
+    monkeypatch.setattr(sec_http.SEC_CLIENT, "post", post)
+    monkeypatch.setattr(sec_http, "wait_for_rate_limit", lambda: None)
+
+    response = sec_http.post_sec(
+        "https://www.sec.gov/example",
+        json={"query": "NVDA"},
+    )
+
+    assert response.status_code == 200
+    assert calls == [
+        (
+            "https://www.sec.gov/example",
+            {"json": {"query": "NVDA"}},
+        )
+    ]
+
+
+def test_post_sec_does_not_retry(monkeypatch):
+    calls = []
+
+    def post(url, **kwargs):
+        calls.append((url, kwargs))
+        return make_response(503, {"Retry-After": "0"})
+
+    monkeypatch.setattr(sec_http.SEC_CLIENT, "post", post)
+    monkeypatch.setattr(sec_http, "wait_for_rate_limit", lambda: None)
+
+    with pytest.raises(sec_http.SecServiceUnavailableError):
+        sec_http.post_sec(
+            "https://www.sec.gov/example",
+            json={"query": "NVDA"},
+        )
+
+    assert len(calls) == 1
+
+
 def test_rate_limit_spaces_request_starts(monkeypatch):
     sleeps = []
 

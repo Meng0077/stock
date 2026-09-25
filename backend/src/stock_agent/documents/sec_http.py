@@ -1,6 +1,7 @@
 import random
 import threading
 import time
+from typing import Any
 
 import httpx
 
@@ -77,33 +78,37 @@ def retry_delay(attempt: int, response: httpx.Response | None = None) -> float:
     return (2 ** attempt) + random.uniform(0.0, 0.25)
 
 
-def get_sec(
+def _request_sec(
+    method: str,
     url: str,
     *,
+    max_retries: int,
     client: httpx.Client | None = None,
+    **kwargs: Any,
 ) -> httpx.Response:
     request_client = client or SEC_CLIENT
+    request = getattr(request_client, method.lower())
 
-    for attempt in range(SEC_MAX_RETRIES + 1):
+    for attempt in range(max_retries + 1):
         wait_for_rate_limit()
 
         try:
-            response = request_client.get(url)
+            response = request(url, **kwargs)
         except httpx.ProxyError as error:
-            if attempt == SEC_MAX_RETRIES:
+            if attempt == max_retries:
                 raise SecProxyUnavailableError(
                     f"SEC 请求代理不可用: {url}"
                 ) from error
             time.sleep(retry_delay(attempt))
             continue
         except SEC_RETRYABLE_TRANSPORT_ERRORS:
-            if attempt == SEC_MAX_RETRIES:
+            if attempt == max_retries:
                 raise
             time.sleep(retry_delay(attempt))
             continue
 
         if response.status_code in SEC_RETRYABLE_STATUS_CODES:
-            if attempt == SEC_MAX_RETRIES:
+            if attempt == max_retries:
                 if response.status_code == 503:
                     raise SecServiceUnavailableError(
                         f"SEC 服务暂时不可用: {url}"
@@ -116,3 +121,33 @@ def get_sec(
         return response
 
     raise AssertionError("unreachable")
+
+
+def get_sec(
+    url: str,
+    *,
+    client: httpx.Client | None = None,
+    **kwargs: Any,
+) -> httpx.Response:
+    return _request_sec(
+        "GET",
+        url,
+        max_retries=SEC_MAX_RETRIES,
+        client=client,
+        **kwargs,
+    )
+
+
+def post_sec(
+    url: str,
+    *,
+    client: httpx.Client | None = None,
+    **kwargs: Any,
+) -> httpx.Response:
+    return _request_sec(
+        "POST",
+        url,
+        max_retries=0,
+        client=client,
+        **kwargs,
+    )
