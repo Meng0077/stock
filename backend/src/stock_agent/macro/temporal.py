@@ -183,6 +183,18 @@ def filter_metrics_as_of(
             )
             continue
 
+        if strict_pit:
+            if (
+                metric.consensus is not None
+                and not metric.consensus_pit_verified
+            ):
+                warnings.append(
+                    f"{metric.indicator}:{metric.measure}:"
+                    "consensus_hidden_in_strict_pit"
+                )
+
+            metric = sanitize_metric_for_strict_pit(metric)
+
         usable.append(metric)
 
         if (
@@ -343,3 +355,38 @@ def filter_releases_as_of(
         )
 
     return usable_releases, warnings
+
+
+
+def sanitize_metric_for_strict_pit(
+    metric: MacroMetricSnapshot,
+) -> MacroMetricSnapshot:
+    """严格历史模式中移除未经验证的预测信息。"""
+
+    if not metric.consensus_pit_verified:
+        return metric.model_copy(
+            update={
+                "consensus": None,
+                "consensus_source": None,
+                "forecast_as_of": None,
+                "surprise": None,
+                "estimated_surprise": None,
+                "surprise_is_estimated": False,
+            }
+        )
+
+    # Forecast 已核实，但 Actual 仅具备日期级证据时，
+    # 仍不能输出严格 PIT Surprise。
+    if metric.actual_pit_status != "verified":
+        return metric.model_copy(
+            update={
+                "surprise": None,
+                "estimated_surprise": None,
+            }
+        )
+
+    return metric.model_copy(
+        update={
+            "estimated_surprise": None,
+        }
+    )

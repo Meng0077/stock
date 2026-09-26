@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 import importlib.util
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock
 from uuid import UUID
 
 import httpx
@@ -61,8 +62,10 @@ def quote_output():
 @pytest.fixture(autouse=True)
 def clear_agent_cache():
     dependencies.get_langchain_agent.cache_clear()
+    dependencies.get_macro_snapshot_builder.cache_clear()
     yield
     dependencies.get_langchain_agent.cache_clear()
+    dependencies.get_macro_snapshot_builder.cache_clear()
 
 
 @pytest.fixture
@@ -76,6 +79,23 @@ def client_for(agent):
     application = create_app()
     application.dependency_overrides[dependencies.get_langchain_agent] = lambda: agent
     return TestClient(application)
+
+
+def test_macro_builder_dependency_is_lazy_and_cached(monkeypatch):
+    builder = object()
+    create_builder = Mock(return_value=builder)
+    monkeypatch.setattr(
+        dependencies,
+        "build_macro_snapshot_builder",
+        create_builder,
+    )
+
+    factory = dependencies.get_macro_builder_factory()
+
+    create_builder.assert_not_called()
+    assert factory() is builder
+    assert factory() is builder
+    create_builder.assert_called_once_with()
 
 
 def test_production_dependency_configures_structured_output_and_non_thinking(

@@ -12,6 +12,10 @@ from langgraph.types import Command
 
 from stock_agent.agents.tool_calling import TOOL_TIMEOUT_SECONDS
 from stock_agent.tools.errors import UnsupportedCompanyError
+from stock_agent.macro.errors import MacroDataProviderError
+
+
+MACRO_TOOL_TIMEOUT_SECONDS = 90
 
 
 @wrap_tool_call
@@ -24,7 +28,12 @@ async def handle_tool_errors(
     未知工具和参数错误已由默认工具节点处理，不重复校验。
     """
     try:
-        async with asyncio.timeout(TOOL_TIMEOUT_SECONDS) as tool_limit:
+        timeout_seconds = (
+            MACRO_TOOL_TIMEOUT_SECONDS
+            if request.tool_call["name"] == "get_macro_snapshot"
+            else TOOL_TIMEOUT_SECONDS
+        )
+        async with asyncio.timeout(timeout_seconds) as tool_limit:
             return await handler(request)
     except UnsupportedCompanyError as error:
         code = "tool_rejected"
@@ -37,6 +46,9 @@ async def handle_tool_errors(
             raise
         code = "tool_timeout"
         message = "工具执行超时，未获得所需资料。"
+    except MacroDataProviderError:
+        code = "data_unavailable"
+        message = "宏观数据源暂不可用，未取得所需资料。"
 
     return ToolMessage(
         content=json.dumps(

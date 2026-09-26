@@ -1,4 +1,4 @@
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone, tzinfo
 from typing import Final, Literal, TYPE_CHECKING, cast
 from zoneinfo import ZoneInfo
 
@@ -22,6 +22,8 @@ from stock_agent.macro.calculations.inflation import (
 from stock_agent.macro.errors import MacroDataProviderError
 from stock_agent.macro.models.metric import (
     ConsensusObservation,
+    EconomicIndicator,
+    EconomicMeasure,
     MacroMetricSnapshot,
 )
 from stock_agent.macro.models.release import (
@@ -36,10 +38,11 @@ from stock_agent.macro.providers.fred_claims import (
     CLAIMS_SERIES,
     WeeklyClaimsProvider,
 )
+from stock_agent.macro.providers.longbridge_indicators import LONGBRIDGE_INDICATORS, IndicatorKey
+from stock_agent.macro.providers.longbridge_macro import LongbridgeMacroProvider, LongbridgeMacroRecord
 from stock_agent.macro.providers.trading_economics import (
     TradingEconomicsConsensusProvider,
 )
-
 if TYPE_CHECKING:
     from stock_agent.macro.models.snapshot import MacroSnapshot
 
@@ -585,3 +588,522 @@ def get_latest_release(
         if release.release_type == release_type
     ]
     return max(matches, key=lambda release: release.release_date, default=None)
+
+InflationReleaseType = Literal["cpi", "ppi", "pce"]
+
+
+INFLATION_RELEASE_KEYS: dict[
+    InflationReleaseType,
+    tuple[IndicatorKey, ...],
+] = {
+    "cpi": (
+        ("cpi", "mom"),
+        ("cpi", "yoy"),
+        ("core_cpi", "mom"),
+        ("core_cpi", "yoy"),
+    ),
+    "ppi": (
+        ("ppi", "mom"),
+        ("ppi", "yoy"),
+        ("core_ppi", "mom"),
+        ("core_ppi", "yoy"),
+    ),
+    "pce": (
+        ("pce", "mom"),
+        ("pce", "yoy"),
+        ("core_pce", "mom"),
+        ("core_pce", "yoy"),
+    ),
+}
+
+LaborReleaseType = Literal[
+    "employment_situation",
+    "weekly_claims",
+]
+
+
+LABOR_RELEASE_KEYS: dict[
+    LaborReleaseType,
+    tuple[IndicatorKey, ...],
+] = {
+    "employment_situation": (
+        ("nonfarm_payrolls", "monthly_change"),
+        ("unemployment_rate", "level"),
+        ("average_hourly_earnings", "mom"),
+    ),
+
+    "weekly_claims": (
+        ("initial_claims", "level"),
+        ("continuing_claims", "level"),
+        ("initial_claims_4w_avg", "level"),
+    ),
+}
+
+def validate_labor_periods(
+    release_type: LaborReleaseType,
+    records: dict[
+        IndicatorKey,
+        LongbridgeMacroRecord,
+    ],
+) -> bool:
+    """验证就业及失业金发布中的统计期关系。"""
+
+    if not records:
+        return False
+
+    if release_type == "employment_situation":
+        # 非农、失业率、平均时薪必须属于同一个月。
+        periods = {
+            record.period
+            for record in records.values()
+        }
+
+        return len(periods) == 1
+
+    # ---------- Weekly Claims ----------
+
+    initial = records.get(
+        ("initial_claims", "level")
+    )
+
+    continued = records.get(
+        ("continuing_claims", "level")
+    )
+
+    average = records.get(
+        ("initial_claims_4w_avg", "level")
+    )
+
+    # 四周均值应与本次 Initial Claims
+    # 对应同一个统计周。
+    if (
+        initial is not None
+        and average is not None
+        and initial.period != average.period
+    ):
+        return False
+
+    # 若 Initial Claims 缺失，
+    # 可以使用四周均值作为统计周参考。
+    reference = initial or average
+
+    # Continuing Claims 通常滞后一周。
+    # 本项目目前采用你已验证的美国周报口径。
+    if (
+        reference is not None
+        and continued is not None
+        and (reference.period - continued.period).days != 7
+    ):
+        return False
+
+    # 只有部分指标可用时，仍允许构建部分发布。
+    return True
+
+
+def resolve_vendor_time(
+    value: datetime,
+    *,
+    vendor_timezone: tzinfo,
+) -> datetime:
+    """把供应商事件时间转换为 UTC。
+
+    SDK 返回无时区 datetime 时，必须由调用者显式
+    指定其所属时区，而不是使用服务器本地时区。
+    """
+
+    if value.tzinfo is None or value.utcoffset() is None:
+        value = value.replace(tzinfo=vendor_timezone)
+
+    if value.utcoffset() is None:
+        raise ValueError("Invalid vendor timezone")
+
+    return value.astimezone(timezone.utc)
+
+
+def build_longbridge_release(
+    *,
+    macro: LongbridgeMacroProvider,
+    release_type: InflationReleaseType,
+    release_date: date,
+    as_of: datetime,
+    vendor_timezone: tzinfo,
+    warnings: list[str],
+) -> MacroReleaseEvent | None:
+    """将长桥通胀记录组装为一次发布事件。
+
+    当前支持 CPI、PPI、PCE。
+
+    使用供应商历史数据，适用于普通在线研究；
+    不提供严格历史 PIT 保证。
+    """
+    if as_of.tzinfo is None or as_of.utcoffset() is None:
+        raise ValueError("as_of must be timezone-aware")
+
+    research_date = as_of.astimezone(EASTERN).date()
+
+    # 只有供应商事件时间，没有独立核实的实际发布时间。
+    # 发布当天保守跳过，避免提前使用事后回填的 Actual。
+    if release_date >= research_date:
+        warnings.append("cpi_release_time_unverified")
+        return None
+
+
+    keys = INFLATION_RELEASE_KEYS[release_type]
+    records: dict[
+        IndicatorKey,
+        tuple[LongbridgeMacroRecord, datetime],
+    ] = {}
+
+    for indicator, measure in keys:
+        key: IndicatorKey = (indicator, measure)
+        label = f"{indicator}:{measure}"
+        try:
+            history = macro.get_history(
+                indicator,
+                measure,
+                start_date=release_date,
+                end_date=release_date,
+            )
+        except MacroDataProviderError:
+            warnings.append(f"{release_type}_provider_unavailable:{label}")
+            continue
+
+        # 一项指标在指定发布日期应该对应唯一一条记录。
+        # 不能在多条记录中随意选择最新统计期。
+        if len(history) != 1:
+            warnings.append(f"{release_type}_record_count_invalid:{label}")
+            continue
+
+        record = history[0]
+
+        if (
+            record.indicator != indicator
+            or record.measure != measure
+            or record.unit != "percent"
+        ):
+            warnings.append(
+                f"{release_type}_record_identity_mismatch:{label}"
+            )
+            return None
+
+        if record.vendor_release_at is None:
+            warnings.append(f"{release_type}_release_time_missing:{label}")
+            continue
+
+        vendor_time = resolve_vendor_time(
+            record.vendor_release_at,
+            vendor_timezone=vendor_timezone,
+        )
+
+        # 只接受属于指定美国东部发布日期的记录。
+        if (
+            vendor_time.astimezone(EASTERN).date()
+            != release_date
+        ):
+            warnings.append(
+                f"{release_type}_release_date_mismatch:{label}"
+            )
+            return None
+
+        records[key] = (record, vendor_time)
+
+    if not records:
+        warnings.append(
+            f"{release_type}_no_usable_records"
+        )
+        return None
+
+    # 第二阶段：验证所有已获取记录属于同一次发布。
+    periods = {
+        record.period
+        for record, _ in records.values()
+    }
+
+    if len(periods) != 1:
+        warnings.append(
+            f"{release_type}_period_mismatch"
+        )
+        return None
+
+    times = {
+        vendor_time
+        for _, vendor_time in records.values()
+    }
+
+    if len(times) != 1:
+        warnings.append(
+            f"{release_type}_release_time_mismatch"
+        )
+        return None
+
+    scheduled_at = next(iter(times))
+
+    # 第三阶段：生成有 Actual 的指标。
+    metrics: list[MacroMetricSnapshot] = []
+
+    for indicator, measure in keys:
+        key: IndicatorKey = (indicator, measure)
+
+        if key not in records:
+            continue
+
+        record, _ = records[key]
+
+        if record.actual is None:
+            warnings.append(
+                f"{release_type}_actual_missing:"
+                f"{indicator}:{measure}"
+            )
+            continue
+
+        metrics.append(
+            MacroMetricSnapshot(
+                indicator=indicator,
+                measure=measure,
+                unit=record.unit,
+                period=record.period,
+                actual=record.actual,
+                previous=record.previous,
+                consensus=record.forecast,
+
+                # 尚未证明 Forecast 是公布前的历史版本。
+                surprise=None,
+                forecast_as_of=None,
+                consensus_pit_verified=False,
+
+                release_date=release_date,
+
+                # 供应商事件时间不能冒充官方实际发布时间。
+                released_at=None,
+
+                source="longbridge",
+                actual_pit_status="unverified",
+                surprise_is_estimated=False,
+            )
+        )
+    if not metrics:
+        warnings.append(
+            f"{release_type}_no_usable_metrics"
+        )
+        return None
+
+    if len(metrics) < len(keys):
+        warnings.append(
+            f"{release_type}_partial_release:"
+            f"{len(metrics)}/{len(keys)}"
+        )
+
+
+    return MacroReleaseEvent(
+        release_id=f"{release_type}:{release_date.isoformat()}",
+        release_type=release_type,
+        release_date=release_date,
+        scheduled_release_at=scheduled_at,
+        released_at=None,
+        release_date_source="longbridge",
+        # 已检查供应商内部的一致性，但尚未独立核实
+        # 统计期与发布日期的官方绑定关系。
+        period_binding="latest_assumed",
+
+        metrics=metrics,
+    )
+
+
+def build_longbridge_labor_release(
+    *,
+    macro: LongbridgeMacroProvider,
+    release_type: LaborReleaseType,
+    release_date: date,
+    as_of: datetime,
+    vendor_timezone: tzinfo,
+    warnings: list[str],
+) -> MacroReleaseEvent | None:
+    """组装 Employment 或 Weekly Claims 发布事件。"""
+
+    if as_of.tzinfo is None or as_of.utcoffset() is None:
+        raise ValueError("as_of must be timezone-aware")
+
+    research_date = as_of.astimezone(EASTERN).date()
+
+    # 没有独立核实的实际发布时间时，
+    # 发布当天不使用可能被事后回填的 Actual。
+    if release_date >= research_date:
+        warnings.append(
+            f"{release_type}_release_time_unverified"
+        )
+        return None
+
+    keys = LABOR_RELEASE_KEYS[release_type]
+
+    records: dict[
+        IndicatorKey,
+        LongbridgeMacroRecord,
+    ] = {}
+
+    event_times: set[datetime] = set()
+
+    # ---------- 第一阶段：查询并验证记录 ----------
+
+    for indicator, measure in keys:
+        key: IndicatorKey = (indicator, measure)
+        label = f"{indicator}:{measure}"
+
+        try:
+            history = macro.get_history(
+                indicator,
+                measure,
+                start_date=release_date,
+                end_date=release_date,
+            )
+        except MacroDataProviderError:
+            warnings.append(
+                f"{release_type}_provider_unavailable:{label}"
+            )
+            continue
+
+        if len(history) != 1:
+            warnings.append(
+                f"{release_type}_record_count_invalid:{label}"
+            )
+            continue
+
+        record = history[0]
+        spec = LONGBRIDGE_INDICATORS[key]
+
+        # 校验指标身份及标准化单位。
+        if (
+            record.indicator != indicator
+            or record.measure != measure
+            or record.unit != spec.unit
+        ):
+            warnings.append(
+                f"{release_type}_identity_mismatch:{label}"
+            )
+            return None
+
+        if record.vendor_release_at is None:
+            warnings.append(
+                f"{release_type}_release_time_missing:{label}"
+            )
+            continue
+
+        vendor_time = resolve_vendor_time(
+            record.vendor_release_at,
+            vendor_timezone=vendor_timezone,
+        )
+
+        # 必须属于本次指定的美国东部发布日期。
+        if (
+            vendor_time.astimezone(EASTERN).date()
+            != release_date
+        ):
+            warnings.append(
+                f"{release_type}_release_date_mismatch:{label}"
+            )
+            return None
+
+        records[key] = record
+        event_times.add(vendor_time)
+
+    if not records:
+        warnings.append(
+            f"{release_type}_no_usable_records"
+        )
+        return None
+
+    # ---------- 第二阶段：发布一致性校验 ----------
+
+    if len(event_times) != 1:
+        warnings.append(
+            f"{release_type}_release_time_mismatch"
+        )
+        return None
+
+    if not validate_labor_periods(
+        release_type,
+        records,
+    ):
+        warnings.append(
+            f"{release_type}_period_mismatch"
+        )
+        return None
+
+    scheduled_at = next(iter(event_times))
+
+    # ---------- 第三阶段：组装实际指标 ----------
+
+    metrics: list[MacroMetricSnapshot] = []
+
+    for indicator, measure in keys:
+        key: IndicatorKey = (indicator, measure)
+
+        record = records.get(key)
+
+        if record is None:
+            continue
+
+        if record.actual is None:
+            warnings.append(
+                f"{release_type}_actual_missing:"
+                f"{indicator}:{measure}"
+            )
+            continue
+
+        metrics.append(
+            MacroMetricSnapshot(
+                indicator=indicator,
+                measure=measure,
+                unit=record.unit,
+                period=record.period,
+
+                # get_history() 已完成单位标准化。
+                actual=record.actual,
+                previous=record.previous,
+                consensus=record.forecast,
+
+                # 不把未经 PIT 验证的历史预期
+                # 用于严格 Surprise 计算。
+                surprise=None,
+                forecast_as_of=None,
+                consensus_pit_verified=False,
+
+                release_date=release_date,
+                released_at=None,
+
+                source="longbridge",
+                actual_pit_status="unverified",
+                surprise_is_estimated=False,
+            )
+        )
+
+    if not metrics:
+        warnings.append(
+            f"{release_type}_no_usable_metrics"
+        )
+        return None
+
+    if len(metrics) != len(keys):
+        warnings.append(
+            f"{release_type}_partial_release:"
+            f"{len(metrics)}/{len(keys)}"
+        )
+
+    return MacroReleaseEvent(
+        release_id=(
+            f"{release_type}:{release_date.isoformat()}"
+        ),
+        release_type=release_type,
+        release_date=release_date,
+
+        scheduled_release_at=scheduled_at,
+        schedule_source="longbridge",
+
+        # 没有单独核实的实际发布时间。
+        released_at=None,
+        release_date_source="longbridge",
+
+        # 供应商内部校验不等于官方 PIT 验证。
+        period_binding="latest_assumed",
+
+        metrics=metrics,
+    )

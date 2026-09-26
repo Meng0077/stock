@@ -1,18 +1,19 @@
 # Day24：基于发布事件的宏观数据模块
 
-Day24 接入 CPI、PPI、PCE、就业、周度失业金申领、Fed Policy、SEP 和美债收益率，并通过 FRED API 获取经济数据的官方发布日期。主路径面向“最近一次宏观数据发布”，不承担严格历史回测，也不在缺少可靠来源时补造精确发布时间。
+Day24 接入 CPI、PPI、PCE、就业、周度失业金申领、Fed Policy、SEP 和美债收益率。长桥是普通在线研究的宏观发布主路径，BLS、BEA 和 FRED 保留为发布数据回退，Fed Policy、SEP 与美债继续由 FRED 提供。主路径面向“最近一次宏观数据发布”，不承担严格历史回测，也不在缺少可靠来源时补造精确发布时间。
 
 ```text
-BLS / BEA / FRED              Trading Economics（可选）
-        │                                  │
-        ├── Actual / Previous              ├── Consensus
-        └── Release Date                    └── Scheduled Time
-                         ↓
-                 MacroReleaseEvent
-                         ↓
-Fed Policy / SEP + Treasury Yield Curve
-                         ↓
-                    MacroSnapshot
+Longbridge Macro             发布前 Forecast 快照
+        │                              │
+        ├── Actual / Previous          └── captured_at + Consensus
+        ├── Forecast                              │
+        └── Scheduled Time                        │
+                         ↓                        ↓
+                      MacroReleaseEvent
+                              ↓
+       FRED Fed Policy / SEP + Treasury Yield Curve
+                              ↓
+                         MacroSnapshot
 ```
 
 ## 时间字段
@@ -20,11 +21,11 @@ Fed Policy / SEP + Treasury Yield Curve
 | 字段 | 含义 |
 |---|---|
 | `period` | 指标描述的统计月份，例如 2026-08 CPI |
-| `release_date` | FRED 返回的官方发布日期，只精确到日期 |
-| `scheduled_release_at` | Trading Economics 日历中的计划发布时间 |
+| `release_date` | 长桥事件日期；官方回退路径使用 FRED 发布日期 |
+| `scheduled_release_at` | 长桥记录中的计划发布时间 |
 | `released_at` | 已确认的真实发布时间；当前没有可靠来源时为 `None` |
 
-FRED 的发布日期不会被转换成午夜，也不会自行补成 08:30 ET。`period_binding="latest_assumed"` 明确表示当前使用“最近发布日期 + 最新 observation”的在线研究绑定规则。
+长桥时间不会冒充经独立核实的实际发布时间。`period_binding="latest_assumed"` 明确表示当前使用供应商内部事件与统计期的在线研究绑定规则。
 
 ## 发布事件
 
@@ -41,7 +42,7 @@ PPI Release 包含：
 此外还包括：
 
 - PCE / Core PCE MoM、YoY；
-- Nonfarm Payrolls、Unemployment Rate、Average Hourly Earnings；
+- Nonfarm Payrolls、Unemployment Rate、Average Hourly Earnings MoM；
 - Initial Claims、Continuing Claims、Initial Claims 4-week Average；
 - 当前与前次 Fed 目标利率区间、SEP 中位数预测；
 - 3M、2Y、10Y、30Y 美债收益率、日变化和期限利差。
@@ -50,24 +51,31 @@ PPI Release 包含：
 
 ## Consensus 与 Surprise
 
-Trading Economics 的 `Forecast` 是可选数据。没有匹配的 indicator、measure 和 period 时：
+长桥历史记录可以提供 Forecast，但只有项目在发布前实际保存的快照才用于计算 Estimated Surprise。没有匹配的 indicator、measure 和 period 时：
 
 ```text
 consensus = None
-surprise = None
+estimated_surprise = None
 ```
 
-普通 Calendar 响应不能证明 Forecast 属于公布前的历史快照，因此 `forecast_as_of=None`、`consensus_pit_verified=False`。只有能够确认 Forecast 在正式发布时间之前已经存在时才计算 Surprise。
+定期执行 `evals/capture_macro_forecasts.py` 会追加保存下一次 CPI、PPI、PCE、Employment Situation 和 Weekly Claims 的 Forecast。发布后，`MacroSnapshotBuilder` 按 release type、release date、indicator、measure、period 和 unit 精确匹配，并计算：
+
+```text
+estimated_surprise = actual - pre_release_forecast
+```
+
+快照记录 `forecast_as_of` 和 `consensus_source="longbridge"`。由于实际发布时间和 Actual 初始版本尚未严格验证，`consensus_pit_verified=False`、`surprise=None`，不会把 Estimated Surprise 冒充为严格 PIT Surprise。
 
 BLS 普通时间序列 API 可能返回后续修订值，因此即使 `release_date` 已知，`actual_pit_status` 仍保持 `unverified`。
 
 ## Provider 边界
 
-- `BLSProvider`：只读取 BLS 原始时间序列，不保存发布日期；
-- `BEAPCEProvider`：读取 BEA 的 PCE / Core PCE 月度指数；
-- `FredProvider`：提供 Series 对应的 Release 和发布日期；
+- `LongbridgeMacroProvider`：提供发布事件的 Actual、Previous、Forecast 和计划时间；
+- `BLSProvider`、`BEAPCEProvider`、`FredProvider`：长桥发布无法形成事件时的官方回退；
 - `WeeklyClaimsProvider`：通过统一的 `FredProvider` 读取带日期级 vintage 的 Claims 序列；
-- `TradingEconomicsConsensusProvider`：提供可选 Consensus 和计划发布时间；
+- `capture_next_forecasts`：只采集尚未发布事件的 Forecast；
+- `append_forecast_snapshot`：将发布前快照追加到 JSONL，不覆盖历史版本；
+- `match_release_forecasts`：发布后匹配快照并生成 Estimated Surprise；
 - `FedDataProvider`：读取目标利率区间和 SEP 中位数预测；
 - `TreasuryRatesProvider`：读取四个期限的日度名义收益率；
 - `MacroSnapshotBuilder`：调用 Provider 和纯计算函数，将指标组织成发布事件；
@@ -88,24 +96,46 @@ cd backend
   tests/test_macro_*.py
 ```
 
-在线验收需要在 `backend/.env` 设置 `FRED_API_KEY` 和 `BEA_API_KEY`。`TRADING_ECONOMICS_API_KEY` 可选；未设置时脚本同时验证“缺少预期值不计算 Surprise”。
+在线验收需要在 `backend/.env` 设置长桥、FRED 和 BEA 密钥。Forecast 文件默认位于 `evals/results/macro_forecasts.jsonl`，可通过 `MACRO_FORECAST_SNAPSHOTS_PATH` 修改。
 
 ```bash
 PYTHONPATH=backend/src backend/.venv/bin/python \
+  evals/capture_macro_forecasts.py
+
+PYTHONPATH=backend/src backend/.venv/bin/python \
   evals/verify_day24_macro.py
+
+PYTHONPATH=backend/src backend/.venv/bin/python \
+  evals/verify_macro_agent.py
 ```
+
+采集命令每次只执行一轮；部署时由外部调度器定期调用。重复采集会保留多个时间版本，匹配时选择发布前最后一次有效快照。
 
 ## 当前仍未完成
 
-- Trading Economics 普通 Calendar 不能证明 Forecast 是公布前保存的历史版本，因此可以展示匹配到的 Consensus，但不计算未经 PIT 验证的 Surprise；
-- FRED 发布日期只有日期精度，`released_at` 仍为空。发布日期当天会保守跳过该事件，不能用于分钟级 Market Reaction；
-- BLS / BEA 普通 API 的最新数值可能包含后续修订，`actual_pit_status` 保持 `unverified`，尚不支持严格历史 vintage 回放；
-- 完整 MacroSnapshot 的真实 API 端到端验收需要同时配置 FRED 和 BEA 密钥；未配置的 Trading Economics 只影响 Consensus，不影响官方 Actual；
-- Macro Tool 与 Agent 的正式接入尚未完成，属于后续 Agent 集成工作。
+- 长桥事件时间尚未独立核实为真实发布时间，`released_at` 仍为空。发布日期当天会保守跳过该事件，不能用于分钟级 Market Reaction；
+- 长桥历史 Actual 可能包含后续修订，`actual_pit_status` 保持 `unverified`，尚不支持严格历史 vintage 回放；
+- 当前输出的是有发布前采集证据的 Estimated Surprise，不是严格 PIT Surprise；
 
 Day24 不实现分钟级市场反应或 MarketReaction；这些能力进入 D26–D30，并要求可靠的事件时间和盘中市场数据。
 
-2026-09-26 已完成真实 API 端到端验收：MacroSnapshot 包含 CPI、PPI、PCE、Employment Situation、Weekly Claims、Fed Policy、5 项 SEP 中位数预测和完整美债曲线。对应发布分别生成 4、4、4、5、3 项指标；美债曲线观测日为 2026-09-24。当前未配置 Trading Economics 密钥，因此 Consensus、计划发布时间和 Surprise 按设计保持缺失，并记录 `*_consensus_not_configured` warnings。
+## Agent Tool 接入
+
+LangChain Agent 已注册只读 `get_macro_snapshot` Tool：
+
+- 不传 `release_type` 时返回截至任务 `as_of` 的完整 `MacroSnapshot`，包括最近发布、Fed Policy、SEP、美债和数据质量警告；
+- 传入 `cpi`、`ppi`、`pce`、`employment_situation` 或 `weekly_claims` 时，只返回最近一次对应 `MacroReleaseEvent`；
+- Tool 从运行时上下文取得延迟创建的 `MacroSnapshotBuilder`；Tool 模块不读取密钥或配置 Provider，真实 Provider 由 API 依赖在首次宏观调用时创建；
+- 完整快照和单个发布都会生成 `macro:*` evidence ID，并进入现有结构化输出与 evidence 校验；
+- Agent 提示词要求保留 `consensus`、`estimated_surprise`、`surprise` 的原始语义，不得把 Estimated Surprise 表述为严格历史 Surprise。
+
+普通工具继续使用 30 秒执行上限。真实宏观快照需要组合多个 Provider，Macro Tool 单独使用 90 秒执行上限；这只是 Agent 调用边界，不改变各 Provider 已有的请求和重试策略。
+
+2026-09-26 已完成真实 API 端到端验收：MacroSnapshot 包含 CPI、PPI、PCE、Employment Situation、Weekly Claims、Fed Policy、5 项 SEP 中位数预测和完整美债曲线。长桥发布分别生成 4、4、4、3、3 项指标；美债曲线观测日为 2026-09-24。
+
+同日已完成真实模型 Agent 联调：模型请求 `get_macro_snapshot`，Tool 使用真实 Provider 返回最近一次 CPI，`macro:cpi:2026-09-11` evidence 通过结构化输出校验，运行终态为 `completed`。可通过 `evals/verify_macro_agent.py` 重复验收；脚本只打印状态、工具事件和 evidence ID，不打印密钥或完整供应商响应。
+
+以下流程图描述长桥不可用时的官方 Provider 回退链路。
 
 
 flowchart TD

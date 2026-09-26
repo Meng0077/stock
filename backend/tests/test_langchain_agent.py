@@ -1,6 +1,8 @@
 """D07 Step 8：最小 LangChain Agent 的离线契约与工具轨迹测试。"""
 
 import asyncio
+from datetime import date, datetime, timezone
+from decimal import Decimal
 import json
 from typing import Any
 from unittest.mock import Mock
@@ -34,6 +36,9 @@ from stock_agent.schemas.research_output import ResearchOutput
 from stock_agent.schemas.errors import make_public_error
 from stock_agent.tools.registry import TOOL_REGISTRY
 from stock_agent.retrieval import knowledge
+from stock_agent.macro.models.metric import MacroMetricSnapshot
+from stock_agent.macro.models.release import MacroReleaseEvent
+from stock_agent.macro.models.snapshot import MacroSnapshot
 
 
 class ToolCallingFakeModel(FakeMessagesListChatModel):
@@ -124,6 +129,7 @@ def test_fake_model_completes_real_langchain_tool_loop(research_request):
         "get_company_profile",
         "retrieve_knowledge",
         "get_financial_facts",
+        "get_macro_snapshot",
     ]
     assert [type(message) for message in messages] == [
         HumanMessage,
@@ -146,6 +152,82 @@ def test_fake_model_completes_real_langchain_tool_loop(research_request):
         "note": "固定虚构报价，仅用于验证工具调用；报价时间也是预设的教学时间。",
     }
     assert messages[3].tool_calls == []
+
+
+def test_macro_tool_completes_agent_flow_with_historical_evidence():
+    as_of = datetime(2026, 9, 20, 16, tzinfo=timezone.utc)
+    release = MacroReleaseEvent(
+        release_id="cpi:2026-09-11",
+        release_type="cpi",
+        release_date=date(2026, 9, 11),
+        release_date_source="longbridge",
+        period_binding="latest_assumed",
+        metrics=[
+            MacroMetricSnapshot(
+                indicator="cpi",
+                measure="mom",
+                unit="percent",
+                period=date(2026, 8, 1),
+                actual=Decimal("0.4"),
+                release_date=date(2026, 9, 11),
+                source="longbridge",
+            )
+        ],
+    )
+    snapshot = MacroSnapshot(
+        as_of=as_of,
+        recent_releases=[release],
+        fed_policy=None,
+        fed_projections=[],
+        treasury=None,
+        warnings=[],
+    )
+    builder = Mock()
+    builder.build_latest.return_value = snapshot
+    output = ResearchOutput(
+        status="completed",
+        facts=[{
+            "text": "最近一次 CPI 环比为 0.4%。",
+            "evidence_ids": [f"macro:snapshot:{as_of.isoformat()}"],
+        }],
+        inferences=[],
+        missing_information=[],
+        data_mode="historical",
+    )
+    model = ToolCallingFakeModel(responses=[
+        AIMessage(content="", tool_calls=[{
+            "name": "get_macro_snapshot",
+            "args": {},
+            "id": "call-macro",
+        }]),
+        AIMessage(content="", tool_calls=[{
+            "name": "ResearchOutput",
+            "args": output.model_dump(),
+            "id": "call-output",
+        }]),
+    ])
+    request = ResearchRequest(
+        company_id="NVDA",
+        question="最近一次 CPI 是多少？",
+        data_mode="mixed",
+        as_of=as_of,
+    )
+
+    result = asyncio.run(
+        run_research(
+            build_langchain_agent(
+                model,
+                response_format=ToolStrategy(ResearchOutput),
+            ),
+            request,
+            macro_builder_factory=lambda: builder,
+        )
+    )
+
+    assert result["error"] is None, result
+    assert result["output"] == output
+    builder.build_latest.assert_called_once_with(as_of=as_of)
+    assert result["events"][1]["tool"] == "get_macro_snapshot"
 
 
 @pytest.mark.parametrize("company_id", ["NVDA", "TSLA"])

@@ -19,9 +19,15 @@ from stock_agent.financial.service import (
     FinancialPeriodType,
     get_financial_facts,
 )
+from stock_agent.macro.models.release import MacroReleaseType
+from stock_agent.macro.release_builders import get_latest_release
 from stock_agent.agents.context import ResearchContext
 from stock_agent.retrieval.knowledge import retrieve_knowledge
-from stock_agent.schemas.tool_params import CompanyToolParams, KnowledgeToolParams
+from stock_agent.schemas.tool_params import (
+    CompanyToolParams,
+    KnowledgeToolParams,
+    MacroToolParams,
+)
 from stock_agent.storage.database import create_database_engine
 from stock_agent.tools.registry import execute_tool
 
@@ -30,6 +36,18 @@ class KnowledgeToolRuntimeParams(KnowledgeToolParams):
     model_config = ConfigDict(
         extra="forbid",
         str_strip_whitespace=True,
+        arbitrary_types_allowed=True,
+    )
+
+    runtime: Annotated[
+        SkipJsonSchema[ToolRuntime[ResearchContext]],
+        InjectedToolArg,
+    ]
+
+
+class MacroToolRuntimeParams(MacroToolParams):
+    model_config = ConfigDict(
+        extra="forbid",
         arbitrary_types_allowed=True,
     )
 
@@ -165,13 +183,60 @@ def get_financial_facts_tool(
             ]
         }
 
+
+@tool("get_macro_snapshot", args_schema=MacroToolRuntimeParams)
+def get_macro_snapshot_tool(
+    runtime: ToolRuntime[ResearchContext],
+    release_type: MacroReleaseType | None = None,
+) -> dict[str, object]:
+    """查询截至本次研究时间的宏观快照或最近一次指定发布事件。
+
+    release_type 可选值为 cpi、ppi、pce、employment_situation、
+    weekly_claims；不传时返回完整 MacroSnapshot，包括 Fed、SEP 和美债。
+    """
+
+    factory = runtime.context.macro_builder_factory
+    if factory is None:
+        raise RuntimeError("MacroSnapshotBuilder is not configured")
+
+    snapshot = factory().build_latest(as_of=runtime.context.as_of)
+
+    if release_type is None:
+        evidence_id = (
+            "macro:snapshot:"
+            f"{snapshot.as_of.isoformat()}"
+        )
+        return {
+            "evidence_id": evidence_id,
+            "data_mode": "historical",
+            "snapshot": snapshot.model_dump(mode="json"),
+        }
+
+    release = get_latest_release(snapshot, release_type)
+    if release is None:
+        return {
+            "data_mode": "historical",
+            "release_type": release_type,
+            "release": None,
+            "warnings": snapshot.warnings,
+        }
+
+    return {
+        "evidence_id": f"macro:{release.release_id}",
+        "data_mode": "historical",
+        "as_of": snapshot.as_of.isoformat(),
+        "release": release.model_dump(mode="json"),
+        "warnings": snapshot.warnings,
+    }
+
 def build_langchain_tools() -> list[BaseTool]:
-    """无输入；返回报价、公司资料与知识检索三个白名单工具。"""
+    """无输入；返回 Agent 可调用的只读白名单工具。"""
     return [
         get_quote_adapter,
         get_company_profile_adapter,
         retrieve_knowledge_tool,
         get_financial_facts_tool,
+        get_macro_snapshot_tool,
     ]
 
 def collect_tool_events(messages, run_id: str) -> list[dict]:

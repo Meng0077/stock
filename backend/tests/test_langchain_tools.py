@@ -13,6 +13,9 @@ from pydantic import ValidationError
 from stock_agent.agents.langchain import langchain_tools
 from stock_agent.agents.context import ResearchContext
 from stock_agent.financial.schemas import FinancialFact
+from stock_agent.macro.models.metric import MacroMetricSnapshot
+from stock_agent.macro.models.release import MacroReleaseEvent
+from stock_agent.macro.models.snapshot import MacroSnapshot
 from stock_agent.schemas.tool_params import CompanyToolParams, KnowledgeToolParams
 from stock_agent.tools.registry import TOOL_REGISTRY, execute_tool
 
@@ -32,8 +35,9 @@ def test_build_langchain_tools_returns_exact_allowlist():
         *TOOL_NAMES,
         "retrieve_knowledge",
         "get_financial_facts",
+        "get_macro_snapshot",
     ]
-    assert len({tool.name for tool in tools}) == len(TOOL_NAMES) + 2
+    assert len({tool.name for tool in tools}) == len(TOOL_NAMES) + 3
 
 
 @pytest.mark.parametrize("tool_name", TOOL_NAMES)
@@ -235,3 +239,59 @@ def test_financial_adapter_uses_runtime_context(monkeypatch):
     )
     assert result["data_mode"] == "historical"
     assert result["facts"][0]["evidence_id"] == "financial:test"
+
+
+def test_macro_tool_uses_runtime_builder_and_returns_event_evidence():
+    as_of = datetime(2026, 9, 20, 16, tzinfo=timezone.utc)
+    release = MacroReleaseEvent(
+        release_id="cpi:2026-09-11",
+        release_type="cpi",
+        release_date=date(2026, 9, 11),
+        release_date_source="longbridge",
+        period_binding="latest_assumed",
+        metrics=[
+            MacroMetricSnapshot(
+                indicator="cpi",
+                measure="mom",
+                unit="percent",
+                period=date(2026, 8, 1),
+                actual=Decimal("0.4"),
+                consensus=Decimal("0.3"),
+                estimated_surprise=Decimal("0.1"),
+                release_date=date(2026, 9, 11),
+                source="longbridge",
+            )
+        ],
+    )
+    snapshot = MacroSnapshot(
+        as_of=as_of,
+        recent_releases=[release],
+        fed_policy=None,
+        fed_projections=[],
+        treasury=None,
+        warnings=[],
+    )
+    builder = Mock()
+    builder.build_latest.return_value = snapshot
+    runtime = ToolRuntime(
+        state={},
+        context=ResearchContext(
+            as_of=as_of,
+            macro_builder_factory=lambda: builder,
+        ),
+        config={},
+        stream_writer=lambda _: None,
+        tool_call_id="call-macro",
+        store=None,
+    )
+
+    tool = tools_by_name()["get_macro_snapshot"]
+    assert set(tool.tool_call_schema.model_json_schema()["properties"]) == {
+        "release_type"
+    }
+    result = tool.func(release_type="cpi", runtime=runtime)
+
+    builder.build_latest.assert_called_once_with(as_of=as_of)
+    assert result["evidence_id"] == "macro:cpi:2026-09-11"
+    assert result["data_mode"] == "historical"
+    assert result["release"]["metrics"][0]["estimated_surprise"] == "0.1"

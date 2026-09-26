@@ -21,6 +21,7 @@ from stock_agent.agents.langchain.langchain_agent import (
     build_langchain_agent,
 )
 from stock_agent.llm_client import get_llm_config
+from stock_agent.macro.config_factory import build_macro_snapshot_builder
 
 from langchain.agents.structured_output import ToolStrategy
 
@@ -52,3 +53,16 @@ def get_langchain_agent():
         extra_body={"thinking": {"type": "disabled"}},
     )
     return build_langchain_agent(model=model, response_format=ToolStrategy(ResearchOutput))
+
+
+@lru_cache
+def get_macro_snapshot_builder():
+    """首次调用宏观 Tool 时才创建真实 Provider。"""
+
+    return build_macro_snapshot_builder()
+
+
+def get_macro_builder_factory():
+    """向请求上下文注入延迟创建 Builder 的函数。"""
+
+    return get_macro_snapshot_builder

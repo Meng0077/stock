@@ -1,7 +1,10 @@
 from datetime import datetime, timezone
 import re
 
-from stock_agent.api.dependencies import get_langchain_agent
+from stock_agent.api.dependencies import (
+    get_langchain_agent,
+    get_macro_builder_factory,
+)
 from stock_agent.agents.langchain.langchain_agent import run_research
 from stock_agent.schemas.research import ResearchInput, ResearchRequest, ResearchResponse
 from fastapi import APIRouter, Depends, HTTPException
@@ -31,7 +34,14 @@ def build_research_request(
     )
 
 @router.post("/api/research", response_model=ResearchResponse)
-async def research(body: ResearchInput, agent: Annotated[object, Depends(get_langchain_agent)]):
+async def research(
+    body: ResearchInput,
+    agent: Annotated[object, Depends(get_langchain_agent)],
+    macro_builder_factory: Annotated[
+        object,
+        Depends(get_macro_builder_factory),
+    ],
+):
     try:
         request = build_research_request(body)
     except ValueError as error:
@@ -39,7 +49,11 @@ async def research(body: ResearchInput, agent: Annotated[object, Depends(get_lan
             status_code=400,
             detail=str(error),
         )
-    record = await run_research(agent=agent, request=request)
+    record = await run_research(
+        agent=agent,
+        request=request,
+        macro_builder_factory=macro_builder_factory,
+    )
     return ResearchResponse(
         run_id=str(record["run_id"]),
         status=record["status"],

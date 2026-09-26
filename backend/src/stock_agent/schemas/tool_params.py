@@ -2,6 +2,8 @@
 
 from pydantic import BaseModel, Field, ConfigDict
 
+from stock_agent.macro.models.release import MacroReleaseType
+
 class CompanyToolParams(BaseModel):
     model_config = ConfigDict(
         extra='forbid',
@@ -14,3 +16,9 @@ class CompanyToolParams(BaseModel):
 
 class KnowledgeToolParams(CompanyToolParams):
     question: str = Field(min_length=1)
+
+
+class MacroToolParams(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    release_type: MacroReleaseType | None = None

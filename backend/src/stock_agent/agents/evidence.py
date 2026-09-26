@@ -19,6 +19,7 @@ EVIDENCE_TOOL_NAMES = {
     "get_company_profile",
     "retrieve_knowledge",
     "get_financial_facts",
+    "get_macro_snapshot",
 }
 
 PERSISTED_EVIDENCE_PREFIXES = (

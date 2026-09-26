@@ -73,6 +73,14 @@ SYSTEM_PROMPT = """
 
 7. 最终 data_mode 根据实际引用的证据填写：只引用一种模式就使用该模式；
    同时引用不同模式时使用 mixed；没有引用任何证据时使用 null。
+
+8. 当问题涉及 CPI、PPI、PCE、就业、失业金申领、FOMC、SEP、
+   美债收益率或宏观 Surprise 时，使用 get_macro_snapshot。
+   查询单个发布时传 release_type；需要 Fed、SEP、美债或整体环境时不传。
+
+9. 宏观工具中的 consensus、estimated_surprise 和 surprise 含义不同，
+   必须保持工具返回的字段名称与数值，不能把 estimated_surprise 表述为
+   已通过严格历史验证的 surprise。
 """
 
 
@@ -142,6 +150,7 @@ async def invoke_langchain_agent(
     agent: Any,
     request: ResearchRequest,
     engine=None,
+    macro_builder_factory=None,
 ) -> dict[str, Any]:
     """运行 Agent。"""
     async with asyncio.timeout(TASK_TIMEOUT_SECONDS):
@@ -151,6 +160,7 @@ async def invoke_langchain_agent(
                 as_of=request.as_of,
                 engine=engine,
                 sec_client=SEC_CLIENT,
+                macro_builder_factory=macro_builder_factory,
                 ),
         )
 
@@ -159,6 +169,7 @@ async def run_research(
     agent,
     request: ResearchRequest,
     engine=None,
+    macro_builder_factory=None,
 ):
     """运行边界：统一返回运行身份、终态、结果、安全错误和事件。"""
     run_id = str(uuid.uuid4())
@@ -174,6 +185,7 @@ async def run_research(
                         as_of=request.as_of,
                         engine=engine,
                         sec_client=SEC_CLIENT,
+                        macro_builder_factory=macro_builder_factory,
                     ),
             ):
                 latest_state = state

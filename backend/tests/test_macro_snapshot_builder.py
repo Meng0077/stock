@@ -1,5 +1,6 @@
 from datetime import date, datetime, timezone
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 
@@ -155,3 +156,68 @@ def test_snapshot_builder_does_not_hide_programming_errors(monkeypatch):
 def test_snapshot_builder_requires_timezone_aware_as_of():
     with pytest.raises(ValueError, match="timezone-aware"):
         make_builder().build_latest(as_of=datetime(2026, 9, 20, 16))
+
+
+def test_snapshot_builder_attaches_saved_forecasts(
+    monkeypatch,
+    tmp_path: Path,
+):
+    release = make_release("cpi", date(2026, 9, 18))
+    release = release.model_copy(
+        update={
+            "metrics": [
+                release.metrics[0].model_copy(
+                    update={"source": "longbridge"}
+                )
+            ]
+        }
+    )
+
+    builder = make_builder()
+
+    def prefer_longbridge(*, release_type: str, **kwargs):
+        return release if release_type == "cpi" else None
+
+    monkeypatch.setattr(
+        builder,
+        "_prefer_longbridge",
+        prefer_longbridge,
+    )
+
+    snapshot_path = tmp_path / "forecasts.jsonl"
+    snapshot_path.touch()
+    saved_forecasts = [object()]
+    monkeypatch.setattr(
+        builder_module,
+        "load_forecast_snapshots",
+        lambda path: saved_forecasts,
+    )
+
+    def match_forecasts(*, release, snapshots, as_of):
+        assert snapshots is saved_forecasts
+        assert as_of == AS_OF
+        metric = release.metrics[0].model_copy(
+            update={
+                "consensus": Decimal("0.8"),
+                "consensus_source": "longbridge",
+            }
+        )
+        return (
+            release.model_copy(update={"metrics": [metric]}),
+            [],
+            [],
+        )
+
+    monkeypatch.setattr(
+        builder_module,
+        "match_release_forecasts",
+        match_forecasts,
+    )
+
+    builder.forecast_snapshots_path = snapshot_path
+
+    snapshot = builder.build_latest(as_of=AS_OF)
+
+    metric = snapshot.recent_releases[0].metrics[0]
+    assert metric.consensus == Decimal("0.8")
+    assert metric.consensus_source == "longbridge"

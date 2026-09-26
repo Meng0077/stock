@@ -1,7 +1,14 @@
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, tzinfo
+from typing import cast
 from zoneinfo import ZoneInfo
 
+from pathlib import Path
+
+from stock_agent.macro.forecast_matching import (
+    load_forecast_snapshots,
+    match_release_forecasts,
+)
 from stock_agent.macro.calculations.fed import build_policy_snapshot
 from stock_agent.macro.calculations.treasury import build_treasury_snapshot
 from stock_agent.macro.errors import MacroDataProviderError
@@ -25,6 +32,23 @@ from stock_agent.macro.release_builders import (
     build_weekly_claims_release,
 )
 from stock_agent.macro.temporal import filter_releases_as_of
+
+from stock_agent.macro.longbridge_latest import (
+    find_latest_available_release_date,
+)
+from stock_agent.macro.release_builders import (
+    InflationReleaseType,
+    LaborReleaseType,
+    build_longbridge_release,
+    build_longbridge_labor_release,
+)
+from stock_agent.macro.models.release import (
+    MacroReleaseEvent,
+    MacroReleaseType,
+)
+from stock_agent.macro.providers.longbridge_macro import (
+    LongbridgeMacroProvider,
+)
 
 
 EASTERN = ZoneInfo("America/New_York")
@@ -117,6 +141,9 @@ class MacroSnapshotBuilder:
         fed: FedDataProvider,
         treasury: TreasuryRatesProvider,
         claims: WeeklyClaimsProvider,
+        longbridge_macro: LongbridgeMacroProvider | None = None,
+        longbridge_vendor_timezone: tzinfo | None = None,
+        forecast_snapshots_path: Path | None = None,
     ) -> None:
         self.bls = bls
         self.bea = bea
@@ -125,6 +152,20 @@ class MacroSnapshotBuilder:
         self.fed = fed
         self.treasury = treasury
         self.claims = claims
+        self.forecast_snapshots_path = forecast_snapshots_path
+
+        if (
+            longbridge_macro is not None
+            and longbridge_vendor_timezone is None
+        ):
+            raise ValueError(
+                "Longbridge vendor timezone must be explicit"
+            )
+
+        self.longbridge_macro = longbridge_macro
+        self.longbridge_vendor_timezone = (
+            longbridge_vendor_timezone
+)
 
     def build_latest(
         self,
@@ -144,11 +185,11 @@ class MacroSnapshotBuilder:
         warnings: list[str] = []
         research_date = as_of.astimezone(EASTERN).date()
 
-        self._append_release(
-            releases=releases,
-            warnings=warnings,
-            name="cpi",
-            builder=lambda: build_bls_inflation_release(
+        fallback_builders: dict[
+            MacroReleaseType,
+            Callable[[], MacroReleaseEvent | None],
+        ] = {
+            "cpi": lambda: build_bls_inflation_release(
                 bls=self.bls,
                 consensus=self.consensus,
                 fred=self.fred,
@@ -156,12 +197,8 @@ class MacroSnapshotBuilder:
                 as_of=as_of,
                 warnings=warnings,
             ),
-        )
-        self._append_release(
-            releases=releases,
-            warnings=warnings,
-            name="ppi",
-            builder=lambda: build_bls_inflation_release(
+
+            "ppi": lambda: build_bls_inflation_release(
                 bls=self.bls,
                 consensus=self.consensus,
                 fred=self.fred,
@@ -169,44 +206,48 @@ class MacroSnapshotBuilder:
                 as_of=as_of,
                 warnings=warnings,
             ),
-        )
-        self._append_release(
-            releases=releases,
-            warnings=warnings,
-            name="pce",
-            builder=lambda: build_pce_release(
+
+            "pce": lambda: build_pce_release(
                 bea=self.bea,
                 consensus=self.consensus,
                 fred=self.fred,
                 as_of=as_of,
                 warnings=warnings,
             ),
-        )
-        self._append_release(
-            releases=releases,
-            warnings=warnings,
-            name="employment_situation",
-            builder=lambda: build_employment_release(
-                bls=self.bls,
-                fred=self.fred,
-                as_of=as_of,
-                warnings=warnings,
-                consensus=self.consensus,
-            ),
-        )
 
-        self._append_release(
-            releases=releases,
-            warnings=warnings,
-            name="weekly_claims",
-            builder=lambda: build_weekly_claims_release(
-                claims=self.claims,
-                fred=self.fred,
-                consensus=self.consensus,
-                as_of=as_of,
+            "employment_situation":
+                lambda: build_employment_release(
+                    bls=self.bls,
+                    fred=self.fred,
+                    as_of=as_of,
+                    consensus=self.consensus,
+                    warnings=warnings,
+                ),
+
+            "weekly_claims":
+                lambda: build_weekly_claims_release(
+                    claims=self.claims,
+                    fred=self.fred,
+                    consensus=self.consensus,
+                    as_of=as_of,
+                    warnings=warnings,
+                ),
+        }
+
+        for release_type, fallback in fallback_builders.items():
+            self._append_release(
+                releases=releases,
                 warnings=warnings,
-            ),
-        )
+                name=release_type,
+                builder=lambda rt=release_type, fb=fallback: (
+                    self._prefer_longbridge(
+                        release_type=rt,
+                        as_of=as_of,
+                        warnings=warnings,
+                        fallback=fb,
+                    )
+                )
+            )
 
         try:
             ranges = self.fed.get_target_ranges(as_of=research_date)
@@ -244,6 +285,12 @@ class MacroSnapshotBuilder:
         except MacroDataProviderError:
             treasury = None
             warnings.append("treasury_unavailable")
+
+        releases = self._attach_saved_forecasts(
+            releases=releases,
+            as_of=as_of,
+            warnings=warnings,
+        )
 
         releases, temporal_warnings = filter_releases_as_of(
             releases,
@@ -293,3 +340,156 @@ class MacroSnapshotBuilder:
             return
 
         releases.append(release)
+
+    def _prefer_longbridge(
+        self,
+        *,
+        release_type: MacroReleaseType,
+        as_of: datetime,
+        warnings: list[str],
+        fallback: Callable[
+            [],
+            MacroReleaseEvent | None,
+        ],
+    ) -> MacroReleaseEvent | None:
+        """优先使用长桥，完全不可用时调用原有 Builder。"""
+
+        if self.longbridge_macro is None:
+            return fallback()
+
+        if self.longbridge_vendor_timezone is None:
+            raise ValueError(
+                "Longbridge vendor timezone is missing"
+            )
+
+        try:
+            release_date = (
+                find_latest_available_release_date(
+                    macro=self.longbridge_macro,
+                    release_type=release_type,
+                    as_of=as_of,
+                    vendor_timezone=(
+                        self.longbridge_vendor_timezone
+                    ),
+                )
+            )
+
+            if release_date is None:
+                warnings.append(
+                    f"{release_type}_longbridge_no_release"
+                )
+                return fallback()
+
+            if release_type in ("cpi", "ppi", "pce"):
+                release = build_longbridge_release(
+                    macro=self.longbridge_macro,
+                    release_type=cast(
+                        InflationReleaseType,
+                        release_type,
+                    ),
+                    release_date=release_date,
+                    as_of=as_of,
+                    vendor_timezone=(
+                        self.longbridge_vendor_timezone
+                    ),
+                    warnings=warnings,
+                )
+            else:
+                release = build_longbridge_labor_release(
+                    macro=self.longbridge_macro,
+                    release_type=cast(
+                        LaborReleaseType,
+                        release_type,
+                    ),
+                    release_date=release_date,
+                    as_of=as_of,
+                    vendor_timezone=(
+                        self.longbridge_vendor_timezone
+                    ),
+                    warnings=warnings,
+                )
+
+            if release is not None:
+                # 部分发布也是有效结果；
+                # 不把另一供应商的值混入同一次发布。
+                return release
+
+            warnings.append(
+                f"{release_type}_longbridge_build_failed"
+            )
+
+        except MacroDataProviderError:
+            warnings.append(
+                f"{release_type}_longbridge_unavailable"
+            )
+
+        # 只有长桥无法形成发布事件时，才整体回退。
+        warnings.append(
+            f"{release_type}_using_official_fallback"
+        )
+
+        return fallback()
+
+    def _attach_saved_forecasts(
+        self,
+        *,
+        releases: list[MacroReleaseEvent],
+        as_of: datetime,
+        warnings: list[str],
+    ) -> list[MacroReleaseEvent]:
+        """用公布前保存的 Forecast 补充宏观发布事件。
+
+        当前只处理长桥生成的发布事件。
+        官方 Provider 回退事件暂不跨源合并。
+        """
+
+        path = self.forecast_snapshots_path
+
+        if path is None:
+            return releases
+
+        if not path.exists():
+            warnings.append("forecast_snapshots_missing")
+            return releases
+
+        try:
+            snapshots = load_forecast_snapshots(path)
+        except (OSError, ValueError):
+            # 快照文件损坏不应导致 Fed 或 Treasury
+            # 等其他宏观模块全部失败。
+            warnings.append("forecast_snapshots_read_failed")
+            return releases
+
+        if not snapshots:
+            warnings.append("forecast_snapshots_empty")
+            return releases
+
+        updated_releases: list[MacroReleaseEvent] = []
+
+        for release in releases:
+            # Step 8 的官方回退路径保持独立。
+            # 暂不把长桥 Forecast 混入 BLS/BEA 的发布，
+            # 避免在未校验跨源口径前产生错误匹配。
+            if not release.metrics or any(
+                metric.source != "longbridge"
+                for metric in release.metrics
+            ):
+                updated_releases.append(release)
+                continue
+
+            updated, _, match_warnings = (
+                match_release_forecasts(
+                    release=release,
+                    snapshots=snapshots,
+                    as_of=as_of,
+                )
+            )
+
+            updated_releases.append(updated)
+
+            warnings.extend(
+                f"{release.release_id}:{warning}"
+                for warning in match_warnings
+            )
+
+        return updated_releases

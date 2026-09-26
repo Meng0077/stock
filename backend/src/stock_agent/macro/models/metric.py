@@ -137,6 +137,7 @@ class MacroMetricSnapshot(BaseModel):
         actual - consensus。
         单位与 actual/consensus 一致。
 
+
     release_date:
         官方发布日期，只精确到日期时填写。
 
@@ -166,6 +167,10 @@ class MacroMetricSnapshot(BaseModel):
     previous: Decimal | None = None
     consensus: Decimal | None = None
     surprise: Decimal | None = None
+
+    estimated_surprise: Decimal | None = None
+    consensus_source: str | None = None
+
     release_date: date | None = None
     released_at: datetime | None = None
     forecast_as_of: datetime | None = None
