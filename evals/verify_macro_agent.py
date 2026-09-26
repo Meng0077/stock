@@ -2,6 +2,7 @@
 
 import asyncio
 from datetime import datetime, timezone
+import json
 
 from stock_agent.agents.langchain.langchain_agent import run_research
 from stock_agent.api.dependencies import (
@@ -53,6 +54,14 @@ async def main() -> None:
     print("status=", result["status"])
     print("macro_tool_events=", [event["type"] for event in macro_events])
     print("macro_evidence_ids=", sorted(evidence_ids))
+    print(
+        "model_analysis=",
+        json.dumps(
+            result["output"].model_dump(mode="json"),
+            ensure_ascii=False,
+            indent=2,
+        ),
+    )
     print("Day24 macro Agent verification passed.")
 
 

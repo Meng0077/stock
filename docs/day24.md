@@ -3,17 +3,17 @@
 Day24 接入 CPI、PPI、PCE、就业、周度失业金申领、Fed Policy、SEP 和美债收益率。长桥是普通在线研究的宏观发布主路径，BLS、BEA 和 FRED 保留为发布数据回退，Fed Policy、SEP 与美债继续由 FRED 提供。主路径面向“最近一次宏观数据发布”，不承担严格历史回测，也不在缺少可靠来源时补造精确发布时间。
 
 ```text
-Longbridge Macro             发布前 Forecast 快照
-        │                              │
-        ├── Actual / Previous          └── captured_at + Consensus
-        ├── Forecast                              │
-        └── Scheduled Time                        │
-                         ↓                        ↓
-                      MacroReleaseEvent
-                              ↓
-       FRED Fed Policy / SEP + Treasury Yield Curve
-                              ↓
-                         MacroSnapshot
+Longbridge Macro
+        │
+        ├── Actual / Previous
+        ├── Forecast
+        └── Scheduled Time
+                 ↓
+      MacroReleaseEvent
+                 ↓
+FRED Fed Policy / SEP + Treasury Yield Curve
+                 ↓
+            MacroSnapshot
 ```
 
 ## 时间字段
@@ -51,20 +51,30 @@ PPI Release 包含：
 
 ## Consensus 与 Surprise
 
-长桥历史记录可以提供 Forecast，但只有项目在发布前实际保存的快照才用于计算 Estimated Surprise。没有匹配的 indicator、measure 和 period 时：
+当前首版面向普通在线研究，不承担 PIT 回测。项目直接采用长桥历史记录中的 Forecast，并计算：
+
+```text
+consensus = supplier_forecast
+estimated_surprise = actual - supplier_forecast
+```
+
+如果供应商没有提供 Forecast：
 
 ```text
 consensus = None
 estimated_surprise = None
 ```
 
-定期执行 `evals/capture_macro_forecasts.py` 会追加保存下一次 CPI、PPI、PCE、Employment Situation 和 Weekly Claims 的 Forecast。发布后，`MacroSnapshotBuilder` 按 release type、release date、indicator、measure、period 和 unit 精确匹配，并计算：
+由于无法证明供应商历史 Forecast 在发布前的具体版本，字段保持：
 
 ```text
-estimated_surprise = actual - pre_release_forecast
+consensus_source = "longbridge"
+forecast_as_of = None
+consensus_pit_verified = False
+surprise = None
 ```
 
-快照记录 `forecast_as_of` 和 `consensus_source="longbridge"`。由于实际发布时间和 Actual 初始版本尚未严格验证，`consensus_pit_verified=False`、`surprise=None`，不会把 Estimated Surprise 冒充为严格 PIT Surprise。
+因此这里的差值只能称为 Estimated Surprise，不能用于严格 PIT 回测，也不能表述为经过历史版本验证的 Surprise。
 
 BLS 普通时间序列 API 可能返回后续修订值，因此即使 `release_date` 已知，`actual_pit_status` 仍保持 `unverified`。
 
@@ -73,9 +83,6 @@ BLS 普通时间序列 API 可能返回后续修订值，因此即使 `release_d
 - `LongbridgeMacroProvider`：提供发布事件的 Actual、Previous、Forecast 和计划时间；
 - `BLSProvider`、`BEAPCEProvider`、`FredProvider`：长桥发布无法形成事件时的官方回退；
 - `WeeklyClaimsProvider`：通过统一的 `FredProvider` 读取带日期级 vintage 的 Claims 序列；
-- `capture_next_forecasts`：只采集尚未发布事件的 Forecast；
-- `append_forecast_snapshot`：将发布前快照追加到 JSONL，不覆盖历史版本；
-- `match_release_forecasts`：发布后匹配快照并生成 Estimated Surprise；
 - `FedDataProvider`：读取目标利率区间和 SEP 中位数预测；
 - `TreasuryRatesProvider`：读取四个期限的日度名义收益率；
 - `MacroSnapshotBuilder`：调用 Provider 和纯计算函数，将指标组织成发布事件；
@@ -96,12 +103,9 @@ cd backend
   tests/test_macro_*.py
 ```
 
-在线验收需要在 `backend/.env` 设置长桥、FRED 和 BEA 密钥。Forecast 文件默认位于 `evals/results/macro_forecasts.jsonl`，可通过 `MACRO_FORECAST_SNAPSHOTS_PATH` 修改。
+在线验收需要在 `backend/.env` 设置长桥、FRED 和 BEA 密钥。
 
 ```bash
-PYTHONPATH=backend/src backend/.venv/bin/python \
-  evals/capture_macro_forecasts.py
-
 PYTHONPATH=backend/src backend/.venv/bin/python \
   evals/verify_day24_macro.py
 
@@ -109,13 +113,11 @@ PYTHONPATH=backend/src backend/.venv/bin/python \
   evals/verify_macro_agent.py
 ```
 
-采集命令每次只执行一轮；部署时由外部调度器定期调用。重复采集会保留多个时间版本，匹配时选择发布前最后一次有效快照。
-
 ## 当前仍未完成
 
 - 长桥事件时间尚未独立核实为真实发布时间，`released_at` 仍为空。发布日期当天会保守跳过该事件，不能用于分钟级 Market Reaction；
 - 长桥历史 Actual 可能包含后续修订，`actual_pit_status` 保持 `unverified`，尚不支持严格历史 vintage 回放；
-- 当前输出的是有发布前采集证据的 Estimated Surprise，不是严格 PIT Surprise；
+- Estimated Surprise 直接基于供应商历史 Forecast，无法证明该 Forecast 的发布前历史版本，不是严格 PIT Surprise；
 
 Day24 不实现分钟级市场反应或 MarketReaction；这些能力进入 D26–D30，并要求可靠的事件时间和盘中市场数据。
 

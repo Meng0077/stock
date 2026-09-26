@@ -866,8 +866,19 @@ def build_longbridge_release(
                 previous=record.previous,
                 consensus=record.forecast,
 
-                # 尚未证明 Forecast 是公布前的历史版本。
+                # 普通在线研究直接采用供应商历史记录中的 Forecast。
+                # 该值没有历史快照时间，因此只能生成 Estimated Surprise。
                 surprise=None,
+                estimated_surprise=(
+                    record.actual - record.forecast
+                    if record.forecast is not None
+                    else None
+                ),
+                consensus_source=(
+                    "longbridge"
+                    if record.forecast is not None
+                    else None
+                ),
                 forecast_as_of=None,
                 consensus_pit_verified=False,
 
@@ -1061,9 +1072,19 @@ def build_longbridge_labor_release(
                 previous=record.previous,
                 consensus=record.forecast,
 
-                # 不把未经 PIT 验证的历史预期
-                # 用于严格 Surprise 计算。
+                # 普通在线研究直接采用供应商历史记录中的 Forecast。
+                # 该值没有历史快照时间，因此只能生成 Estimated Surprise。
                 surprise=None,
+                estimated_surprise=(
+                    record.actual - record.forecast
+                    if record.forecast is not None
+                    else None
+                ),
+                consensus_source=(
+                    "longbridge"
+                    if record.forecast is not None
+                    else None
+                ),
                 forecast_as_of=None,
                 consensus_pit_verified=False,
 

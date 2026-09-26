@@ -3,16 +3,13 @@ from datetime import datetime, tzinfo
 from typing import cast
 from zoneinfo import ZoneInfo
 
-from pathlib import Path
-
-from stock_agent.macro.forecast_matching import (
-    load_forecast_snapshots,
-    match_release_forecasts,
-)
 from stock_agent.macro.calculations.fed import build_policy_snapshot
 from stock_agent.macro.calculations.treasury import build_treasury_snapshot
 from stock_agent.macro.errors import MacroDataProviderError
-from stock_agent.macro.models.release import MacroReleaseEvent
+from stock_agent.macro.models.release import (
+    MacroReleaseEvent,
+    MacroReleaseType,
+)
 from stock_agent.macro.models.snapshot import MacroSnapshot
 from stock_agent.macro.models.fed import FedMedianProjection, FedPolicySnapshot
 from stock_agent.macro.models.treasury import TREASURY_TENORS, TreasurySnapshot
@@ -41,10 +38,6 @@ from stock_agent.macro.release_builders import (
     LaborReleaseType,
     build_longbridge_release,
     build_longbridge_labor_release,
-)
-from stock_agent.macro.models.release import (
-    MacroReleaseEvent,
-    MacroReleaseType,
 )
 from stock_agent.macro.providers.longbridge_macro import (
     LongbridgeMacroProvider,
@@ -143,7 +136,6 @@ class MacroSnapshotBuilder:
         claims: WeeklyClaimsProvider,
         longbridge_macro: LongbridgeMacroProvider | None = None,
         longbridge_vendor_timezone: tzinfo | None = None,
-        forecast_snapshots_path: Path | None = None,
     ) -> None:
         self.bls = bls
         self.bea = bea
@@ -152,7 +144,6 @@ class MacroSnapshotBuilder:
         self.fed = fed
         self.treasury = treasury
         self.claims = claims
-        self.forecast_snapshots_path = forecast_snapshots_path
 
         if (
             longbridge_macro is not None
@@ -285,12 +276,6 @@ class MacroSnapshotBuilder:
         except MacroDataProviderError:
             treasury = None
             warnings.append("treasury_unavailable")
-
-        releases = self._attach_saved_forecasts(
-            releases=releases,
-            as_of=as_of,
-            warnings=warnings,
-        )
 
         releases, temporal_warnings = filter_releases_as_of(
             releases,
@@ -429,67 +414,3 @@ class MacroSnapshotBuilder:
         )
 
         return fallback()
-
-    def _attach_saved_forecasts(
-        self,
-        *,
-        releases: list[MacroReleaseEvent],
-        as_of: datetime,
-        warnings: list[str],
-    ) -> list[MacroReleaseEvent]:
-        """用公布前保存的 Forecast 补充宏观发布事件。
-
-        当前只处理长桥生成的发布事件。
-        官方 Provider 回退事件暂不跨源合并。
-        """
-
-        path = self.forecast_snapshots_path
-
-        if path is None:
-            return releases
-
-        if not path.exists():
-            warnings.append("forecast_snapshots_missing")
-            return releases
-
-        try:
-            snapshots = load_forecast_snapshots(path)
-        except (OSError, ValueError):
-            # 快照文件损坏不应导致 Fed 或 Treasury
-            # 等其他宏观模块全部失败。
-            warnings.append("forecast_snapshots_read_failed")
-            return releases
-
-        if not snapshots:
-            warnings.append("forecast_snapshots_empty")
-            return releases
-
-        updated_releases: list[MacroReleaseEvent] = []
-
-        for release in releases:
-            # Step 8 的官方回退路径保持独立。
-            # 暂不把长桥 Forecast 混入 BLS/BEA 的发布，
-            # 避免在未校验跨源口径前产生错误匹配。
-            if not release.metrics or any(
-                metric.source != "longbridge"
-                for metric in release.metrics
-            ):
-                updated_releases.append(release)
-                continue
-
-            updated, _, match_warnings = (
-                match_release_forecasts(
-                    release=release,
-                    snapshots=snapshots,
-                    as_of=as_of,
-                )
-            )
-
-            updated_releases.append(updated)
-
-            warnings.extend(
-                f"{release.release_id}:{warning}"
-                for warning in match_warnings
-            )
-
-        return updated_releases

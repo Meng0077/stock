@@ -20,7 +20,7 @@
 | D19–D20 检索评估 | 延后 | 固定评估集和完整检索评估仍需收口 |
 | D21–D22 行情 | 已完成 | 统一 Quote/Bar 契约、Fixture Provider、Longbridge 最新报价和至少 60 根已完成日线 |
 | D23 技术分析 | 已完成 | MA5/20/50、收益率、ATR14、成交量、确认拐点及候选支撑阻力 |
-| D24 宏观数据 | 核心链路已完成 | 长桥提供 CPI、PPI、PCE、就业、Claims 及发布前 Forecast；FRED 保留 Fed/SEP 和美债；支持可追溯的 Estimated Surprise，Macro Tool 已通过真实 Agent 联调 |
+| D24 宏观数据 | 核心链路已完成 | 长桥提供 CPI、PPI、PCE、就业、Claims 及供应商 Forecast；FRED 保留 Fed/SEP 和美债；支持明确标注为非 PIT 的 Estimated Surprise，Macro Tool 已通过真实 Agent 联调 |
 | D25–D45 | 待开发 | 时间有效性检查、Market Reaction、分析引擎、LangGraph、React 联调、评估与部署 |
 
 各开发日的设计、验收记录和已知限制位于 [`docs/`](docs/)。当前状态以对应 day 文档和测试结果为准，不把 fixture、历史数据或尚未联调的能力描述为实时生产能力。
@@ -161,12 +161,11 @@ pnpm build
 
 ```bash
 PYTHONPATH=backend/src backend/.venv/bin/python evals/verify_longbridge_market_data.py
-PYTHONPATH=backend/src backend/.venv/bin/python evals/capture_macro_forecasts.py
 PYTHONPATH=backend/src backend/.venv/bin/python evals/verify_day24_macro.py
 PYTHONPATH=backend/src backend/.venv/bin/python evals/verify_macro_agent.py
 ```
 
-这些脚本需要相应密钥和外部服务可用。Forecast 采集命令每次执行一次，部署时由外部调度器定期调用；默认追加到 `evals/results/macro_forecasts.jsonl`，也可通过 `MACRO_FORECAST_SNAPSHOTS_PATH` 修改。长桥事件时间尚未作为经独立核实的实际发布时间，因此不能单独用于 T+5m 等分钟级 Market Reaction。
+这些脚本需要相应密钥和外部服务可用。Estimated Surprise 直接使用长桥历史记录中的 Forecast，不具备严格 PIT 保证。长桥事件时间尚未作为经独立核实的实际发布时间，因此不能单独用于 T+5m 等分钟级 Market Reaction。
 
 ## 文档入口
 

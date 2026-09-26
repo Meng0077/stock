@@ -25,9 +25,6 @@ from stock_agent.macro.providers.treasury import TreasuryRatesProvider
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_SNAPSHOTS_PATH = (
-    ROOT / "evals" / "results" / "macro_forecasts.jsonl"
-)
 LONGBRIDGE_TIMEZONE = ZoneInfo("Asia/Shanghai")
 EXPECTED_RELEASES = {
     "cpi",
@@ -46,12 +43,6 @@ def main() -> None:
     fred_api_key = os.environ["FRED_API_KEY"]
     bea_api_key = os.environ["BEA_API_KEY"]
     te_api_key = os.environ.get("TRADING_ECONOMICS_API_KEY", "").strip()
-    snapshots_path = Path(
-        os.environ.get(
-            "MACRO_FORECAST_SNAPSHOTS_PATH",
-            DEFAULT_SNAPSHOTS_PATH,
-        )
-    )
     longbridge = LongbridgeMacroProvider(
         FundamentalContext(Config.from_apikey_env())
     )
@@ -73,9 +64,6 @@ def main() -> None:
             claims=WeeklyClaimsProvider(fred),
             longbridge_macro=longbridge,
             longbridge_vendor_timezone=LONGBRIDGE_TIMEZONE,
-            forecast_snapshots_path=(
-                snapshots_path if snapshots_path.exists() else None
-            ),
         )
         snapshot = builder.build_latest(
             as_of=datetime.now(timezone.utc),
@@ -101,6 +89,18 @@ def main() -> None:
             metric.consensus_pit_verified or metric.surprise is None
             for metric in release.metrics
         )
+        for metric in release.metrics:
+            if (
+                metric.source == "longbridge"
+                and metric.consensus is not None
+            ):
+                assert metric.estimated_surprise == (
+                    metric.actual - metric.consensus
+                )
+                assert metric.consensus_source == "longbridge"
+                assert metric.forecast_as_of is None
+                assert metric.consensus_pit_verified is False
+                assert metric.surprise is None
         print(
             release.release_id,
             "metrics=",

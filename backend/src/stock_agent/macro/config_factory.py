@@ -24,9 +24,6 @@ from stock_agent.macro.providers.treasury import TreasuryRatesProvider
 
 
 ROOT = Path(__file__).resolve().parents[4]
-DEFAULT_FORECAST_SNAPSHOTS_PATH = (
-    ROOT / "evals" / "results" / "macro_forecasts.jsonl"
-)
 LONGBRIDGE_TIMEZONE = ZoneInfo("Asia/Shanghai")
 
 
@@ -44,13 +41,6 @@ def build_macro_snapshot_builder() -> MacroSnapshotBuilder:
         "TRADING_ECONOMICS_API_KEY",
         "",
     ).strip()
-    snapshots_path = Path(
-        os.environ.get(
-            "MACRO_FORECAST_SNAPSHOTS_PATH",
-            DEFAULT_FORECAST_SNAPSHOTS_PATH,
-        )
-    )
-
     return MacroSnapshotBuilder(
         bls=BLSProvider(client),
         bea=BEAPCEProvider(
@@ -73,5 +63,4 @@ def build_macro_snapshot_builder() -> MacroSnapshotBuilder:
             FundamentalContext(Config.from_apikey_env())
         ),
         longbridge_vendor_timezone=LONGBRIDGE_TIMEZONE,
-        forecast_snapshots_path=snapshots_path,
     )
