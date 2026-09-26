@@ -1,5 +1,6 @@
 from collections.abc import Callable
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from stock_agent.macro.calculations.fed import build_policy_snapshot
 from stock_agent.macro.calculations.treasury import build_treasury_snapshot
@@ -12,6 +13,7 @@ from stock_agent.macro.providers.bea import BEAPCEProvider
 from stock_agent.macro.providers.bls import BLSProvider
 from stock_agent.macro.providers.fed import FedDataProvider
 from stock_agent.macro.providers.fred import FredProvider
+from stock_agent.macro.providers.fred_claims import WeeklyClaimsProvider
 from stock_agent.macro.providers.trading_economics import (
     TradingEconomicsConsensusProvider,
 )
@@ -20,7 +22,12 @@ from stock_agent.macro.release_builders import (
     build_bls_inflation_release,
     build_employment_release,
     build_pce_release,
+    build_weekly_claims_release,
 )
+from stock_agent.macro.temporal import filter_releases_as_of
+
+
+EASTERN = ZoneInfo("America/New_York")
 
 
 def build_macro_snapshot(
@@ -105,10 +112,11 @@ class MacroSnapshotBuilder:
         *,
         bls: BLSProvider,
         bea: BEAPCEProvider,
-        consensus: TradingEconomicsConsensusProvider,
+        consensus: TradingEconomicsConsensusProvider | None,
         fred: FredProvider,
         fed: FedDataProvider,
         treasury: TreasuryRatesProvider,
+        claims: WeeklyClaimsProvider,
     ) -> None:
         self.bls = bls
         self.bea = bea
@@ -116,6 +124,7 @@ class MacroSnapshotBuilder:
         self.fred = fred
         self.fed = fed
         self.treasury = treasury
+        self.claims = claims
 
     def build_latest(
         self,
@@ -128,8 +137,12 @@ class MacroSnapshotBuilder:
         单个宏观模块失败时跳过该模块，并写入 warnings。
         """
 
+        if as_of.tzinfo is None or as_of.utcoffset() is None:
+            raise ValueError("as_of must be timezone-aware")
+
         releases: list[MacroReleaseEvent] = []
         warnings: list[str] = []
+        research_date = as_of.astimezone(EASTERN).date()
 
         self._append_release(
             releases=releases,
@@ -141,6 +154,7 @@ class MacroSnapshotBuilder:
                 fred=self.fred,
                 release_type="cpi",
                 as_of=as_of,
+                warnings=warnings,
             ),
         )
         self._append_release(
@@ -153,6 +167,7 @@ class MacroSnapshotBuilder:
                 fred=self.fred,
                 release_type="ppi",
                 as_of=as_of,
+                warnings=warnings,
             ),
         )
         self._append_release(
@@ -164,6 +179,7 @@ class MacroSnapshotBuilder:
                 consensus=self.consensus,
                 fred=self.fred,
                 as_of=as_of,
+                warnings=warnings,
             ),
         )
         self._append_release(
@@ -174,20 +190,39 @@ class MacroSnapshotBuilder:
                 bls=self.bls,
                 fred=self.fred,
                 as_of=as_of,
+                warnings=warnings,
+                consensus=self.consensus,
+            ),
+        )
+
+        self._append_release(
+            releases=releases,
+            warnings=warnings,
+            name="weekly_claims",
+            builder=lambda: build_weekly_claims_release(
+                claims=self.claims,
+                fred=self.fred,
+                consensus=self.consensus,
+                as_of=as_of,
+                warnings=warnings,
             ),
         )
 
         try:
-            ranges = self.fed.get_target_ranges(as_of=as_of.date())
+            ranges = self.fed.get_target_ranges(as_of=research_date)
             fed_policy = build_policy_snapshot(ranges)
+            if fed_policy is None:
+                warnings.append("fed_policy_missing")
         except MacroDataProviderError:
             fed_policy = None
             warnings.append("fed_policy_unavailable")
 
         try:
             fed_projections = self.fed.get_current_projections(
-                as_of=as_of.date()
+                as_of=research_date
             )
+            if not fed_projections:
+                warnings.append("fed_projections_missing")
         except MacroDataProviderError:
             fed_projections = []
             warnings.append("fed_projections_unavailable")
@@ -196,17 +231,27 @@ class MacroSnapshotBuilder:
             # Provider 只负责取数；完整曲线和利差由纯计算函数组装。
             treasury_yields = self.treasury.get_yields(
                 list(TREASURY_TENORS),
-                as_of=as_of.date(),
+                as_of=research_date,
             )
             treasury = build_treasury_snapshot(
                 observations=treasury_yields,
-                as_of=as_of.date(),
+                as_of=research_date,
             )
-            if treasury is not None and treasury.is_stale:
+            if treasury is None:
+                warnings.append("treasury_data_missing")
+            elif treasury.is_stale:
                 warnings.append("treasury_data_stale")
         except MacroDataProviderError:
             treasury = None
             warnings.append("treasury_unavailable")
+
+        releases, temporal_warnings = filter_releases_as_of(
+            releases,
+            as_of=as_of,
+            strict_pit=False,
+        )
+
+        warnings.extend(temporal_warnings)
 
         # 最新发布在前。
         releases.sort(

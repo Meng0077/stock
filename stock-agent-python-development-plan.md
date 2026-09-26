@@ -3,7 +3,7 @@
 - 版本：v3.3，2026-09-25；聚焦财报 RAG、行情与技术分析、宏观数据和 Market Reaction 四条核心研究链路。
 - 定位：面向 Agent 开发岗位的可演示项目；模型负责理解问题、调用只读工具、检索资料和解释结果，行情、宏观、市场反应与决策规则由可复现的 Python 模块完成。
 - 排期：面试版 9 周、45 个开发日、约 180 小时；按每天 4 小时、每周 5 天估算。若 Python 异步、数据源接入或部署比预期慢，另留 1–2 周缓冲。
-- 当前进度：D11–D15 已完成本地 RAG、通用 Knowledge Tool、SEC Provider、HTML 解析和任意 ticker 的首次按需索引，见对应 day 文档；中文检索、SEC 历史清单及无匹配资料的细分原因等已记录遗留项继续保留。D16 已完成 PostgreSQL / pgvector 的原文、chunk、embedding 和索引快照持久化。D17 已完成 exact snapshot、latest compatible snapshot、按 accession 增量更新和历史检索时间边界。D18 已完成最小 SEC Company Facts、Financial Tool、精确数值存储及 Financial / Knowledge evidence 组合校验。D21 已完成 MarketDataProvider、Quote / Bar 契约和离线 Fixture 验收。D22 已完成 Longbridge 适配器、离线测试及 NVDA / AMD 真实在线验收。D24 已建立 Macro Provider、模型、纯计算和发布事件组装，完整真实 API 联调仍按新版完成标准继续。D19、D20 延后。
+- 当前进度：D11–D15 已完成本地 RAG、通用 Knowledge Tool、SEC Provider、HTML 解析和任意 ticker 的首次按需索引，见对应 day 文档；中文检索、SEC 历史清单及无匹配资料的细分原因等已记录遗留项继续保留。D16 已完成 PostgreSQL / pgvector 的原文、chunk、embedding 和索引快照持久化。D17 已完成 exact snapshot、latest compatible snapshot、按 accession 增量更新和历史检索时间边界。D18 已完成最小 SEC Company Facts、Financial Tool、精确数值存储及 Financial / Knowledge evidence 组合校验。D21 已完成 MarketDataProvider、Quote / Bar 契约和离线 Fixture 验收。D22 已完成 Longbridge 适配器、离线测试及 NVDA / AMD 真实在线验收。D24 的 CPI、PPI、PCE、就业、Claims、Fed / SEP 和美债核心链路已通过离线及真实 API 验收；Trading Economics Consensus 在线验收仍待配置密钥，Macro Tool 的 Agent 接入留待后续整合。D19、D20 延后。
 
 本文是拟开发计划。目录、接口和演示能力只有在代码实现并验收后才算完成；不能把 fixture、历史数据或延迟数据标成实时行情。
 

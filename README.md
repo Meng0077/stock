@@ -20,7 +20,7 @@
 | D19–D20 检索评估 | 延后 | 固定评估集和完整检索评估仍需收口 |
 | D21–D22 行情 | 已完成 | 统一 Quote/Bar 契约、Fixture Provider、Longbridge 最新报价和至少 60 根已完成日线 |
 | D23 技术分析 | 已完成 | MA5/20/50、收益率、ATR14、成交量、确认拐点及候选支撑阻力 |
-| D24 宏观数据 | 进行中 | Provider、领域模型、纯计算、发布事件和 MacroSnapshot 已建立；继续完成全部真实数据联调 |
+| D24 宏观数据 | 核心链路已完成 | CPI、PPI、PCE、就业、Claims、Fed/SEP 和美债已通过离线与真实 API 验收；Trading Economics Consensus 在线验收待配置密钥 |
 | D25–D45 | 待开发 | 时间有效性检查、Market Reaction、分析引擎、LangGraph、React 联调、评估与部署 |
 
 各开发日的设计、验收记录和已知限制位于 [`docs/`](docs/)。当前状态以对应 day 文档和测试结果为准，不把 fixture、历史数据或尚未联调的能力描述为实时生产能力。
@@ -107,7 +107,7 @@ cp -n backend/.env.example backend/.env
 
 - 模型：`LLM_PROVIDER`、`DEEPSEEK_API_KEY` 或 `ZHIPU_API_KEY`、`MODEL_NAME`；
 - 持久化：`STOCK_AGENT_DATABASE_URL`；
-- 宏观：`FRED_API_KEY`，以及可选的 `TRADING_ECONOMICS_API_KEY`；
+- 宏观：`FRED_API_KEY`、`BEA_API_KEY`，以及可选的 `TRADING_ECONOMICS_API_KEY`；
 - Longbridge：`LONGBRIDGE_APP_KEY`、`LONGBRIDGE_APP_SECRET`、`LONGBRIDGE_ACCESS_TOKEN`。
 
 不要提交 `backend/.env`，也不要把密钥写入代码、终端命令或聊天记录。

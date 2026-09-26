@@ -1,21 +1,22 @@
-import csv
 from dataclasses import dataclass
 from datetime import date
-from decimal import Decimal, InvalidOperation
-from io import StringIO
-
-import httpx
+from typing import Literal
 
 from stock_agent.macro.errors import MacroDataProviderError
+from stock_agent.macro.providers.fred import FredProvider
 
-
-FRED_CSV_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv"
 
 CLAIMS_SERIES = {
     "initial_claims": "ICSA",
     "continuing_claims": "CCSA",
     "initial_claims_4w_avg": "IC4WSA",
 }
+
+ClaimsIndicator = Literal[
+    "initial_claims",
+    "continuing_claims",
+    "initial_claims_4w_avg",
+]
 
 
 @dataclass(frozen=True)
@@ -41,75 +42,52 @@ class WeeklyClaimsPoint:
 
 
 class WeeklyClaimsProvider:
-    """从 FRED 获取美国劳工部的真实周频失业金数据。
+    """通过统一 FredProvider 获取周度失业金申领数据。"""
 
-    第一版只负责当前最新数据及近期历史，
-    不承诺支持任意 as_of 的严格历史回放。
-    """
-
-    def __init__(self, client: httpx.Client):
-        self.client = client
+    def __init__(self, fred: FredProvider) -> None:
+        self.fred = fred
 
     def fetch_series(
         self,
         series_id: str,
         *,
         start_date: date,
+        as_of: date,
     ) -> list[WeeklyClaimsPoint]:
-        """获取某条周频序列，并按统计周升序返回。"""
+        """获取指定序列截至某个日期的近期历史。
 
-        try:
-            response = self.client.get(
-                FRED_CSV_URL,
-                params={
-                    "id": series_id,
-                    "cosd": start_date.isoformat(),
-                },
+        FRED vintage 只提供日期级历史版本，
+        不能证明数据在 as_of 当天某一时刻已经公布。
+        """
+
+        if series_id not in CLAIMS_SERIES.values():
+            raise ValueError(
+                f"Unsupported claims series: {series_id}"
             )
-            response.raise_for_status()
-            reader = csv.reader(StringIO(response.text))
-            header = next(reader)
 
-            if len(header) != 2 or header[1] != series_id:
+        observations = self.fred.get_observations(
+            series_id,
+            observation_start=start_date,
+            observation_end=as_of,
+            realtime_start=as_of,
+            realtime_end=as_of,
+        )
+
+        points = []
+        for item in observations:
+            if (
+                item.value < 0
+                or item.value != item.value.to_integral_value()
+            ):
                 raise MacroDataProviderError(
-                    "Unexpected FRED CSV header"
+                    f"Invalid claims value for {series_id}"
                 )
-
-            points = []
-            for row in reader:
-                if len(row) != 2:
-                    raise MacroDataProviderError("Invalid FRED CSV row")
-
-                raw_date, raw_value = row
-
-                # 缺失值不能当成零。
-                if raw_value.strip() in {"", "."}:
-                    continue
-
-                number = Decimal(raw_value)
-                if (
-                    not number.is_finite()
-                    or number < 0
-                    or number != number.to_integral_value()
-                ):
-                    raise MacroDataProviderError("Invalid claims value")
-
-                points.append(
-                    WeeklyClaimsPoint(
-                        series_id=series_id,
-                        week_ending=date.fromisoformat(raw_date),
-                        value=int(number),
-                    )
+            points.append(
+                WeeklyClaimsPoint(
+                    series_id=series_id,
+                    week_ending=item.period,
+                    value=int(item.value),
                 )
+            )
 
-            return sorted(points, key=lambda point: point.week_ending)
-        except (
-            httpx.HTTPError,
-            ValueError,
-            InvalidOperation,
-            csv.Error,
-            StopIteration,
-        ) as exc:
-            raise MacroDataProviderError(
-                f"Failed to fetch {series_id}"
-            ) from exc
+        return sorted(points, key=lambda point: point.week_ending)

@@ -1,28 +1,18 @@
-# Day24：CPI/PPI 发布事件
+# Day24：基于发布事件的宏观数据模块
 
-Day24 接入 BLS 已发布的 CPI/PPI 数据，并通过 FRED API 获取官方发布日期。主路径面向“最近一次宏观数据发布”，不承担严格历史回测，也不在缺少可靠来源时补造精确发布时间。
+Day24 接入 CPI、PPI、PCE、就业、周度失业金申领、Fed Policy、SEP 和美债收益率，并通过 FRED API 获取经济数据的官方发布日期。主路径面向“最近一次宏观数据发布”，不承担严格历史回测，也不在缺少可靠来源时补造精确发布时间。
 
 ```text
-BLS Public Data API
-        ↓
-BLSSeriesPoint(period, value)
-        ↓
-InflationReading(actual, previous)
-
-FRED API
-        ↓
-Series -> Economic Release -> Release Dates
-
-Trading Economics Calendar（可选）
-        ↓
-consensus + scheduled_release_at
-
-        ↓
-MacroReleaseEvent
-        ├── release_date
-        ├── scheduled_release_at
-        ├── released_at
-        └── metrics
+BLS / BEA / FRED              Trading Economics（可选）
+        │                                  │
+        ├── Actual / Previous              ├── Consensus
+        └── Release Date                    └── Scheduled Time
+                         ↓
+                 MacroReleaseEvent
+                         ↓
+Fed Policy / SEP + Treasury Yield Curve
+                         ↓
+                    MacroSnapshot
 ```
 
 ## 时间字段
@@ -48,6 +38,14 @@ PPI Release 包含：
 - PPI MoM / YoY；
 - Core PPI MoM / YoY。
 
+此外还包括：
+
+- PCE / Core PCE MoM、YoY；
+- Nonfarm Payrolls、Unemployment Rate、Average Hourly Earnings；
+- Initial Claims、Continuing Claims、Initial Claims 4-week Average；
+- 当前与前次 Fed 目标利率区间、SEP 中位数预测；
+- 3M、2Y、10Y、30Y 美债收益率、日变化和期限利差。
+
 `MacroSnapshot.recent_releases` 保存事件，避免 Agent 自己把四项指标拼成一次发布。稳定事件 ID 使用 `release_type:release_date`，例如 `cpi:2026-09-11`。
 
 ## Consensus 与 Surprise
@@ -66,8 +64,12 @@ BLS 普通时间序列 API 可能返回后续修订值，因此即使 `release_d
 ## Provider 边界
 
 - `BLSProvider`：只读取 BLS 原始时间序列，不保存发布日期；
+- `BEAPCEProvider`：读取 BEA 的 PCE / Core PCE 月度指数；
 - `FredProvider`：提供 Series 对应的 Release 和发布日期；
+- `WeeklyClaimsProvider`：通过统一的 `FredProvider` 读取带日期级 vintage 的 Claims 序列；
 - `TradingEconomicsConsensusProvider`：提供可选 Consensus 和计划发布时间；
+- `FedDataProvider`：读取目标利率区间和 SEP 中位数预测；
+- `TreasuryRatesProvider`：读取四个期限的日度名义收益率；
 - `MacroSnapshotBuilder`：调用 Provider 和纯计算函数，将指标组织成发布事件；
 - 单个 Provider 的领域错误只影响对应模块，并写入 `warnings`；编程错误不被吞掉。
 
@@ -83,21 +85,27 @@ cd backend
   tests/test_bls_provider.py \
   tests/test_fred_release_dates.py \
   tests/test_te_consensus_provider.py \
-  tests/test_macro_inflation_snapshot.py \
-  tests/test_macro_releases.py \
-  tests/test_macro_builder.py
+  tests/test_macro_*.py
 ```
 
-在线验收需要在 `backend/.env` 设置 `FRED_API_KEY`。`TRADING_ECONOMICS_API_KEY` 可选；未设置时脚本同时验证“缺少预期值不计算 Surprise”。
+在线验收需要在 `backend/.env` 设置 `FRED_API_KEY` 和 `BEA_API_KEY`。`TRADING_ECONOMICS_API_KEY` 可选；未设置时脚本同时验证“缺少预期值不计算 Surprise”。
 
 ```bash
 PYTHONPATH=backend/src backend/.venv/bin/python \
   evals/verify_day24_macro.py
 ```
 
-Day24 不实现分钟级市场反应、严格历史 vintage 回放或 MarketReaction；这些能力需要可靠的事件时间和盘中市场数据。
+## 当前仍未完成
 
-2026-09-24 已完成真实在线验收：CPI 发布日为 2026-09-11，PPI 发布日为 2026-09-10，两次 Release 均生成 4 项指标。当前环境未配置 Trading Economics key，因此计划发布时间和 Consensus 保持缺失，未计算 Surprise。
+- Trading Economics 普通 Calendar 不能证明 Forecast 是公布前保存的历史版本，因此可以展示匹配到的 Consensus，但不计算未经 PIT 验证的 Surprise；
+- FRED 发布日期只有日期精度，`released_at` 仍为空。发布日期当天会保守跳过该事件，不能用于分钟级 Market Reaction；
+- BLS / BEA 普通 API 的最新数值可能包含后续修订，`actual_pit_status` 保持 `unverified`，尚不支持严格历史 vintage 回放；
+- 完整 MacroSnapshot 的真实 API 端到端验收需要同时配置 FRED 和 BEA 密钥；未配置的 Trading Economics 只影响 Consensus，不影响官方 Actual；
+- Macro Tool 与 Agent 的正式接入尚未完成，属于后续 Agent 集成工作。
+
+Day24 不实现分钟级市场反应或 MarketReaction；这些能力进入 D26–D30，并要求可靠的事件时间和盘中市场数据。
+
+2026-09-26 已完成真实 API 端到端验收：MacroSnapshot 包含 CPI、PPI、PCE、Employment Situation、Weekly Claims、Fed Policy、5 项 SEP 中位数预测和完整美债曲线。对应发布分别生成 4、4、4、5、3 项指标；美债曲线观测日为 2026-09-24。当前未配置 Trading Economics 密钥，因此 Consensus、计划发布时间和 Surprise 按设计保持缺失，并记录 `*_consensus_not_configured` warnings。
 
 
 flowchart TD

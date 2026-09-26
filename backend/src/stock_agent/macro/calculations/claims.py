@@ -8,11 +8,19 @@ from stock_agent.macro.models.metric import EconomicIndicator, MacroMetricSnapsh
 
 
 class WeeklyClaimsPoint(Protocol):
-    """周频失业金计算所需的最小数据结构。"""
+    """周频计算所需的只读数据接口。
 
-    week_ending: date
-    value: int
+    计算层只读取统计周和人数，
+    不应该修改 Provider 返回的原始数据。
+    """
 
+    @property
+    def week_ending(self) -> date:
+        ...
+
+    @property
+    def value(self) -> int:
+        ...
 
 @dataclass(frozen=True)
 class WeeklyClaimsReading:

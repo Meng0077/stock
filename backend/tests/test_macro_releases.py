@@ -8,9 +8,11 @@ from stock_agent.macro.models.metric import (
 from stock_agent.macro.providers.fred import FredRelease
 from stock_agent.macro.release_builders import (
     build_macro_release,
+    get_latest_release,
     get_latest_release_date,
     resolve_scheduled_release_at,
 )
+from stock_agent.macro.models.snapshot import MacroSnapshot
 from stock_agent.macro.temporal import validate_metric_as_of
 
 
@@ -113,3 +115,33 @@ def test_release_date_rejects_future_metric_without_inventing_time():
 
     assert validation.decision == "reject"
     assert validation.reason == "release_date_after_as_of"
+
+
+def test_latest_release_can_be_queried_by_event_type():
+    older = build_macro_release(
+        release_type="cpi",
+        release_date=date(2026, 8, 12),
+        metrics=[
+            make_metric().model_copy(
+                update={"release_date": date(2026, 8, 12)}
+            )
+        ],
+        release_date_source="fred",
+    )
+    latest = build_macro_release(
+        release_type="cpi",
+        release_date=date(2026, 9, 11),
+        metrics=[make_metric()],
+        release_date_source="fred",
+    )
+    snapshot = MacroSnapshot(
+        as_of=datetime(2026, 9, 20, tzinfo=timezone.utc),
+        recent_releases=[older, latest],
+        fed_policy=None,
+        fed_projections=[],
+        treasury=None,
+        warnings=[],
+    )
+
+    assert get_latest_release(snapshot, "cpi") == latest
+    assert get_latest_release(snapshot, "ppi") is None

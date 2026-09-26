@@ -81,7 +81,7 @@ def calculate_unemployment_rate(
     current = max(rates)
     return EmploymentMetric(
         indicator="unemployment_rate",
-        measure="monthly_change",
+        measure="level",
         period=current,
         actual=rates[current],
         previous=rates.get(shift_month(current, -1)),
@@ -115,7 +115,7 @@ def calculate_average_hourly_earnings(
         actual = calculate_index_change(
             earnings,
             current=current,
-            previous=previous_month,
+            previous=shift_month(current, -months),
         )
         if actual is None:
             continue

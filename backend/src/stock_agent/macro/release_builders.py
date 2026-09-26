@@ -1,6 +1,12 @@
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Final, Literal, TYPE_CHECKING, cast
+from zoneinfo import ZoneInfo
 
+from stock_agent.macro.calculations.claims import (
+    calculate_weekly_claims,
+    weekly_claims_to_snapshot,
+)
+from stock_agent.macro.calculations.consensus import merge_consensus
 from stock_agent.macro.calculations.employment import (
     calculate_average_hourly_earnings,
     calculate_nonfarm_payrolls,
@@ -13,6 +19,7 @@ from stock_agent.macro.calculations.inflation import (
     calculate_inflation_reading,
     calculate_pce_reading,
 )
+from stock_agent.macro.errors import MacroDataProviderError
 from stock_agent.macro.models.metric import (
     ConsensusObservation,
     MacroMetricSnapshot,
@@ -25,6 +32,10 @@ from stock_agent.macro.models.release import (
 from stock_agent.macro.providers.bea import BEAPCEProvider
 from stock_agent.macro.providers.bls import BLSProvider
 from stock_agent.macro.providers.fred import FredProvider
+from stock_agent.macro.providers.fred_claims import (
+    CLAIMS_SERIES,
+    WeeklyClaimsProvider,
+)
 from stock_agent.macro.providers.trading_economics import (
     TradingEconomicsConsensusProvider,
 )
@@ -89,6 +100,39 @@ MACRO_RELEASE_SERIES: Final[dict[MacroReleaseType, str]] = {
     "pce": "PCEPI",
     "weekly_claims": "ICSA",
 }
+
+EASTERN = ZoneInfo("America/New_York")
+
+
+def research_date(as_of: datetime) -> date:
+    """将研究截止时间转换为宏观发布使用的美国东部日期。"""
+
+    if as_of.tzinfo is None or as_of.utcoffset() is None:
+        raise ValueError("as_of must be timezone-aware")
+    return as_of.astimezone(EASTERN).date()
+
+
+def fetch_optional_consensus(
+    *,
+    consensus: TradingEconomicsConsensusProvider | None,
+    release_date: date,
+    release_type: str,
+    warnings: list[str],
+) -> list[ConsensusObservation]:
+    """获取可选的一致预期，不影响官方实际数据。"""
+
+    if consensus is None:
+        warnings.append(f"{release_type}_consensus_not_configured")
+        return []
+
+    try:
+        return consensus.get_consensus(
+            start_date=release_date,
+            end_date=release_date,
+        )
+    except MacroDataProviderError:
+        warnings.append(f"{release_type}_consensus_unavailable")
+        return []
 
 
 def get_latest_release_date(
@@ -192,10 +236,11 @@ def resolve_scheduled_release_at(
 def build_bls_inflation_release(
     *,
     bls: BLSProvider,
-    consensus: TradingEconomicsConsensusProvider,
+    consensus: TradingEconomicsConsensusProvider | None,
     fred: FredProvider,
     release_type: Literal["cpi", "ppi"],
     as_of: datetime,
+    warnings: list[str],
 ) -> MacroReleaseEvent | None:
     """构建最新 CPI 或 PPI 发布事件。
 
@@ -207,14 +252,19 @@ def build_bls_inflation_release(
     release_date = get_latest_release_date(
         fred=fred,
         series_id=MACRO_RELEASE_SERIES[release_type],
-        as_of=as_of.date(),
+        as_of=research_date(as_of),
     )
     if release_date is None:
         return None
+    if release_date == research_date(as_of):
+        warnings.append(f"{release_type}_release_time_unverified")
+        return None
 
-    forecasts = consensus.get_consensus(
-        start_date=release_date,
-        end_date=release_date,
+    forecasts = fetch_optional_consensus(
+        consensus=consensus,
+        release_date=release_date,
+        warnings=warnings,
+        release_type=release_type,
     )
     metrics = []
 
@@ -265,27 +315,33 @@ def build_bls_inflation_release(
 def build_pce_release(
     *,
     bea: BEAPCEProvider,
-    consensus: TradingEconomicsConsensusProvider,
+    consensus: TradingEconomicsConsensusProvider | None,
     fred: FredProvider,
     as_of: datetime,
+    warnings: list[str],
 ) -> MacroReleaseEvent | None:
     """构建最近一次 PCE / Core PCE 发布事件。"""
 
     release_date = get_latest_release_date(
         fred=fred,
         series_id=MACRO_RELEASE_SERIES["pce"],
-        as_of=as_of.date(),
+        as_of=research_date(as_of),
     )
     if release_date is None:
         return None
+    if release_date == research_date(as_of):
+        warnings.append("pce_release_time_unverified")
+        return None
 
-    current_year = as_of.year
+    current_year = research_date(as_of).year
     data = bea.fetch_indexes(
         years=[current_year - 2, current_year - 1, current_year]
     )
-    forecasts = consensus.get_consensus(
-        start_date=release_date,
-        end_date=release_date,
+    forecasts = fetch_optional_consensus(
+        consensus=consensus,
+        release_date=release_date,
+        warnings=warnings,
+        release_type="pce",
     )
     metrics = []
 
@@ -332,6 +388,8 @@ def build_employment_release(
     bls: BLSProvider,
     fred: FredProvider,
     as_of: datetime,
+    consensus: TradingEconomicsConsensusProvider | None,
+    warnings: list[str],
 ) -> MacroReleaseEvent | None:
     """构建最近一次 Employment Situation 发布事件。
 
@@ -344,9 +402,12 @@ def build_employment_release(
     release_date = get_latest_release_date(
         fred=fred,
         series_id=MACRO_RELEASE_SERIES["employment_situation"],
-        as_of=as_of.date(),
+        as_of=research_date(as_of),
     )
     if release_date is None:
+        return None
+    if release_date == research_date(as_of):
+        warnings.append("employment_situation_release_time_unverified")
         return None
 
     data = bls.fetch_series(list(EMPLOYMENT_SERIES.values()))
@@ -388,6 +449,29 @@ def build_employment_release(
     if not metrics:
         return None
 
+    # 检查本次就业发布的统计月份是否一致。
+    periods = {metric.period for metric in metrics}
+    if len(periods) != 1:
+        warnings.append("employment_period_mismatch")
+        return None
+
+    forecasts = fetch_optional_consensus(
+        consensus=consensus,
+        release_date=release_date,
+        warnings=warnings,
+        release_type="employment_situation",
+    )
+
+    metrics = merge_consensus(
+        metrics=metrics,
+        forecasts=forecasts,
+    )
+
+    scheduled_at = resolve_scheduled_release_at(
+        metrics=metrics,
+        forecasts=forecasts,
+    )
+
     return build_macro_release(
         release_type="employment_situation",
         release_date=release_date,
@@ -395,8 +479,99 @@ def build_employment_release(
         release_date_source="fred",
         released_at=None,
         period_binding="latest_assumed",
+        scheduled_release_at=scheduled_at,
+        schedule_source=(
+            "trading_economics" if scheduled_at is not None else None
+        ),
     )
 
+
+def build_weekly_claims_release(
+    *,
+    claims: WeeklyClaimsProvider,
+    fred: FredProvider,
+    consensus: TradingEconomicsConsensusProvider | None,
+    as_of: datetime,
+    warnings: list[str],
+) -> MacroReleaseEvent | None:
+    """构建最近一次周度失业金申领发布事件。
+
+    允许三个指标拥有不同的统计周。
+    不将 FRED 日期自动解释为准确的实际发布时间。
+    """
+
+    us_date = research_date(as_of)
+
+    release_date = get_latest_release_date(
+        fred=fred,
+        series_id=MACRO_RELEASE_SERIES["weekly_claims"],
+        as_of=us_date,
+    )
+
+    if release_date is None:
+        return None
+    # 目前没有经核实的实际发布时刻。发布当天保守跳过，避免提前读取实际值。
+    if release_date == us_date:
+        warnings.append("weekly_claims_release_time_unverified")
+        return None
+
+    metrics = []
+
+    for indicator, series_id in CLAIMS_SERIES.items():
+        points = claims.fetch_series(
+            series_id,
+            start_date=release_date - timedelta(days=70),
+            as_of=us_date,
+        )
+
+        reading = calculate_weekly_claims(
+            indicator=indicator,
+            points=points,
+        )
+
+        if reading is None:
+            continue
+
+        metrics.append(
+            weekly_claims_to_snapshot(
+                reading,
+                release_date=release_date,
+            )
+        )
+    if not metrics:
+        return None
+
+    forecasts = fetch_optional_consensus(
+        consensus=consensus,
+        release_date=release_date,
+        warnings=warnings,
+        release_type="weekly_claims",
+    )
+
+    metrics = merge_consensus(
+        metrics=metrics,
+        forecasts=forecasts,
+    )
+
+    scheduled_at = resolve_scheduled_release_at(
+        metrics=metrics,
+        forecasts=forecasts,
+    )
+
+    return build_macro_release(
+        release_type="weekly_claims",
+        release_date=release_date,
+        metrics=metrics,
+        release_date_source="fred",
+        scheduled_release_at=scheduled_at,
+        schedule_source=(
+            "trading_economics"
+            if scheduled_at is not None
+            else None
+        ),
+        released_at=None,
+        period_binding="latest_assumed",
+    )
 
 def get_latest_release(
     snapshot: "MacroSnapshot",

@@ -4,6 +4,7 @@ from datetime import date, datetime
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Literal, cast
 
+from stock_agent.macro.calculations.consensus import find_release_consensus
 from stock_agent.macro.calculations.series import (
     SeriesPoint,
     calculate_index_change,
@@ -11,6 +12,7 @@ from stock_agent.macro.calculations.series import (
 )
 from stock_agent.macro.models.metric import (
     ConsensusObservation,
+    EconomicMeasure,
     MacroMetricSnapshot,
 )
 
@@ -161,41 +163,30 @@ def build_inflation_metrics(
     results: dict[str, MacroMetricSnapshot] = {}
 
     for measure, (actual, previous) in values.items():
-        candidates = [
-            item
-            for item in forecasts
-            if item.indicator == indicator
-            and item.measure == measure
-            and item.period == reading.period
-        ]
-        verified = [
-            item
-            for item in candidates
-            if released_at is not None
-            and item.forecast_as_of is not None
-            and item.forecast_as_of < released_at
-        ]
+        match = find_release_consensus(
+            forecasts=forecasts,
+            indicator=indicator,
+            measure=cast(EconomicMeasure, measure),
+            period=reading.period,
+            release_date=release_date,
+            released_at=released_at,
+        )
 
-        if verified:
-            forecast = max(
-                verified,
-                key=lambda item: cast(datetime, item.forecast_as_of),
-            )
-            consensus_pit_verified = True
-        else:
-            forecast = max(
-                candidates,
-                key=lambda item: item.scheduled_release_at,
-                default=None,
-            )
-            consensus_pit_verified = False
+        forecast = match.forecast if match is not None else None
+
+        consensus_pit_verified = (
+            match.pit_verified if match is not None else False
+        )
 
         consensus = forecast.consensus if forecast is not None else None
         surprise = None
 
         if consensus is not None and consensus_pit_verified:
+            # CPI/PPI/PCE 百分比 headline 暂按一位小数比较。
+            # 指数计算结果不等同于官方公布初值，
+            # 因此 Surprise 仍属于估算值。
             comparable_actual = actual.quantize(
-                consensus,
+                Decimal("0.1"),
                 rounding=ROUND_HALF_UP,
             )
             surprise = comparable_actual - consensus

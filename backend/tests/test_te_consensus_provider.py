@@ -5,6 +5,7 @@ import httpx
 
 from stock_agent.macro.providers.trading_economics import (
     TradingEconomicsConsensusProvider,
+    parse_count,
 )
 
 
@@ -59,3 +60,54 @@ def test_te_consensus_provider_sends_key_and_parses_cpi_forecast():
         tzinfo=timezone.utc,
     )
     assert observations[0].forecast_as_of is None
+
+
+def test_parse_count_supports_calendar_units_without_rounding_people():
+    assert parse_count("175K") == Decimal("175000")
+    assert parse_count("1.8M") == Decimal("1800000")
+    assert parse_count("1,250") == Decimal("1250")
+    assert parse_count("1.25K") == Decimal("1250")
+    assert parse_count("1.2345K") is None
+    assert parse_count("not-a-number") is None
+
+
+def test_te_provider_parses_employment_and_weekly_claims_periods():
+    def handle(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "CalendarID": "nfp",
+                    "Country": "United States",
+                    "Event": "Non Farm Payrolls",
+                    "DateSpan": "0",
+                    "Forecast": "175K",
+                    "ReferenceDate": "2026-08-01T00:00:00",
+                    "Date": "2026-09-04T12:30:00Z",
+                },
+                {
+                    "CalendarId": "claims",
+                    "Country": "United States",
+                    "Event": "Initial Jobless Claims",
+                    "DateSpan": "0",
+                    "Forecast": "225K",
+                    "ReferenceDate": "2026-09-19T00:00:00",
+                    "Date": "2026-09-24T12:30:00Z",
+                },
+            ],
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        observations = TradingEconomicsConsensusProvider(
+            client,
+            api_key="fixture-key",
+        ).get_consensus(
+            start_date=date(2026, 9, 1),
+            end_date=date(2026, 9, 30),
+        )
+
+    assert [(item.indicator, item.period, item.consensus) for item in observations] == [
+        ("nonfarm_payrolls", date(2026, 8, 1), Decimal("175000")),
+        ("initial_claims", date(2026, 9, 19), Decimal("225000")),
+    ]
+    assert observations[0].event_id == "nfp"
