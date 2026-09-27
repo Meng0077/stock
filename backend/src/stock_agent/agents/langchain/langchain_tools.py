@@ -22,7 +22,9 @@ from stock_agent.financial.service import (
 from stock_agent.macro.models.release import MacroReleaseType
 from stock_agent.macro.release_builders import get_latest_release
 from stock_agent.agents.context import ResearchContext
+from stock_agent.market.errors import MarketDataProviderError
 from stock_agent.quality.macro import check_required_macro_releases, validate_macro_snapshot
+from stock_agent.quality.market_service import build_guarded_market_analysis
 from stock_agent.quality.report import DataQualityReport
 from stock_agent.retrieval.knowledge import retrieve_knowledge
 from stock_agent.schemas.tool_params import (
@@ -32,7 +34,7 @@ from stock_agent.schemas.tool_params import (
 )
 from stock_agent.storage.database import create_database_engine
 from stock_agent.tools.registry import execute_tool
-
+from stock_agent.quality.quote import validate_quote
 
 class KnowledgeToolRuntimeParams(KnowledgeToolParams):
     model_config = ConfigDict(
@@ -77,26 +79,59 @@ async def get_quote_adapter(
     company_id: str,
     runtime: ToolRuntime[ResearchContext],
 ) -> dict[str, object]:
-    """查询截至本次研究时间可用的长桥股票报价。"""
+    """获取经过质量检查的股票报价。"""
+
     factory = runtime.context.market_provider_factory
     if factory is None:
         raise RuntimeError("MarketDataProvider is not configured")
+
+    as_of = runtime.context.as_of
+    symbol = company_id.strip().upper()
 
     quote = await asyncio.to_thread(
         factory().get_quote,
         company_id,
         as_of=runtime.context.as_of,
     )
-    if quote is None:
+
+    # 无论是否取得报价，都执行质量检查
+    quality = validate_quote(
+        quote=quote,
+        symbol=symbol,
+        as_of=as_of,
+        market_state=runtime.context.market_state,
+    )
+
+    # 保持与 Macro Tool 一致的质量报告结构
+    quality_report = DataQualityReport(
+        as_of=as_of,
+        results=[quality],
+    )
+
+    #  拒绝的数据不能进入 Agent 的事实证据
+    if quality.status == "rejected":
         return {
-            "data_mode": "live",
-            "symbol": company_id,
+            "symbol": symbol,
+            "as_of": as_of.isoformat(),
             "quote": None,
+            "quality": quality_report.model_dump(
+                mode="json"
+            ),
         }
 
+    #  usable / degraded 均可展示，
+    # 但 degraded 必须附带限制说明。
+    assert quote is not None
+
     return {
-        **quote.model_dump(mode="json"),
+        "symbol": symbol,
+        "as_of": as_of.isoformat(),
+        "data_mode": quote.data_mode,
+        "quote": quote.model_dump(mode="json"),
         "evidence_id": f"E-{uuid4().hex}",
+        "quality": quality_report.model_dump(
+            mode="json"
+        ),
     }
 
 
@@ -252,19 +287,19 @@ def get_macro_snapshot_tool(
         )
 
         quality_report = DataQualityReport(
-            as_of=snapshot.as_of,
+            as_of=safe_snapshot.as_of,
             results=macro_results,
-            source_warnings=snapshot.warnings,
+            source_warnings=safe_snapshot.warnings,
         )
 
         evidence_id = (
             "macro:snapshot:"
-            f"{snapshot.as_of.isoformat()}"
+            f"{safe_snapshot.as_of.isoformat()}"
         )
         return {
             "evidence_id": evidence_id,
             "data_mode": "historical",
-            "snapshot": snapshot.model_dump(mode="json"),
+            "snapshot": safe_snapshot.model_dump(mode="json"),
             "quality": quality_report.model_dump(mode="json"),
         }
 
@@ -338,6 +373,140 @@ def get_macro_snapshot_tool(
         "warnings": snapshot.warnings,
     }
 
+@tool("get_technical_analysis", args_schema=QuoteToolRuntimeParams)
+async def get_technical_analysis_tool(
+    company_id: str,
+    runtime: ToolRuntime[ResearchContext],
+) -> dict[str, object]:
+    """获取经过质量检查的日线技术指标及可用报价。
+
+    返回 MA、ATR、收益率、价格结构、成交量特征，
+    以及 Quote / Bars 各自的质量检查结果。
+    """
+
+    factory = runtime.context.market_provider_factory
+
+    if factory is None:
+        raise RuntimeError(
+            "MarketDataProvider is not configured"
+        )
+
+    symbol = company_id.strip().upper()
+    as_of = runtime.context.as_of
+
+    provider = await asyncio.to_thread(factory)
+
+    source_warnings: list[str] = []
+
+    # ---------- 1. 获取 Quote ----------
+
+    try:
+        quote = await asyncio.to_thread(
+            provider.get_quote,
+            symbol,
+            as_of=as_of,
+        )
+    except MarketDataProviderError:
+        # Quote 失败，不应该阻止历史 K 线分析。
+        quote = None
+        source_warnings.append(
+            "quote_provider_unavailable"
+        )
+
+    # ---------- 2. 获取历史日 K ----------
+    try:
+        bars = await asyncio.to_thread(
+            provider.get_bars,
+            symbol,
+            as_of=as_of,
+            timeframe="1d",
+            limit=60,
+            include_incomplete=False,
+        )
+    except MarketDataProviderError:
+        # Bars 失败，不应该删除已经获取的有效 Quote。
+        bars = []
+        source_warnings.append(
+            "bars_provider_unavailable"
+        )
+
+    # ---------- 3. 执行 Guard ----------
+
+    analysis = build_guarded_market_analysis(
+        symbol=symbol,
+        quote=quote,
+        bars=bars,
+        as_of=as_of,
+        market_state=runtime.context.market_state,
+    )
+
+    # ---------- 4. 处理报价证据 ----------
+    quote_payload = None
+
+    if analysis.current_quote is not None:
+        safe_quote = analysis.current_quote
+
+        quote_payload = {
+            "evidence_id": (
+                f"market:quote:{uuid4().hex}"
+            ),
+            "data_mode": safe_quote.data_mode,
+            "value": safe_quote.model_dump(
+                mode="json"
+            ),
+        }
+    # ---------- 5. 处理技术分析证据 ----------
+    technical_payload = None
+
+    if analysis.technical is not None:
+        # 明确技术指标所依据的历史数据来源。
+        completed_modes = {
+            bar.data_mode
+            for bar in bars
+            if bar.is_complete
+        }
+
+        if len(completed_modes) == 1:
+            technical_mode = next(
+                iter(completed_modes)
+            )
+
+            technical_payload = {
+                "evidence_id": (
+                    f"market:technical:{uuid4().hex}"
+                ),
+                "data_mode": technical_mode,
+                "snapshot": (
+                    analysis.technical.model_dump(
+                        mode="json"
+                    )
+                ),
+            }
+        else:
+            # 避免为混合来源的数据错误标记证据模式。
+            source_warnings.append(
+                "bars_data_mode_mixed"
+            )
+
+    # ---------- 6. 汇总质量报告 ----------
+
+    quality_report = DataQualityReport(
+        as_of=as_of,
+        results=analysis.quality.results,
+        source_warnings=source_warnings,
+    )
+
+    return {
+        "symbol": symbol,
+        "as_of": as_of.isoformat(),
+        "quote": quote_payload,
+        "technical": technical_payload,
+        "quality": quality_report.model_dump(
+            mode="json"
+        ),
+    }
+
+
 def build_langchain_tools() -> list[BaseTool]:
     """无输入；返回 Agent 可调用的只读白名单工具。"""
     return [
@@ -346,6 +515,7 @@ def build_langchain_tools() -> list[BaseTool]:
         retrieve_knowledge_tool,
         get_financial_facts_tool,
         get_macro_snapshot_tool,
+        get_technical_analysis_tool
     ]
 
 def collect_tool_events(messages, run_id: str) -> list[dict]:

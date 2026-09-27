@@ -20,6 +20,7 @@ EVIDENCE_TOOL_NAMES = {
     "retrieve_knowledge",
     "get_financial_facts",
     "get_macro_snapshot",
+    "get_technical_analysis",
 }
 
 PERSISTED_EVIDENCE_PREFIXES = (

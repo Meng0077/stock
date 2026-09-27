@@ -13,7 +13,7 @@ from stock_agent.quality.report import DataQualityReport
 
 @dataclass(frozen=True)
 class GuardedMarketAnalysis:
-    # 只有通过当前价格质量检查的报价才能放进这里。
+    # usable / degraded 报价可以附带质量状态展示；rejected 报价必须清空。
     current_quote: Quote | None
 
     # 技术分析结果；历史 K 线不合格时为 None。
@@ -50,7 +50,11 @@ def build_guarded_market_analysis(
         results=[quote_quality, bars_quality]
     )
 
-    safe_quote = (quote  if quote_quality.status == "usable" else None)
+    safe_quote = (
+        quote
+        if quote_quality.status != "rejected"
+        else None
+    )
 
     if bars_quality.status == "rejected":
         return GuardedMarketAnalysis(
@@ -62,7 +66,7 @@ def build_guarded_market_analysis(
     completed_bars = [bar for bar in bars if bar.is_complete]
     technical = build_market_technical_snapshot(
         symbol=symbol,
-        quote=safe_quote,
+        quote=None,
         bars=completed_bars,
         is_live_query=False,
     )

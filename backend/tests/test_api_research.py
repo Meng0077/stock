@@ -5,7 +5,7 @@
 """
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import importlib.util
 from pathlib import Path
@@ -68,8 +68,8 @@ def clear_agent_cache(monkeypatch):
         symbol=symbol,
         price=Decimal("100"),
         currency="USD",
-        quoted_at=datetime(2026, 9, 26, tzinfo=timezone.utc),
-        received_at=datetime(2026, 9, 26, tzinfo=timezone.utc),
+        quoted_at=as_of - timedelta(seconds=30),
+        received_at=as_of - timedelta(seconds=29),
         session="regular",
         data_mode="live",
         is_delayed=None,

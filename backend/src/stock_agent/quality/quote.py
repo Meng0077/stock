@@ -62,9 +62,19 @@ def validate_quote(
     # 检查时间有效性
     if quote.quoted_at > as_of:
         return make_result("rejected", issues=[QualityIssue(
-                    code="quote_timestamp_invalid",
-                    message="报价发生时间晚于接收时间",
+                    code="quote_after_as_of",
+                    message="报价发生时间晚于研究截止时间",
                 )])
+    if quote.quoted_at > quote.received_at:
+        return make_result(
+            "rejected",
+            [
+                QualityIssue(
+                    code="quote_after_received_at",
+                    message="报价发生时间晚于系统接收时间",
+                )
+            ],
+        )
 
 
 
@@ -92,13 +102,8 @@ def validate_quote(
                 },
             )])
 
-    if market_state == "unknown":
-        return make_result("degraded", issues=[QualityIssue(
-                    code="market_state_unknown",
-                    message="无法确认当前市场交易状态",
-                )])
-
-    # 正在交易：校验新鲜度
+    # trading 和 unknown 都必须校验新鲜度。
+    # unknown 只降低可信度，不能让过期报价绕过检查。
     if passed_time > max_age_seconds:
         return make_result('rejected', issues=[QualityIssue(
             code="quote_stale",
@@ -108,6 +113,12 @@ def validate_quote(
                         "max_age_seconds": max_age_seconds,
                     },
         )])
+
+    if market_state == "unknown":
+        return make_result("degraded", issues=[QualityIssue(
+                    code="market_state_unknown",
+                    message="无法确认当前市场交易状态",
+                )])
 
     # 收集不会直接否定报价的质量问题
     issues: list[QualityIssue] = []

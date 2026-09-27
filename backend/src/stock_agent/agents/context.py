@@ -9,6 +9,7 @@ from sqlalchemy import Engine
 from stock_agent.documents.sec_http import SEC_CLIENT
 from stock_agent.macro.builder import MacroSnapshotBuilder
 from stock_agent.market.provider import MarketDataProvider
+from stock_agent.quality.quote import MarketState
 from stock_agent.retrieval.schemas import DEFAULT_INDEX_CONFIG, IndexConfig
 
 
@@ -20,3 +21,4 @@ class ResearchContext:
     sec_client: httpx.Client = SEC_CLIENT
     macro_builder_factory: Callable[[], MacroSnapshotBuilder] | None = None
     market_provider_factory: Callable[[], MarketDataProvider] | None = None
+    market_state: MarketState = "unknown"

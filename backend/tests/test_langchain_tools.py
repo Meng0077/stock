@@ -1,7 +1,7 @@
 """D07 Step 5：离线验证 LangChain Tool adapter 与现有 registry 的边界。"""
 
 import asyncio
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 import json
 from unittest.mock import Mock
@@ -16,12 +16,41 @@ from stock_agent.financial.schemas import FinancialFact
 from stock_agent.macro.models.metric import MacroMetricSnapshot
 from stock_agent.macro.models.release import MacroReleaseEvent
 from stock_agent.macro.models.snapshot import MacroSnapshot
-from stock_agent.market.schemas import Quote
+from stock_agent.market.errors import MarketDataProviderError
+from stock_agent.market.schemas import Bar, Quote
 from stock_agent.schemas.tool_params import CompanyToolParams, KnowledgeToolParams
 from stock_agent.tools.registry import TOOL_REGISTRY, execute_tool
 
 
 TOOL_NAMES = ("get_quote", "get_company_profile")
+
+
+def make_completed_bars(
+    *,
+    as_of: datetime,
+    count: int = 60,
+) -> list[Bar]:
+    start = as_of - timedelta(days=count + 1)
+    return [
+        Bar(
+            symbol="NVDA",
+            timeframe="1d",
+            start_at=start + timedelta(days=index),
+            end_at=start + timedelta(days=index, hours=6),
+            open=Decimal("100"),
+            high=Decimal("102"),
+            low=Decimal("99"),
+            close=Decimal("101"),
+            volume=1_000_000 + index,
+            is_complete=True,
+            adjustment="forward_adjusted",
+            updated_at=start + timedelta(days=index, hours=6),
+            received_at=start + timedelta(days=index, hours=6),
+            source="fixture",
+            data_mode="historical",
+        )
+        for index in range(count)
+    ]
 
 
 def tools_by_name():
@@ -37,8 +66,9 @@ def test_build_langchain_tools_returns_exact_allowlist():
         "retrieve_knowledge",
         "get_financial_facts",
         "get_macro_snapshot",
+        "get_technical_analysis",
     ]
-    assert len({tool.name for tool in tools}) == len(TOOL_NAMES) + 3
+    assert len({tool.name for tool in tools}) == len(TOOL_NAMES) + 4
 
 
 def test_company_profile_adapter_reuses_company_tool_params_schema():
@@ -141,8 +171,8 @@ def test_quote_adapter_uses_runtime_market_provider():
         symbol="NVDA",
         price=Decimal("187.25"),
         currency="USD",
-        quoted_at=datetime(2026, 9, 26, 20, tzinfo=timezone.utc),
-        received_at=datetime(2026, 9, 26, 20, tzinfo=timezone.utc),
+        quoted_at=datetime(2026, 9, 27, 11, 59, 30, tzinfo=timezone.utc),
+        received_at=datetime(2026, 9, 27, 11, 59, 31, tzinfo=timezone.utc),
         session="post",
         data_mode="live",
         is_delayed=None,
@@ -173,9 +203,13 @@ def test_quote_adapter_uses_runtime_market_provider():
     factory.assert_called_once_with()
     provider.get_quote.assert_called_once_with("NVDA", as_of=as_of)
     assert result["symbol"] == "NVDA"
-    assert result["price"] == "187.25"
+    assert result["quote"]["price"] == "187.25"
     assert result["data_mode"] == "live"
-    assert result["source"] == "longbridge"
+    assert result["quote"]["source"] == "longbridge"
+    assert result["quality"]["overall_status"] == "degraded"
+    assert result["quality"]["results"][0]["issues"][0]["code"] == (
+        "market_state_unknown"
+    )
     assert result["evidence_id"].startswith("E-")
 
 
@@ -348,3 +382,157 @@ def test_macro_tool_uses_runtime_builder_and_returns_event_evidence():
     assert result["evidence_id"] == "macro:cpi:2026-09-11"
     assert result["data_mode"] == "historical"
     assert result["release"]["metrics"][0]["estimated_surprise"] == "0.1"
+
+
+def test_macro_full_snapshot_filters_rejected_future_release():
+    as_of = datetime(2026, 9, 20, 16, tzinfo=timezone.utc)
+
+    def make_release(
+        *,
+        release_type: str,
+        release_date: date,
+        released_at: datetime,
+    ) -> MacroReleaseEvent:
+        return MacroReleaseEvent(
+            release_id=f"{release_type}:{release_date.isoformat()}",
+            release_type=release_type,
+            release_date=release_date,
+            released_at=released_at,
+            release_date_source="fixture",
+            period_binding="verified",
+            metrics=[
+                MacroMetricSnapshot(
+                    indicator=("cpi" if release_type == "cpi" else "ppi"),
+                    measure="mom",
+                    unit="percent",
+                    period=date(2026, 8, 1),
+                    actual=Decimal("0.3"),
+                    release_date=release_date,
+                    released_at=released_at,
+                    source="fixture",
+                    actual_pit_status="verified",
+                )
+            ],
+        )
+
+    available = make_release(
+        release_type="cpi",
+        release_date=date(2026, 9, 11),
+        released_at=datetime(2026, 9, 11, 12, 30, tzinfo=timezone.utc),
+    )
+    future = make_release(
+        release_type="ppi",
+        release_date=date(2026, 9, 21),
+        released_at=datetime(2026, 9, 21, 12, 30, tzinfo=timezone.utc),
+    )
+    builder = Mock()
+    builder.build_latest.return_value = MacroSnapshot(
+        as_of=as_of,
+        recent_releases=[available, future],
+        fed_policy=None,
+        fed_projections=[],
+        treasury=None,
+        warnings=[],
+    )
+    runtime = ToolRuntime(
+        state={},
+        context=ResearchContext(
+            as_of=as_of,
+            macro_builder_factory=lambda: builder,
+        ),
+        config={},
+        stream_writer=lambda _: None,
+        tool_call_id="call-macro-full",
+        store=None,
+    )
+
+    result = tools_by_name()["get_macro_snapshot"].func(
+        release_type=None,
+        runtime=runtime,
+    )
+
+    assert [
+        release["release_id"]
+        for release in result["snapshot"]["recent_releases"]
+    ] == [available.release_id]
+    statuses = {
+        item["target_id"]: item["status"]
+        for item in result["quality"]["results"]
+    }
+    assert statuses == {
+        available.release_id: "usable",
+        future.release_id: "rejected",
+    }
+
+
+def test_technical_tool_keeps_bars_when_quote_provider_fails():
+    as_of = datetime(2026, 9, 27, 12, tzinfo=timezone.utc)
+    provider = Mock()
+    provider.get_quote.side_effect = MarketDataProviderError("quote unavailable")
+    provider.get_bars.return_value = make_completed_bars(as_of=as_of)
+    runtime = ToolRuntime(
+        state={},
+        context=ResearchContext(
+            as_of=as_of,
+            market_provider_factory=lambda: provider,
+        ),
+        config={},
+        stream_writer=lambda _: None,
+        tool_call_id="call-technical",
+        store=None,
+    )
+
+    result = asyncio.run(
+        tools_by_name()["get_technical_analysis"].coroutine(
+            company_id="NVDA",
+            runtime=runtime,
+        )
+    )
+
+    assert result["quote"] is None
+    assert result["technical"] is not None
+    assert result["quality"]["source_warnings"] == [
+        "quote_provider_unavailable"
+    ]
+
+
+def test_technical_tool_keeps_quote_when_bars_provider_fails():
+    as_of = datetime(2026, 9, 27, 12, tzinfo=timezone.utc)
+    quote = Quote(
+        symbol="NVDA",
+        price=Decimal("187.25"),
+        currency="USD",
+        quoted_at=as_of - timedelta(seconds=30),
+        received_at=as_of - timedelta(seconds=29),
+        session="regular",
+        data_mode="live",
+        is_delayed=None,
+        source="longbridge",
+    )
+    provider = Mock()
+    provider.get_quote.return_value = quote
+    provider.get_bars.side_effect = MarketDataProviderError("bars unavailable")
+    runtime = ToolRuntime(
+        state={},
+        context=ResearchContext(
+            as_of=as_of,
+            market_provider_factory=lambda: provider,
+        ),
+        config={},
+        stream_writer=lambda _: None,
+        tool_call_id="call-technical",
+        store=None,
+    )
+
+    result = asyncio.run(
+        tools_by_name()["get_technical_analysis"].coroutine(
+            company_id="NVDA",
+            runtime=runtime,
+        )
+    )
+
+    assert result["quote"] is not None
+    assert result["technical"] is None
+    assert result["quality"]["source_warnings"] == [
+        "bars_provider_unavailable"
+    ]

@@ -1,7 +1,7 @@
 """D07 Step 8：最小 LangChain Agent 的离线契约与工具轨迹测试。"""
 
 import asyncio
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 import json
 from typing import Any
@@ -39,7 +39,7 @@ from stock_agent.retrieval import knowledge
 from stock_agent.macro.models.metric import MacroMetricSnapshot
 from stock_agent.macro.models.release import MacroReleaseEvent
 from stock_agent.macro.models.snapshot import MacroSnapshot
-from stock_agent.market.schemas import Quote
+from stock_agent.market.schemas import Bar, Quote
 from stock_agent.market.errors import MarketDataProviderError
 
 
@@ -70,14 +70,42 @@ def market_provider_factory():
         symbol="NVDA",
         price=Decimal("100"),
         currency="USD",
-        quoted_at=datetime(2026, 9, 15, 7, tzinfo=timezone.utc),
-        received_at=datetime(2026, 9, 15, 7, tzinfo=timezone.utc),
+        quoted_at=datetime(2026, 9, 15, 7, 59, 30, tzinfo=timezone.utc),
+        received_at=datetime(2026, 9, 15, 7, 59, 31, tzinfo=timezone.utc),
         session="regular",
         data_mode="live",
         is_delayed=None,
         source="longbridge",
     )
     return Mock(return_value=provider)
+
+
+def make_completed_bars(
+    *,
+    as_of: datetime,
+    count: int = 60,
+) -> list[Bar]:
+    start = as_of - timedelta(days=count + 1)
+    return [
+        Bar(
+            symbol="NVDA",
+            timeframe="1d",
+            start_at=start + timedelta(days=index),
+            end_at=start + timedelta(days=index, hours=6),
+            open=Decimal("100"),
+            high=Decimal("102"),
+            low=Decimal("99"),
+            close=Decimal("101"),
+            volume=1_000_000 + index,
+            is_complete=True,
+            adjustment="forward_adjusted",
+            updated_at=start + timedelta(days=index, hours=6),
+            received_at=start + timedelta(days=index, hours=6),
+            source="fixture",
+            data_mode="historical",
+        )
+        for index in range(count)
+    ]
 
 
 def test_build_agent_input_serializes_all_request_fields(research_request):
@@ -156,6 +184,7 @@ def test_fake_model_completes_real_langchain_tool_loop(
         "retrieve_knowledge",
         "get_financial_facts",
         "get_macro_snapshot",
+        "get_technical_analysis",
     ]
     assert [type(message) for message in messages] == [
         HumanMessage,
@@ -168,22 +197,69 @@ def test_fake_model_completes_real_langchain_tool_loop(
     assert messages[2].tool_call_id == "call-1"
     tool_result = json.loads(messages[2].content)
     assert tool_result.pop("evidence_id").startswith("E-")
-    assert tool_result == {
+    assert tool_result["symbol"] == "NVDA"
+    assert tool_result["data_mode"] == "live"
+    assert tool_result["quote"] == {
         "symbol": "NVDA",
         "price": "100",
         "currency": "USD",
-        "quoted_at": "2026-09-15T07:00:00Z",
-        "received_at": "2026-09-15T07:00:00Z",
+        "quoted_at": "2026-09-15T07:59:30Z",
+        "received_at": "2026-09-15T07:59:31Z",
         "session": "regular",
         "data_mode": "live",
         "is_delayed": None,
         "source": "longbridge",
     }
+    assert tool_result["quality"]["overall_status"] == "degraded"
+    assert tool_result["quality"]["results"][0]["issues"][0]["code"] == (
+        "market_state_unknown"
+    )
     market_provider_factory.return_value.get_quote.assert_called_once_with(
         "NVDA",
         as_of=research_request.as_of,
     )
     assert messages[3].tool_calls == []
+
+
+def test_fake_model_completes_technical_analysis_tool_loop(
+    research_request,
+    market_provider_factory,
+):
+    market_provider_factory.return_value.get_bars.return_value = (
+        make_completed_bars(as_of=research_request.as_of)
+    )
+    model = ToolCallingFakeModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[{
+                    "name": "get_technical_analysis",
+                    "args": {"company_id": "NVDA"},
+                    "id": "call-technical",
+                    "type": "tool_call",
+                }],
+            ),
+            AIMessage(content="已取得 NVDA 技术分析。"),
+        ]
+    )
+
+    state = asyncio.run(invoke_langchain_agent(
+        build_langchain_agent(model),
+        research_request,
+        market_provider_factory=market_provider_factory,
+    ))
+
+    tool_message = state["messages"][2]
+    assert isinstance(tool_message, ToolMessage)
+    assert tool_message.name == "get_technical_analysis"
+    result = json.loads(tool_message.content)
+    assert result["quote"] is not None
+    assert result["technical"] is not None
+    assert result["quality"]["overall_status"] == "degraded"
+    assert collect_evidence_ids(state["messages"]) == {
+        result["quote"]["evidence_id"],
+        result["technical"]["evidence_id"],
+    }
 
 
 def test_macro_tool_completes_agent_flow_with_historical_evidence():
