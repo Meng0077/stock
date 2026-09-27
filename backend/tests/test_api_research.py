@@ -6,6 +6,7 @@
 
 import asyncio
 from datetime import datetime, timezone
+from decimal import Decimal
 import importlib.util
 from pathlib import Path
 from types import SimpleNamespace
@@ -28,6 +29,7 @@ from stock_agent.api.research import build_research_request
 from stock_agent.schemas.errors import make_public_error
 from stock_agent.schemas.research import ResearchInput
 from stock_agent.schemas.research_output import ResearchOutput
+from stock_agent.market.schemas import Quote
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -50,22 +52,41 @@ def quote_output():
     return {
         "status": "completed",
         "facts": [{
-            "text": "NVDA 教学模拟报价为 100 USD，不是实时行情。",
+            "text": "NVDA 长桥报价为 100 USD。",
             "evidence_ids": [EVIDENCE_ID],
         }],
         "inferences": [],
         "missing_information": [],
-        "data_mode": "fixture",
+        "data_mode": "live",
     }
 
 
 @pytest.fixture(autouse=True)
-def clear_agent_cache():
+def clear_agent_cache(monkeypatch):
+    provider = Mock()
+    provider.get_quote.side_effect = lambda symbol, *, as_of: Quote(
+        symbol=symbol,
+        price=Decimal("100"),
+        currency="USD",
+        quoted_at=datetime(2026, 9, 26, tzinfo=timezone.utc),
+        received_at=datetime(2026, 9, 26, tzinfo=timezone.utc),
+        session="regular",
+        data_mode="live",
+        is_delayed=None,
+        source="longbridge",
+    )
+    monkeypatch.setattr(
+        dependencies,
+        "build_longbridge_market_provider",
+        Mock(return_value=provider),
+    )
     dependencies.get_langchain_agent.cache_clear()
     dependencies.get_macro_snapshot_builder.cache_clear()
+    dependencies.get_market_data_provider.cache_clear()
     yield
     dependencies.get_langchain_agent.cache_clear()
     dependencies.get_macro_snapshot_builder.cache_clear()
+    dependencies.get_market_data_provider.cache_clear()
 
 
 @pytest.fixture
@@ -96,6 +117,23 @@ def test_macro_builder_dependency_is_lazy_and_cached(monkeypatch):
     assert factory() is builder
     assert factory() is builder
     create_builder.assert_called_once_with()
+
+
+def test_market_provider_dependency_is_lazy_and_cached(monkeypatch):
+    provider = object()
+    create_provider = Mock(return_value=provider)
+    monkeypatch.setattr(
+        dependencies,
+        "build_longbridge_market_provider",
+        create_provider,
+    )
+
+    factory = dependencies.get_market_provider_factory()
+
+    create_provider.assert_not_called()
+    assert factory() is provider
+    assert factory() is provider
+    create_provider.assert_called_once_with()
 
 
 def test_production_dependency_configures_structured_output_and_non_thinking(
@@ -314,6 +352,13 @@ def test_structured_verification_cli_can_run_offline(monkeypatch, capsys):
         model="offline-model", api_key="offline-secret-key",
     ))
     monkeypatch.setattr(cli, "ChatDeepSeek", lambda **kwargs: model)
+    provider = Mock()
+    provider.get_quote.return_value = None
+    monkeypatch.setattr(
+        cli,
+        "build_longbridge_market_provider",
+        Mock(return_value=provider),
+    )
 
     asyncio.run(cli.main())
 

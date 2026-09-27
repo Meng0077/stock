@@ -4,6 +4,7 @@ import re
 from stock_agent.api.dependencies import (
     get_langchain_agent,
     get_macro_builder_factory,
+    get_market_provider_factory,
 )
 from stock_agent.agents.langchain.langchain_agent import run_research
 from stock_agent.schemas.research import ResearchInput, ResearchRequest, ResearchResponse
@@ -41,6 +42,10 @@ async def research(
         object,
         Depends(get_macro_builder_factory),
     ],
+    market_provider_factory: Annotated[
+        object,
+        Depends(get_market_provider_factory),
+    ],
 ):
     try:
         request = build_research_request(body)
@@ -53,6 +58,7 @@ async def research(
         agent=agent,
         request=request,
         macro_builder_factory=macro_builder_factory,
+        market_provider_factory=market_provider_factory,
     )
     return ResearchResponse(
         run_id=str(record["run_id"]),

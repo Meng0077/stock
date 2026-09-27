@@ -122,7 +122,7 @@ def build_langchain_agent(
     model: Any,
     response_format = None
 ) -> Any:
-    """创建 LangChain Agent，内部提供固定的报价和公司资料工具。"""
+    """创建 LangChain Agent，提供只读研究工具。"""
 
     return create_agent(
         model=model,
@@ -151,6 +151,7 @@ async def invoke_langchain_agent(
     request: ResearchRequest,
     engine=None,
     macro_builder_factory=None,
+    market_provider_factory=None,
 ) -> dict[str, Any]:
     """运行 Agent。"""
     async with asyncio.timeout(TASK_TIMEOUT_SECONDS):
@@ -161,6 +162,7 @@ async def invoke_langchain_agent(
                 engine=engine,
                 sec_client=SEC_CLIENT,
                 macro_builder_factory=macro_builder_factory,
+                market_provider_factory=market_provider_factory,
                 ),
         )
 
@@ -170,6 +172,7 @@ async def run_research(
     request: ResearchRequest,
     engine=None,
     macro_builder_factory=None,
+    market_provider_factory=None,
 ):
     """运行边界：统一返回运行身份、终态、结果、安全错误和事件。"""
     run_id = str(uuid.uuid4())
@@ -186,6 +189,7 @@ async def run_research(
                         engine=engine,
                         sec_client=SEC_CLIENT,
                         macro_builder_factory=macro_builder_factory,
+                        market_provider_factory=market_provider_factory,
                     ),
             ):
                 latest_state = state

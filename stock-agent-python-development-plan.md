@@ -26,7 +26,7 @@
 | 报价、日线历史 | 市场数据提供方的结构化接口 | 交易所覆盖、事件时间、接收时间、是否延迟、窗口长度、缺 K 线与复权口径 |
 | 技术指标与关键价位 | Technical Analysis Engine → 确定性计算 TechnicalContext | 已完成 K 线、计算窗口、确认时间、计算版本、候选价位依据与缺失指标 |
 | 营收、利润等精确财务指标 | Financial Tool → 结构化财务提供方，先接 SEC Company Facts | 指标口径、币种和单位、报告期、累计与单季口径、filing 及修订版本 |
-| 宏观发布 | BLS、BEA、FRED 等结构化接口和发布日程 | Actual、Previous、Consensus、Surprise、统计期、发布时间、来源与修订状态；不能称为实时跳动指标 |
+| 宏观发布 | Longbridge、BLS、BEA、FRED 等结构化接口和发布日程 | Actual、Previous、供应商 Consensus、非 PIT Estimated Surprise、统计期、发布时间、来源与修订状态；不能称为实时跳动指标，也不能把 Estimated Surprise 表述为严格 PIT Surprise |
 | 宏观 Market Reaction | MacroReleaseEvent + 历史分钟行情 + MarketReactionEngine | 事件时间可靠性、交易时段、参考价、观察窗口、行情缺口、基准可用性；只描述实际变化，不宣称因果 |
 | 业务说明、风险因素、管理层讨论等文档内容 | Knowledge Tool → Document Provider → 按需索引 → 检索 | 公司、filing、报告期、可用时间、版本、证据 ID、原文是否支持结论 |
 
@@ -63,7 +63,7 @@ Freshness 以 Provider 返回的可用 filing 清单与本地已索引清单比�
 2. Knowledge Tool 内部负责索引检查、必要的获取和更新；检索层返回本次实际提供的文档片段及证据 ID，应用层校验引用归属和资料时间。
 3. Technical Analysis Engine 根据已验证的报价和 K 线计算 TechnicalContext；MarketReactionEngine 根据可靠的宏观事件时间与历史分钟行情计算不同观察窗口的实际收益和基准差异。
 4. Decision Engine 使用 TechnicalContext、MacroSnapshot 和可选 MarketReaction，通过固定规则生成市场观点和 Decision Trace。分数只是规则分数；未经校准不能称为获利概率。
-5. 模型把上述结构化结果解释给用户，不得改变工具数值、时间边界或 Guard 结论。宏观 Surprise、技术观点和已观察市场反应分别表述；市场反应不能被解释为已证明的因果关系。
+5. 模型把上述结构化结果解释给用户，不得改变工具数值、时间边界或 Guard 结论。宏观 Estimated Surprise、技术观点和已观察市场反应分别表述；Estimated Surprise 不能表述为严格 PIT Surprise，市场反应不能被解释为已证明的因果关系。
 
 ### 1.4 数据时间与保密边界
 
@@ -196,7 +196,7 @@ SEC 接入通过后端完成，按官方要求声明 User-Agent 并遵守访问�
 | D21 | 定义 MarketDataProvider、Quote 和 Bar 契约，支持动态 ticker | 区分 fixture、historical、live；明确行情时间、延迟、交易时段、周期、K 线完成状态和复权口径；证券 ticker 与发行人 CIK 分离 |
 | D22 | 接入真实报价及至少 60 个已完成交易日的日线 | 未预置 ticker 可动态查询；保存事件时间和接收时间；正确处理休市、延迟、历史不足及不支持的标的 |
 | D23 | 实现 Technical Analysis Engine 与 TechnicalContext | 计算 MA5/20/50、ATR14、近期变化、成交量、已确认高低点和支撑阻力候选；使用固定 OHLCV 样例验证；不使用未来或未完成 K 线 |
-| D24 | 构建基于发布事件的宏观数据模块 | 接入 CPI、PPI、PCE、就业、Claims、FOMC、SEP 和美债收益率；统一 Actual、Previous、Consensus、Surprise；构建 MacroReleaseEvent 与 MacroSnapshot；完成真实数据及离线验收 |
+| D24 | 构建基于发布事件的宏观数据模块 | 接入 CPI、PPI、PCE、就业、Claims、FOMC、SEP 和美债收益率；统一 Actual、Previous、供应商 Consensus、非 PIT Estimated Surprise；构建 MacroReleaseEvent 与 MacroSnapshot；完成真实数据及离线验收 |
 | D25 | 建立数据新鲜度、时间有效性与缺失检查 | 识别过期报价、缺失 K 线、窗口不足、未来数据、未经验证的宏观发布日期及预期数据；受影响的分析必须降级或停止 |
 
 第六周需要的历史分钟数据在 D26 接入，不提前扩大 D22 的开发范围。首版不为“实时”购买特定数据套餐做假设；实际 feed、交易所覆盖和延迟能力按选定供应商核对并记录。
@@ -241,7 +241,7 @@ FRED 只返回某次经济数据发布的日期，并不足以独立支持 T+5m 
 | D36 | 建立 LangGraph 状态及取数、检索、校验、分析、解释节点 | 财报 RAG、行情、宏观和 MarketReaction 按问题按需调用；证据不足时最多补查一次，然后明确结束 |
 | D37 | 加入 Checkpoint、取消及恢复演示 | 可以取消长时间任务，恢复时明确区分已完成和需要重跑的节点；旧任务结果不能覆盖新任务 |
 | D38 | 完善 React 对话界面与结构化研究结果展示 | 支持动态 ticker；展示行情时间、技术指标、财报引用、宏观统计期及数据质量提示 |
-| D39 | 展示技术面、宏观与市场反应可视化 | 展示均线、关键价位、失效条件、宏观 Actual/Consensus/Surprise、市场反应观察窗口及基准对比 |
+| D39 | 展示技术面、宏观与市场反应可视化 | 展示均线、关键价位、失效条件、宏观 Actual/Consensus/Estimated Surprise 及其非 PIT 标记、市场反应观察窗口及基准对比 |
 | D40 | 完成端到端工作流验收 | 演示正常研究、财报缺失、宏观数据缺失、分钟行情不可用、过期数据及任务取消场景 |
 
 界面中的市场反应先用简单表格和折线图，不开发复杂的专业交易终端。如果增加 SSE，持久事件与临时 token 分开处理；断线后读取快照，不把不完整文本当成最终对象。
@@ -251,7 +251,7 @@ FRED 只返回某次经济数据发布的日期，并不足以独立支持 T+5m 
 | 开发日 | 任务 | 完成标准 |
 | --- | --- | --- |
 | D41 | 固定模型、提示词、资料、行情、宏观数据及规则版本 | 离线案例可复现；真实 API 测试与固定样例测试分开记录 |
-| D42 | 汇总 Agent、RAG 及市场分析评估结果 | 分别评价工具选择、引用支持、财务数值准确性、技术指标计算、宏观 Surprise 匹配和市场反应计算 |
+| D42 | 汇总 Agent、RAG 及市场分析评估结果 | 分别评价工具选择、引用支持、财务数值准确性、技术指标计算、宏观 Estimated Surprise 计算和市场反应计算 |
 | D43 | 验证关键故障和数据时间边界 | 覆盖无效 ticker、无财报、未来资料、过期报价、宏观发布前数据泄漏、时间错位、盘前行情缺失和未验证 Consensus |
 | D44 | 完成 README、部署配置及干净环境启动 | 能通过文档安装运行；密钥不写入代码；明确支持的数据源、交易时段、历史范围及尚未实现的功能 |
 | D45 | 完成 5–8 分钟项目演示、架构图与模拟面试问答 | 展示 Agent → 财报 RAG / 行情 / 宏观 → MarketReaction / 市场分析引擎 → 结构化解释的完整流程 |
@@ -264,7 +264,7 @@ FRED 只返回某次经济数据发布的日期，并不足以独立支持 T+5m 
 | --- | --- |
 | 财报 RAG 与结构化财务数据 | 保留 |
 | 实时或延迟行情、日线与技术分析 | 保留 |
-| 宏观数据与 Surprise | 保留 |
+| 宏观数据与 Estimated Surprise | 保留；严格 PIT Surprise 不在首版范围 |
 | 宏观 Market Reaction | 新增 D26–D30 |
 | 可复现市场分析引擎 | 保留 |
 | LangGraph 与 React 界面 | 保留 |
@@ -315,7 +315,7 @@ Agent 的只读工具边界：
 | IntradayBar | 标的、粒度、OHLCV、event_at、source、session | 时区和交易时段明确；缺口、未来数据和粒度不匹配可识别 |
 | MarketContext | Quote / Bars、TechnicalContext、MacroSnapshot、可选 MarketReaction、相关财务证据、数据版本和 as_of | 技术计算与决策使用同一行情快照；各类来源保持独立，缺失项由 Guard 判断 |
 | FinancialMetric | 指标、taxonomy / concept、数值、单位、币种、报告期、filing、来源和可用时间 | 年度、单季与累计口径不混用；缺少对应指标时明确缺失 |
-| MacroReleaseEvent | 发布类型、统计期、Actual、Previous、Consensus、Surprise、release_date / released_at、source | 只使用已发布数据；计划时间与实际时间分开；预期和实际正确匹配 |
+| MacroReleaseEvent | 发布类型、统计期、Actual、Previous、Consensus、Estimated Surprise、可选严格 PIT Surprise、release_date / released_at、source | 只使用已发布数据；计划时间与实际时间分开；预期和实际正确匹配；Estimated Surprise 不冒充严格 PIT Surprise |
 | MacroSnapshot | as_of、近期发布、Fed policy / SEP、美债收益率和 warnings | 不泄漏未发布数据；单个 Provider 失败可返回部分结果并记录缺失 |
 | MarketReaction | release_id、标的、参考价、T+5m / T+30m / T+1h / 收盘收益、基准差异和质量状态 | 只在可靠事件时间和可用行情下计算；交易时段、缺口和基准缺失明确 |
 | DecisionResult | market_view、factors、guards、关键价位、反对理由、失效条件、trace、rule_version | 规则可复现；缺数据不强行输出方向；关键价位与 TechnicalContext 一致 |
@@ -411,7 +411,7 @@ HTTP 客户端在合适生命周期内复用；异步数据库 session 按请求
 - [ ] Market Reaction 的事件对齐、观察窗口收益和基准差异可复算；不把相关变化宣称为已证明因果。
 - [ ] 决策规则和 Decision Trace 可复算；技术面、宏观与市场反应分别可追溯。
 - [ ] 信息不足、过期数据、宏观时间不足、分钟行情不可用、虚构引用和 Guard 拒绝能进入明确终态。
-- [ ] React 页面可显示市场观点、引用、数据时间、宏观 Actual/Consensus/Surprise、Market Reaction 和失效条件。
+- [ ] React 页面可显示市场观点、引用、数据时间、宏观 Actual/Consensus/Estimated Surprise 及其非 PIT 标记、Market Reaction 和失效条件。
 - [ ] 小范围 LangGraph 分支与 checkpoint 演示经过验证，不夸大恢复能力。
 - [ ] README、启动环境、固定评估、故障记录和 5–8 分钟演示可供面试复现。
 - [ ] 首版无订单提交与自动交易路径；后续阶段以独立计划推进。

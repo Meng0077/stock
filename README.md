@@ -6,7 +6,7 @@
 
 1. 财报 RAG 与结构化财务数据；
 2. 行情与技术分析；
-3. 宏观数据与 Surprise；
+3. 宏观数据与 Estimated Surprise；
 4. 宏观事件后的 Market Reaction。
 
 新闻检索、用户仓位、个人风险建议、券商下单和自动交易不在首版范围内。本项目仅用于工程学习与研究演示，不构成投资建议。
@@ -51,7 +51,7 @@ Agent 解释结果，不改写工具数值或 Guard 结论
 
 - RAG 负责非结构化资料与原文引用；
 - 精确财务、行情和宏观数值来自结构化 Provider；
-- 技术指标、Surprise 和 Market Reaction 使用确定性 Python 计算；
+- 技术指标、Estimated Surprise 和 Market Reaction 使用确定性 Python 计算；
 - 所有外部数据保留来源、事件时间、接收时间或统计期，并受任务 `as_of` 约束；
 - Market Reaction 只描述事件前后的实际价格变化，不直接宣称因果关系。
 

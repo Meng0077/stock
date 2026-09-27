@@ -39,6 +39,8 @@ from stock_agent.retrieval import knowledge
 from stock_agent.macro.models.metric import MacroMetricSnapshot
 from stock_agent.macro.models.release import MacroReleaseEvent
 from stock_agent.macro.models.snapshot import MacroSnapshot
+from stock_agent.market.schemas import Quote
+from stock_agent.market.errors import MarketDataProviderError
 
 
 class ToolCallingFakeModel(FakeMessagesListChatModel):
@@ -59,6 +61,23 @@ def research_request() -> ResearchRequest:
         data_mode="fixture",
         as_of="2026-09-15T16:00:00+08:00",
     )
+
+
+@pytest.fixture
+def market_provider_factory():
+    provider = Mock()
+    provider.get_quote.return_value = Quote(
+        symbol="NVDA",
+        price=Decimal("100"),
+        currency="USD",
+        quoted_at=datetime(2026, 9, 15, 7, tzinfo=timezone.utc),
+        received_at=datetime(2026, 9, 15, 7, tzinfo=timezone.utc),
+        session="regular",
+        data_mode="live",
+        is_delayed=None,
+        source="longbridge",
+    )
+    return Mock(return_value=provider)
 
 
 def test_build_agent_input_serializes_all_request_fields(research_request):
@@ -102,7 +121,10 @@ def test_build_agent_uses_internal_tools_and_system_prompt(monkeypatch):
     }
 
 
-def test_fake_model_completes_real_langchain_tool_loop(research_request):
+def test_fake_model_completes_real_langchain_tool_loop(
+    research_request,
+    market_provider_factory,
+):
     model = ToolCallingFakeModel(
         responses=[
             AIMessage(
@@ -116,12 +138,16 @@ def test_fake_model_completes_real_langchain_tool_loop(research_request):
                     }
                 ],
             ),
-            AIMessage(content="NVDA 教学模拟报价为 100 USD，不是实时行情。"),
+            AIMessage(content="NVDA 长桥报价为 100 USD。"),
         ]
     )
     agent = build_langchain_agent(model)
 
-    state = asyncio.run(invoke_langchain_agent(agent, research_request))
+    state = asyncio.run(invoke_langchain_agent(
+        agent,
+        research_request,
+        market_provider_factory=market_provider_factory,
+    ))
     messages = state["messages"]
 
     assert model.bound_tool_names == [
@@ -143,14 +169,20 @@ def test_fake_model_completes_real_langchain_tool_loop(research_request):
     tool_result = json.loads(messages[2].content)
     assert tool_result.pop("evidence_id").startswith("E-")
     assert tool_result == {
-        "company_id": "NVDA",
-        "price": 100.0,
+        "symbol": "NVDA",
+        "price": "100",
         "currency": "USD",
-        "quoted_at": "2026-09-11T09:00:00+08:00",
-        "data_mode": "fixture",
-        "source": "本地教学模拟数据",
-        "note": "固定虚构报价，仅用于验证工具调用；报价时间也是预设的教学时间。",
+        "quoted_at": "2026-09-15T07:00:00Z",
+        "received_at": "2026-09-15T07:00:00Z",
+        "session": "regular",
+        "data_mode": "live",
+        "is_delayed": None,
+        "source": "longbridge",
     }
+    market_provider_factory.return_value.get_quote.assert_called_once_with(
+        "NVDA",
+        as_of=research_request.as_of,
+    )
     assert messages[3].tool_calls == []
 
 
@@ -296,7 +328,7 @@ def test_rag_tool_result_and_missing_documents_complete_agent_flow(monkeypatch, 
     assert not any(event["type"] == "tool_failed" for event in result["events"])
 
 
-@pytest.mark.parametrize("tool_name", ["get_quote", "get_company_profile"])
+@pytest.mark.parametrize("tool_name", ["get_company_profile"])
 def test_unsupported_company_can_return_insufficient_information(tool_name):
     request = ResearchRequest(
         company_id="TSLA",
@@ -341,11 +373,14 @@ def test_unsupported_company_can_return_insufficient_information(tool_name):
 
 
 @pytest.mark.parametrize("error_type", [ValueError, TypeError, RuntimeError, TimeoutError])
-def test_unexpected_tool_errors_still_propagate(monkeypatch, research_request, error_type):
-    def broken_handler(company_id):
-        raise error_type("unexpected handler failure")
-
-    monkeypatch.setitem(TOOL_REGISTRY["get_quote"], "handler", broken_handler)
+def test_unexpected_tool_errors_still_propagate(
+    research_request,
+    market_provider_factory,
+    error_type,
+):
+    market_provider_factory.return_value.get_quote.side_effect = error_type(
+        "unexpected handler failure"
+    )
     model = ToolCallingFakeModel(responses=[AIMessage(content="", tool_calls=[{
         "name": "get_quote",
         "args": {"company_id": "NVDA"},
@@ -354,7 +389,11 @@ def test_unexpected_tool_errors_still_propagate(monkeypatch, research_request, e
     agent = build_langchain_agent(model)
 
     with pytest.raises(error_type, match="unexpected handler failure"):
-        asyncio.run(invoke_langchain_agent(agent, research_request))
+        asyncio.run(invoke_langchain_agent(
+            agent,
+            research_request,
+            market_provider_factory=market_provider_factory,
+        ))
 
 
 @pytest.mark.parametrize("tool_name", ["get_quote", "get_company_profile"])
@@ -389,7 +428,7 @@ def test_invalid_tool_arguments_return_error_without_handler(
     assert collect_evidence_ids(result["messages"]) == set()
 
 
-@pytest.mark.parametrize("tool_name", ["get_quote", "get_company_profile"])
+@pytest.mark.parametrize("tool_name", ["get_company_profile"])
 def test_tool_deadline_returns_error_and_cancels_handler(
     monkeypatch, research_request, tool_name,
 ):
@@ -425,11 +464,14 @@ def test_tool_deadline_returns_error_and_cancels_handler(
 @pytest.mark.parametrize("error_type", [
     httpx.ConnectTimeout, httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout,
 ])
-def test_tool_http_timeout_returns_safe_error(monkeypatch, research_request, error_type):
-    async def timeout_handler(company_id):
-        raise error_type("internal request details")
-
-    monkeypatch.setitem(TOOL_REGISTRY["get_quote"], "handler", timeout_handler)
+def test_tool_http_timeout_returns_safe_error(
+    research_request,
+    market_provider_factory,
+    error_type,
+):
+    market_provider_factory.return_value.get_quote.side_effect = error_type(
+        "internal request details"
+    )
     model = ToolCallingFakeModel(responses=[
         AIMessage(content="", tool_calls=[{
             "name": "get_quote", "args": {"company_id": "NVDA"}, "id": "call-http",
@@ -438,11 +480,44 @@ def test_tool_http_timeout_returns_safe_error(monkeypatch, research_request, err
     ])
     agent = build_langchain_agent(model)
 
-    result = asyncio.run(invoke_langchain_agent(agent, research_request))
+    result = asyncio.run(invoke_langchain_agent(
+        agent,
+        research_request,
+        market_provider_factory=market_provider_factory,
+    ))
     message = result["messages"][2]
     assert message.status == "error"
     assert json.loads(message.content)["error"]["code"] == "tool_timeout"
     assert "internal request details" not in message.content
+    assert collect_evidence_ids(result["messages"]) == set()
+
+
+def test_market_provider_error_returns_safe_data_unavailable(
+    research_request,
+    market_provider_factory,
+):
+    market_provider_factory.return_value.get_quote.side_effect = (
+        MarketDataProviderError("internal Longbridge details")
+    )
+    model = ToolCallingFakeModel(responses=[
+        AIMessage(content="", tool_calls=[{
+            "name": "get_quote",
+            "args": {"company_id": "NVDA"},
+            "id": "call-market-error",
+        }]),
+        AIMessage(content="行情数据不可用。"),
+    ])
+
+    result = asyncio.run(invoke_langchain_agent(
+        build_langchain_agent(model),
+        research_request,
+        market_provider_factory=market_provider_factory,
+    ))
+
+    message = result["messages"][2]
+    assert message.status == "error"
+    assert json.loads(message.content)["error"]["code"] == "data_unavailable"
+    assert "internal Longbridge details" not in message.content
     assert collect_evidence_ids(result["messages"]) == set()
 
 
@@ -458,9 +533,15 @@ def test_run_cancellation_is_not_converted_to_tool_error(monkeypatch, research_r
             finally:
                 cancelled.set()
 
-        monkeypatch.setitem(TOOL_REGISTRY["get_quote"], "handler", waiting_handler)
+        monkeypatch.setitem(
+            TOOL_REGISTRY["get_company_profile"],
+            "handler",
+            waiting_handler,
+        )
         model = ToolCallingFakeModel(responses=[AIMessage(content="", tool_calls=[{
-            "name": "get_quote", "args": {"company_id": "NVDA"}, "id": "call-cancel",
+            "name": "get_company_profile",
+            "args": {"company_id": "NVDA"},
+            "id": "call-cancel",
         }])])
         agent = build_langchain_agent(model)
         task = asyncio.create_task(invoke_langchain_agent(agent, research_request))
@@ -691,7 +772,11 @@ def test_run_research_maps_structured_output_failure(research_request):
 
 
 @pytest.mark.parametrize("budget", ["model", "tool"])
-def test_run_research_enforces_real_budget(research_request, budget):
+def test_run_research_enforces_real_budget(
+    research_request,
+    market_provider_factory,
+    budget,
+):
     calls_per_round = [1, 1, 1, 1] if budget == "model" else [1, 4]
     model = ToolCallingFakeModel(responses=[
         AIMessage(content="", tool_calls=[{
@@ -702,7 +787,11 @@ def test_run_research_enforces_real_budget(research_request, budget):
         for round_number, count in enumerate(calls_per_round)
     ])
 
-    result = asyncio.run(run_research(build_langchain_agent(model), research_request))
+    result = asyncio.run(run_research(
+        build_langchain_agent(model),
+        research_request,
+        market_provider_factory=market_provider_factory,
+    ))
 
     assert result["status"] == "failed"
     assert result["output"] is None
@@ -772,7 +861,10 @@ def test_run_research_rejects_truncation_without_tools_or_retry(
     assert model.i == 1  # 第二条预设响应未被调用，格式修复不能绕过截断保护。
 
 
-def test_truncation_preserves_previous_tool_events(research_request):
+def test_truncation_preserves_previous_tool_events(
+    research_request,
+    market_provider_factory,
+):
     model = ToolCallingFakeModel(responses=[
         AIMessage(content="", tool_calls=[{
             "name": "get_quote", "args": {"company_id": "NVDA"}, "id": "call-quote",
@@ -781,7 +873,11 @@ def test_truncation_preserves_previous_tool_events(research_request):
         AIMessage(content="不应继续调用"),
     ])
 
-    result = asyncio.run(run_research(build_langchain_agent(model), research_request))
+    result = asyncio.run(run_research(
+        build_langchain_agent(model),
+        research_request,
+        market_provider_factory=market_provider_factory,
+    ))
 
     assert result["status"] == "failed"
     assert result["output"] is None

@@ -1,7 +1,7 @@
 """D07 Step 4：把现有只读 TOOL_REGISTRY 暴露为 LangChain Tools。
 
-本模块只能做协议适配。报价、公司资料、参数清理、NVDA 限制和 fixture 数据
-继续由 execute_tool()、TOOL_REGISTRY 与现有 handler 负责。
+本模块只做 LangChain 协议适配。公司资料继续复用教学 registry；报价通过
+运行时注入的 MarketDataProvider 查询。
 """
 
 import asyncio
@@ -22,6 +22,8 @@ from stock_agent.financial.service import (
 from stock_agent.macro.models.release import MacroReleaseType
 from stock_agent.macro.release_builders import get_latest_release
 from stock_agent.agents.context import ResearchContext
+from stock_agent.quality.macro import check_required_macro_releases, validate_macro_snapshot
+from stock_agent.quality.report import DataQualityReport
 from stock_agent.retrieval.knowledge import retrieve_knowledge
 from stock_agent.schemas.tool_params import (
     CompanyToolParams,
@@ -57,13 +59,43 @@ class MacroToolRuntimeParams(MacroToolParams):
     ]
 
 
-@tool("get_quote", args_schema=CompanyToolParams)
-async def get_quote_adapter(company_id: str) -> dict[str, object]:
-    """只读；仅支持 NVDA，返回本地 fixture 教学模拟报价，不是实时行情。"""
-    result = await execute_tool("get_quote", {"company_id": company_id})
+class QuoteToolRuntimeParams(CompanyToolParams):
+    model_config = ConfigDict(
+        extra="forbid",
+        str_strip_whitespace=True,
+        arbitrary_types_allowed=True,
+    )
+
+    runtime: Annotated[
+        SkipJsonSchema[ToolRuntime[ResearchContext]],
+        InjectedToolArg,
+    ]
+
+
+@tool("get_quote", args_schema=QuoteToolRuntimeParams)
+async def get_quote_adapter(
+    company_id: str,
+    runtime: ToolRuntime[ResearchContext],
+) -> dict[str, object]:
+    """查询截至本次研究时间可用的长桥股票报价。"""
+    factory = runtime.context.market_provider_factory
+    if factory is None:
+        raise RuntimeError("MarketDataProvider is not configured")
+
+    quote = await asyncio.to_thread(
+        factory().get_quote,
+        company_id,
+        as_of=runtime.context.as_of,
+    )
+    if quote is None:
+        return {
+            "data_mode": "live",
+            "symbol": company_id,
+            "quote": None,
+        }
 
     return {
-        **result,
+        **quote.model_dump(mode="json"),
         "evidence_id": f"E-{uuid4().hex}",
     }
 
@@ -199,9 +231,32 @@ def get_macro_snapshot_tool(
     if factory is None:
         raise RuntimeError("MacroSnapshotBuilder is not configured")
 
+
     snapshot = factory().build_latest(as_of=runtime.context.as_of)
+    macro_results = validate_macro_snapshot( snapshot=snapshot, strict_pit=False,)
 
     if release_type is None:
+        rejected_ids = {
+            result.target_id
+            for result in macro_results
+            if result.status == "rejected"
+        }
+        safe_releases = [
+            release
+            for release in snapshot.recent_releases
+            if release.release_id not in rejected_ids
+        ]
+
+        safe_snapshot = snapshot.model_copy(
+            update={"recent_releases": safe_releases}
+        )
+
+        quality_report = DataQualityReport(
+            as_of=snapshot.as_of,
+            results=macro_results,
+            source_warnings=snapshot.warnings,
+        )
+
         evidence_id = (
             "macro:snapshot:"
             f"{snapshot.as_of.isoformat()}"
@@ -210,7 +265,40 @@ def get_macro_snapshot_tool(
             "evidence_id": evidence_id,
             "data_mode": "historical",
             "snapshot": snapshot.model_dump(mode="json"),
+            "quality": quality_report.model_dump(mode="json"),
         }
+
+
+    if release_type is not None:
+        # 只汇总本次明确请求的发布类型。
+        macro_results = [
+            result
+            for result in macro_results
+            if any(
+                release.release_id == result.target_id
+                and release.release_type == release_type
+                for release in snapshot.recent_releases
+            )
+        ]
+
+        macro_results.extend(
+            check_required_macro_releases(
+                snapshot=snapshot,
+                required_types={release_type},
+            )
+        )
+
+    quality_report = DataQualityReport(
+        as_of=snapshot.as_of,
+        results=macro_results,
+        # 单一发布的报告暂不混入其他宏观模块的警告。
+        source_warnings=(
+            snapshot.warnings
+            if release_type is None
+            else []
+        ),
+    )
+
 
     release = get_latest_release(snapshot, release_type)
     if release is None:
@@ -218,6 +306,26 @@ def get_macro_snapshot_tool(
             "data_mode": "historical",
             "release_type": release_type,
             "release": None,
+            "quality": quality_report.model_dump(mode="json"),
+            "warnings": snapshot.warnings,
+        }
+
+    # 先检查所选发布有没有被拒绝，再决定是否返回其数值
+    release_quality = next(
+        (
+            result
+            for result in macro_results
+            if result.target_id == release.release_id
+        ),
+        None,
+    )
+
+    if release_quality is None or release_quality.status == "rejected":
+        return {
+            "data_mode": "historical",
+            "release_type": release_type,
+            "release": None,
+            "quality": quality_report.model_dump(mode="json"),
             "warnings": snapshot.warnings,
         }
 
@@ -226,6 +334,7 @@ def get_macro_snapshot_tool(
         "data_mode": "historical",
         "as_of": snapshot.as_of.isoformat(),
         "release": release.model_dump(mode="json"),
+        "quality": quality_report.model_dump(mode="json"),
         "warnings": snapshot.warnings,
     }
 

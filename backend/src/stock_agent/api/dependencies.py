@@ -22,6 +22,9 @@ from stock_agent.agents.langchain.langchain_agent import (
 )
 from stock_agent.llm_client import get_llm_config
 from stock_agent.macro.config_factory import build_macro_snapshot_builder
+from stock_agent.market.longbridge.config_factory import (
+    build_longbridge_market_provider,
+)
 
 from langchain.agents.structured_output import ToolStrategy
 
@@ -66,3 +69,16 @@ def get_macro_builder_factory():
     """向请求上下文注入延迟创建 Builder 的函数。"""
 
     return get_macro_snapshot_builder
+
+
+@lru_cache
+def get_market_data_provider():
+    """首次调用行情 Tool 时才创建真实长桥 Provider。"""
+
+    return build_longbridge_market_provider()
+
+
+def get_market_provider_factory():
+    """向请求上下文注入延迟创建行情 Provider 的函数。"""
+
+    return get_market_data_provider

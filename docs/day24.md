@@ -49,7 +49,7 @@ PPI Release 包含：
 
 `MacroSnapshot.recent_releases` 保存事件，避免 Agent 自己把四项指标拼成一次发布。稳定事件 ID 使用 `release_type:release_date`，例如 `cpi:2026-09-11`。
 
-## Consensus 与 Surprise
+## Consensus、Estimated Surprise 与 Surprise
 
 当前首版面向普通在线研究，不承担 PIT 回测。项目直接采用长桥历史记录中的 Forecast，并计算：
 
@@ -113,7 +113,7 @@ PYTHONPATH=backend/src backend/.venv/bin/python \
   evals/verify_macro_agent.py
 ```
 
-## 当前仍未完成
+## 已知限制
 
 - 长桥事件时间尚未独立核实为真实发布时间，`released_at` 仍为空。发布日期当天会保守跳过该事件，不能用于分钟级 Market Reaction；
 - 长桥历史 Actual 可能包含后续修订，`actual_pit_status` 保持 `unverified`，尚不支持严格历史 vintage 回放；
@@ -139,7 +139,7 @@ LangChain Agent 已注册只读 `get_macro_snapshot` Tool：
 
 以下流程图描述长桥不可用时的官方 Provider 回退链路。
 
-
+```mermaid
 flowchart TD
 
     A[用户问题 / Agent 需要宏观上下文] --> B[MacroSnapshotBuilder.build_latest(as_of)]
@@ -271,3 +271,4 @@ flowchart TD
     N --> M
 
     M --> O[Agent / 上层分析逻辑]
+```

@@ -16,6 +16,7 @@ from stock_agent.financial.schemas import FinancialFact
 from stock_agent.macro.models.metric import MacroMetricSnapshot
 from stock_agent.macro.models.release import MacroReleaseEvent
 from stock_agent.macro.models.snapshot import MacroSnapshot
+from stock_agent.market.schemas import Quote
 from stock_agent.schemas.tool_params import CompanyToolParams, KnowledgeToolParams
 from stock_agent.tools.registry import TOOL_REGISTRY, execute_tool
 
@@ -40,12 +41,20 @@ def test_build_langchain_tools_returns_exact_allowlist():
     assert len({tool.name for tool in tools}) == len(TOOL_NAMES) + 3
 
 
-@pytest.mark.parametrize("tool_name", TOOL_NAMES)
-def test_adapter_reuses_company_tool_params_schema(tool_name):
-    tool = tools_by_name()[tool_name]
+def test_company_profile_adapter_reuses_company_tool_params_schema():
+    tool = tools_by_name()["get_company_profile"]
 
     assert tool.args_schema is CompanyToolParams
     assert tool.args_schema.model_json_schema()["additionalProperties"] is False
+
+
+def test_quote_adapter_exposes_only_company_id_to_model():
+    tool = tools_by_name()["get_quote"]
+
+    assert issubclass(tool.args_schema, CompanyToolParams)
+    assert set(tool.tool_call_schema.model_json_schema()["properties"]) == {
+        "company_id"
+    }
 
 
 @pytest.mark.parametrize(
@@ -55,7 +64,7 @@ def test_adapter_reuses_company_tool_params_schema(tool_name):
         ({"company_id": "NVDA", "extra": 1}, "extra", "extra_forbidden"),
     ],
 )
-@pytest.mark.parametrize("tool_name", TOOL_NAMES)
+@pytest.mark.parametrize("tool_name", ["get_company_profile"])
 def test_invalid_arguments_are_rejected_before_handler(
     monkeypatch,
     tool_name,
@@ -78,7 +87,7 @@ def test_invalid_arguments_are_rejected_before_handler(
     )
 
 
-@pytest.mark.parametrize("tool_name", TOOL_NAMES)
+@pytest.mark.parametrize("tool_name", ["get_company_profile"])
 @pytest.mark.parametrize("company_id", ["NVDA", "  NVDA  "])
 def test_adapter_result_matches_execute_tool(tool_name, company_id):
     payload = {"company_id": company_id}
@@ -97,7 +106,7 @@ def test_adapter_result_matches_execute_tool(tool_name, company_id):
     assert adapter_result["data_mode"] == "fixture"
 
 
-@pytest.mark.parametrize("tool_name", TOOL_NAMES)
+@pytest.mark.parametrize("tool_name", ["get_company_profile"])
 def test_adapter_only_delegates_to_execute_tool(monkeypatch, tool_name):
     calls = []
 
@@ -116,7 +125,7 @@ def test_adapter_only_delegates_to_execute_tool(monkeypatch, tool_name):
     assert calls == [(tool_name, {"company_id": "NVDA"})]
 
 
-@pytest.mark.parametrize("tool_name", TOOL_NAMES)
+@pytest.mark.parametrize("tool_name", ["get_company_profile"])
 def test_unsupported_company_is_rejected_by_existing_handler(tool_name):
     assert CompanyToolParams.model_validate(
         {"company_id": "AAPL"}
@@ -124,6 +133,50 @@ def test_unsupported_company_is_rejected_by_existing_handler(tool_name):
 
     with pytest.raises(ValueError, match="不支持的公司标识"):
         asyncio.run(tools_by_name()[tool_name].ainvoke({"company_id": "AAPL"}))
+
+
+def test_quote_adapter_uses_runtime_market_provider():
+    as_of = datetime(2026, 9, 27, 12, tzinfo=timezone.utc)
+    quote = Quote(
+        symbol="NVDA",
+        price=Decimal("187.25"),
+        currency="USD",
+        quoted_at=datetime(2026, 9, 26, 20, tzinfo=timezone.utc),
+        received_at=datetime(2026, 9, 26, 20, tzinfo=timezone.utc),
+        session="post",
+        data_mode="live",
+        is_delayed=None,
+        source="longbridge",
+    )
+    provider = Mock()
+    provider.get_quote.return_value = quote
+    factory = Mock(return_value=provider)
+    runtime = ToolRuntime(
+        state={},
+        context=ResearchContext(
+            as_of=as_of,
+            market_provider_factory=factory,
+        ),
+        config={},
+        stream_writer=lambda _: None,
+        tool_call_id="call-quote",
+        store=None,
+    )
+
+    result = asyncio.run(
+        tools_by_name()["get_quote"].coroutine(
+            company_id="NVDA",
+            runtime=runtime,
+        )
+    )
+
+    factory.assert_called_once_with()
+    provider.get_quote.assert_called_once_with("NVDA", as_of=as_of)
+    assert result["symbol"] == "NVDA"
+    assert result["price"] == "187.25"
+    assert result["data_mode"] == "live"
+    assert result["source"] == "longbridge"
+    assert result["evidence_id"].startswith("E-")
 
 
 def test_unknown_tool_has_no_langchain_or_registry_execution_path():

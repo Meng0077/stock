@@ -13,6 +13,7 @@ from langgraph.types import Command
 from stock_agent.agents.tool_calling import TOOL_TIMEOUT_SECONDS
 from stock_agent.tools.errors import UnsupportedCompanyError
 from stock_agent.macro.errors import MacroDataProviderError
+from stock_agent.market.errors import MarketDataProviderError
 
 
 MACRO_TOOL_TIMEOUT_SECONDS = 90
@@ -49,6 +50,9 @@ async def handle_tool_errors(
     except MacroDataProviderError:
         code = "data_unavailable"
         message = "宏观数据源暂不可用，未取得所需资料。"
+    except MarketDataProviderError:
+        code = "data_unavailable"
+        message = "行情数据源暂不可用，未取得所需报价。"
 
     return ToolMessage(
         content=json.dumps(

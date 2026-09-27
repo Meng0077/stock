@@ -18,6 +18,9 @@ from stock_agent.schemas.research_output import ResearchOutput
 from stock_agent.agents.langchain.langchain_agent import build_langchain_agent, invoke_langchain_agent
 from stock_agent.llm_client import get_llm_config
 from stock_agent.schemas.research import ResearchRequest
+from stock_agent.market.longbridge.config_factory import (
+    build_longbridge_market_provider,
+)
 
 
 
@@ -42,7 +45,11 @@ async def main():
         )
     # 使用工具调用生成结构化结果，避免接口不支持原生 response_format。
     agent = build_langchain_agent(model, response_format=ToolStrategy(ResearchOutput))
-    result = await run_research(agent, request)
+    result = await run_research(
+        agent,
+        request,
+        market_provider_factory=build_longbridge_market_provider,
+    )
     if result["output"] is not None:
         result["output"] = result["output"].model_dump(mode="json")
     print(json.dumps(result, ensure_ascii=False, indent=2))
