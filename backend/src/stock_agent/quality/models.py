@@ -45,6 +45,7 @@ QualityPurpose = Literal[
     "current_price",
     "daily_technical",
     "macro_research",
+    "market_reaction",
 ]
 
 

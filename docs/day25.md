@@ -38,9 +38,10 @@ Quote 检查缺失、ticker 不匹配、未来时间、fixture、过期、延迟
 完整 MacroSnapshot 和指定 `release_type` 都复用宏观时间校验：
 
 - 排除发布时间晚于 `as_of` 的发布；
+- 仅将 `fred`、`longbridge` 和离线测试使用的 `fixture` 视为已核实的发布日期来源，其他来源在普通研究中降级、严格 PIT 中拒绝；
 - 识别缺少可靠实际发布时间、统计期绑定未验证及 Actual 历史版本未验证；
 - 识别供应商 Forecast 缺少发布前历史版本证明；
-- 完整快照移除 rejected 发布，并在 `quality` 中保留拒绝原因；
+- 完整快照和按类型查询都会移除 rejected 发布及发布内不满足 `as_of` 的指标，并在 `quality` 中保留原因；
 - 普通在线研究可保留 degraded Estimated Surprise，但不能称为严格 PIT Surprise。
 
 ## 验收
@@ -52,6 +53,7 @@ cd backend
 .venv/bin/pytest -q -p no:cacheprovider \
   tests/test_quality_quote.py \
   tests/test_quality_bars.py \
+  tests/test_quality_macro.py \
   tests/test_langchain_tools.py \
   tests/test_langchain_agent.py
 ```
@@ -70,6 +72,7 @@ PYTHONPATH=backend/src backend/.venv/bin/python \
 ## 已知限制
 
 - 当前不判断交易所是否处于正常、盘前或盘后交易，默认使用 `unknown`；
+- 当前不使用交易所日历判断日线序列中间是否缺少交易日；空数据和技术窗口数量不足仍会被识别；
 - 休市 Quote 只作为 degraded 数据展示，不推断为经核实的最近收盘价；
 - Longbridge 历史 Quote 和宏观 Actual 的严格历史 vintage 尚未验证；
-- 分钟行情和宏观事件后的 Market Reaction 属于 D26–D30。
+- 分钟行情已在 D26 接入；宏观事件时间对齐和 Market Reaction 属于 D27–D30。

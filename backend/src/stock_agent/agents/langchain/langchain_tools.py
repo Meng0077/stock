@@ -21,6 +21,7 @@ from stock_agent.financial.service import (
 )
 from stock_agent.macro.models.release import MacroReleaseType
 from stock_agent.macro.release_builders import get_latest_release
+from stock_agent.macro.temporal import filter_releases_as_of
 from stock_agent.agents.context import ResearchContext
 from stock_agent.market.errors import MarketDataProviderError
 from stock_agent.quality.macro import check_required_macro_releases, validate_macro_snapshot
@@ -269,23 +270,16 @@ def get_macro_snapshot_tool(
 
     snapshot = factory().build_latest(as_of=runtime.context.as_of)
     macro_results = validate_macro_snapshot( snapshot=snapshot, strict_pit=False,)
+    safe_releases, _ = filter_releases_as_of(
+        snapshot.recent_releases,
+        as_of=snapshot.as_of,
+        strict_pit=False,
+    )
+    safe_snapshot = snapshot.model_copy(
+        update={"recent_releases": safe_releases}
+    )
 
     if release_type is None:
-        rejected_ids = {
-            result.target_id
-            for result in macro_results
-            if result.status == "rejected"
-        }
-        safe_releases = [
-            release
-            for release in snapshot.recent_releases
-            if release.release_id not in rejected_ids
-        ]
-
-        safe_snapshot = snapshot.model_copy(
-            update={"recent_releases": safe_releases}
-        )
-
         quality_report = DataQualityReport(
             as_of=safe_snapshot.as_of,
             results=macro_results,
@@ -318,7 +312,7 @@ def get_macro_snapshot_tool(
 
         macro_results.extend(
             check_required_macro_releases(
-                snapshot=snapshot,
+                snapshot=safe_snapshot,
                 required_types={release_type},
             )
         )
@@ -335,7 +329,7 @@ def get_macro_snapshot_tool(
     )
 
 
-    release = get_latest_release(snapshot, release_type)
+    release = get_latest_release(safe_snapshot, release_type)
     if release is None:
         return {
             "data_mode": "historical",

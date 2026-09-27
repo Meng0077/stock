@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from longbridge.openapi import (
     AdjustType,
     OpenApiException,
+    Period,
     QuoteContext,
     TradeSessions,
 )
@@ -13,11 +14,18 @@ from stock_agent.market.longbridge.longbridge_mapper import (
     map_longbridge_quote,
     to_longbridge_period,
     to_longbridge_symbol,
+    map_longbridge_intraday_bar,
 )
 from stock_agent.market.schemas import (
     Bar,
     BarTimeframe,
     Quote,
+)
+
+
+from stock_agent.market.intraday import (
+    HistoricalMinuteBarsRequest,
+    IntradayBar,
 )
 
 
@@ -200,3 +208,97 @@ class LongbridgeMarketDataProvider:
         ]
         bars.sort(key=lambda bar: bar.start_at)
         return bars[-limit:]
+
+    def get_intraday_bars(
+        self,
+        symbol: str,
+        *,
+        start_at: datetime,
+        end_at: datetime,
+        as_of: datetime,
+    ) -> list[IntradayBar]:
+        """按指定时间区间获取已完成的历史 1m K 线。"""
+
+        request = HistoricalMinuteBarsRequest(
+            symbol=symbol,
+            start_at=start_at,
+            end_at=end_at,
+            as_of=as_of,
+        )
+
+        longbridge_symbol = to_longbridge_symbol(request.symbol)
+        PAGE_SIZE = 1000
+        MAX_PAGES = 12
+        # 从查询窗口终点开始，逐步向历史方向移动。
+        cursor = request.end_at
+        collected: dict[datetime, IntradayBar] = {}
+
+        for _ in range(MAX_PAGES):
+            try:
+                bars = self._quote_context.history_candlesticks_by_offset(
+                    longbridge_symbol,
+                    Period.Min_1,
+                    AdjustType.NoAdjust,
+                    False,
+                    PAGE_SIZE,
+                    cursor,
+                    TradeSessions.All,
+                )
+            except OpenApiException as exc:
+                raise MarketDataProviderError(
+                    "Longbridge minute history request failed: "
+                    f"code={exc.code}"
+                ) from exc
+
+            if not bars:
+                break
+
+            received_at = datetime.now(timezone.utc)
+            page = [
+                    map_longbridge_intraday_bar(
+                        bar,
+                        symbol=request.symbol.upper(),
+                        received_at=received_at,
+                        as_of=request.as_of,
+                    )
+                    for bar in bars
+                ]
+            oldest = min(bar.start_at for bar in page)
+
+            # 只收集完整落在目标区间内的历史 K 线。
+            for bar in page:
+
+                if not (
+                    request.start_at <= bar.start_at
+                    and bar.end_at <= request.end_at
+                    and bar.is_complete
+                    and bar.end_at <= request.as_of
+                ):
+                    continue
+                previous = collected.get(bar.start_at)
+
+                if previous is not None:
+                    # 分页边界允许重复返回同一根 K 线，
+                    # 但不允许同一时间的数据互相矛盾。
+                    previous_data = previous.model_dump(exclude={"received_at"})
+                    current_data = bar.model_dump(exclude={"received_at"})
+                    if previous_data != current_data:
+                        raise MarketDataProviderError("Conflicting minute bars ""at the same timestamp")
+
+                collected[bar.start_at] = bar
+
+            # 已经覆盖到请求起点，无需继续分页。
+            if oldest <= request.start_at:
+                break
+
+            # 游标没有向前推进，防止无限循环。
+            if oldest >= cursor:
+                raise MarketDataProviderError("Historical minute pagination made no progress")
+
+            cursor = oldest
+        else:
+            raise MarketDataProviderError(
+                "Historical minute pagination "
+                "exceeded the configured page limit"
+            )
+        return [collected[key] for key in sorted(collected)]

@@ -13,6 +13,10 @@ from stock_agent.market.schemas import (
     _QuoteCandidate,
 )
 
+from longbridge.openapi import TradeSession
+
+from stock_agent.market.intraday import IntradayBar
+
 
 NEW_YORK = ZoneInfo("America/New_York")
 
@@ -21,6 +25,7 @@ def _normalize_us_timestamp(value: datetime) -> datetime:
     """把 Longbridge 的美股时间统一为 America/New_York。"""
 
     if value.tzinfo is None:
+        # Longbridge Python SDK 返回主机本地时间的 naive datetime。
         value = value.astimezone()
     return value.astimezone(NEW_YORK)
 
@@ -203,3 +208,39 @@ def map_longbridge_bar(
         source="longbridge",
         data_mode=("historical" if is_complete else "live"),
     )
+
+
+def map_longbridge_intraday_bar(
+    raw_bar: Any,
+    *,
+    symbol: str,
+    received_at: datetime,
+    as_of: datetime,
+) -> IntradayBar:
+    """将长桥历史分钟 K 线映射为 IntradayBar。"""
+
+    raw_session = raw_bar.trade_session
+    if raw_session == TradeSession.Pre:
+        session = "pre"
+    elif raw_session == TradeSession.Intraday:
+        session = "regular"
+    elif raw_session == TradeSession.Post:
+        session = "post"
+    elif raw_session == TradeSession.Overnight:
+        session = "overnight"
+    else:
+        session = "unknown"
+
+    base_bar = map_longbridge_bar(
+        raw_bar,
+        symbol=symbol,
+        timeframe="1m",
+        received_at=received_at,
+        as_of=as_of,
+    )
+
+    return IntradayBar.model_validate({
+        **base_bar.model_dump(),
+        "adjustment": "raw",
+        "session": session,
+    })

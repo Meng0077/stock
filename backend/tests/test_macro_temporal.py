@@ -39,6 +39,7 @@ def make_release(
     *,
     release_date: date = date(2026, 9, 11),
     released_at: datetime | None = None,
+    release_date_source: str = "fixture",
     period_binding: str = "latest_assumed",
     metrics: list[MacroMetricSnapshot] | None = None,
 ) -> MacroReleaseEvent:
@@ -47,7 +48,7 @@ def make_release(
         release_type="cpi",
         release_date=release_date,
         released_at=released_at,
-        release_date_source="fixture",
+        release_date_source=release_date_source,
         period_binding=period_binding,
         metrics=metrics or [
             make_metric(
@@ -110,6 +111,35 @@ def test_release_date_and_precise_time_must_agree():
 
     assert validation.decision == "reject"
     assert validation.reason == "release_date_time_conflict"
+
+
+@pytest.mark.parametrize(
+    ("strict_pit", "expected_decision"),
+    [
+        (False, "usable_with_warning"),
+        (True, "reject"),
+    ],
+)
+def test_unverified_release_date_source_is_not_fully_usable(
+    strict_pit,
+    expected_decision,
+):
+    release = make_release(
+        released_at=datetime(
+            2026, 9, 11, 8, 30, tzinfo=EASTERN
+        ),
+        release_date_source="unknown_vendor",
+        period_binding="verified",
+    )
+
+    validation = validate_release_as_of(
+        release,
+        as_of=datetime(2026, 9, 13, tzinfo=timezone.utc),
+        strict_pit=strict_pit,
+    )
+
+    assert validation.decision == expected_decision
+    assert validation.reason == "release_date_source_unverified"
 
 
 def test_strict_pit_rejects_date_only_or_unbound_release():

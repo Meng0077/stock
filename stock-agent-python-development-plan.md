@@ -3,7 +3,7 @@
 - 版本：v3.3，2026-09-25；聚焦财报 RAG、行情与技术分析、宏观数据和 Market Reaction 四条核心研究链路。
 - 定位：面向 Agent 开发岗位的可演示项目；模型负责理解问题、调用只读工具、检索资料和解释结果，行情、宏观、市场反应与决策规则由可复现的 Python 模块完成。
 - 排期：面试版 9 周、45 个开发日、约 180 小时；按每天 4 小时、每周 5 天估算。若 Python 异步、数据源接入或部署比预期慢，另留 1–2 周缓冲。
-- 当前进度：D11–D15 已完成本地 RAG、通用 Knowledge Tool、SEC Provider、HTML 解析和任意 ticker 的首次按需索引，见对应 day 文档；中文检索、SEC 历史清单及无匹配资料的细分原因等已记录遗留项继续保留。D16 已完成 PostgreSQL / pgvector 的原文、chunk、embedding 和索引快照持久化。D17 已完成 exact snapshot、latest compatible snapshot、按 accession 增量更新和历史检索时间边界。D18 已完成最小 SEC Company Facts、Financial Tool、精确数值存储及 Financial / Knowledge evidence 组合校验。D21 已完成 MarketDataProvider、Quote / Bar 契约和离线 Fixture 验收。D22 已完成 Longbridge 适配器、离线测试及 NVDA / AMD 真实在线验收。D24 已完成 CPI、PPI、PCE、就业、Claims、Fed / SEP 和美债核心链路、基于供应商 Forecast 的非 PIT Estimated Surprise、Macro Tool 及 evidence 校验，并通过离线测试、真实 Provider 和真实模型 Agent 端到端验收；严格 PIT Surprise、历史 vintage 回放和可靠实际发布时间不在首版范围。D25 已完成 Quote、日线、技术指标和宏观发布的统一质量状态、未来/过期/缺失/窗口不足检查、部分结果降级及 Agent Tool 接入，见 docs/day25.md。D19、D20 延后。
+- 当前进度：D11–D15 已完成本地 RAG、通用 Knowledge Tool、SEC Provider、HTML 解析和任意 ticker 的首次按需索引，见对应 day 文档；中文检索、SEC 历史清单及无匹配资料的细分原因等已记录遗留项继续保留。D16 已完成 PostgreSQL / pgvector 的原文、chunk、embedding 和索引快照持久化。D17 已完成 exact snapshot、latest compatible snapshot、按 accession 增量更新和历史检索时间边界。D18 已完成最小 SEC Company Facts、Financial Tool、精确数值存储及 Financial / Knowledge evidence 组合校验。D21 已完成 MarketDataProvider、Quote / Bar 契约和离线 Fixture 验收。D22 已完成 Longbridge 适配器、离线测试及 NVDA / AMD 真实在线验收。D24 已完成 CPI、PPI、PCE、就业、Claims、Fed / SEP 和美债核心链路、基于供应商 Forecast 的非 PIT Estimated Surprise、Macro Tool 及 evidence 校验，并通过离线测试、真实 Provider 和真实模型 Agent 端到端验收；严格 PIT Surprise、历史 vintage 回放和可靠实际发布时间不在首版范围。D25 已完成 Quote、日线、技术指标和宏观发布的统一质量状态、未来/过期/缺失/窗口不足检查、部分结果降级及 Agent Tool 接入。D26 已完成 1m IntradayBar、分钟行情能力异常、交易时段覆盖、长桥历史分钟行情接入及真实 NVDA 核心链路验收，见 docs/day26.md。D19、D20 延后。
 
 本文是拟开发计划。目录、接口和演示能力只有在代码实现并验收后才算完成；不能把 fixture、历史数据或延迟数据标成实时行情。
 
@@ -209,7 +209,7 @@ SEC 接入通过后端完成，按官方要求声明 User-Agent 并遵守访问�
 | --- | --- | --- |
 | D26 | 接入历史分钟 K 线，定义 IntradayBar 和 MarketReaction 所需行情契约 | 支持 1m 或其他已知粒度，明确盘前、盘中、盘后覆盖情况；保留时间戳、时区、数据源和交易时段；无法取得分钟数据时明确标记能力缺失 |
 | D27 | 建立宏观发布事件与行情的时间对齐 | 将 CPI、PPI、非农、PCE 等 MacroReleaseEvent 与目标股票行情关联；区分计划发布时间和实际发布时间；日期精度不足时不计算分钟级反应 |
-| D28 | 实现 MarketReaction 纯计算引擎 | 计算事件前参考价、T+5m、T+30m、T+1h 和收盘收益率；明确基准价格、实际交易时间、跨盘前与正常交易时段的处理规则 |
+| D28 | 实现 MarketReaction 纯计算引擎 | 计算事件前参考价、T+5m、T+30m、T+1h 和收盘收益率；明确基准价格、实际交易时间、跨盘前与正常交易时段的处理规则；将分钟行情能力异常转换为结构化不可用结果 |
 | D29 | 加入市场基准对比与历史事件查询 | 支持 NVDA、QQQ 及可用的行业 ETF；计算目标股票收益率与基准收益率之差；可查询近期同类宏观发布的历史反应 |
 | D30 | 完成 MarketReaction 离线验收与真实联调 | 验证盘前发布、交易时段切换、休市、行情缺口、时间错位、未来数据、基准数据缺失；至少使用一个真实宏观事件完成端到端分析 |
 

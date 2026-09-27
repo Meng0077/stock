@@ -10,6 +10,12 @@ from stock_agent.macro.models.release import MacroReleaseEvent
 
 EASTERN = ZoneInfo("America/New_York")
 
+VERIFIED_RELEASE_DATE_SOURCES = frozenset({
+    "fred",
+    "longbridge",
+    "fixture",
+})
+
 
 def validate_metric_as_of(
     metric: MacroMetricSnapshot,
@@ -273,7 +279,21 @@ def validate_release_as_of(
                 reason="exact_release_time_missing",
             )
 
-    # 3. 严格 PIT 需要验证事件和统计期的对应关系。
+    # 3. 发布日期必须来自当前已经核实的数据源。
+    if (
+        release.release_date_source
+        not in VERIFIED_RELEASE_DATE_SOURCES
+    ):
+        return TemporalValidation(
+            decision=(
+                "reject"
+                if strict_pit
+                else "usable_with_warning"
+            ),
+            reason="release_date_source_unverified",
+        )
+
+    # 4. 严格 PIT 需要验证事件和统计期的对应关系。
     if (
         strict_pit
         and release.period_binding != "verified"
@@ -283,7 +303,7 @@ def validate_release_as_of(
             reason="release_period_binding_unverified",
         )
 
-    # 4. 普通在线研究允许保留未严格验证的事件。
+    # 5. 普通在线研究允许保留未严格验证的事件。
     if release.period_binding != "verified":
         return TemporalValidation(
             decision="usable_with_warning",

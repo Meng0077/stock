@@ -6,6 +6,12 @@ from stock_agent.market.schemas import (
     Quote,
 )
 
+from stock_agent.market.intraday import (
+    HistoricalMinuteBarsRequest,
+    IntradayBar,
+)
+from stock_agent.market.errors import MarketDataCapabilityError
+
 class FixtureMarketDataProvider:
     """基于本地固定数据实现行情 Provider。
 
@@ -145,3 +151,67 @@ class FixtureMarketDataProvider:
         available_bars.sort(key=lambda bar: bar.start_at)
 
         return available_bars[-limit:]
+
+    def get_intraday_bars(
+        self,
+        symbol: str,
+        *,
+        start_at: datetime,
+        end_at: datetime,
+        as_of: datetime,
+    ) -> list[IntradayBar]:
+        """从固定样例中查询指定区间的历史分钟行情。"""
+
+        # Step 1 已定义的模型负责参数合法性。
+        request = HistoricalMinuteBarsRequest(
+            symbol=symbol,
+            start_at=start_at,
+            end_at=end_at,
+            as_of=as_of,
+        )
+
+        normalized_symbol = request.symbol.upper()
+
+        # 复用已有的 _bars 存储。
+        key = (normalized_symbol, "1m")
+        if key not in self._bars:
+            raise MarketDataCapabilityError(
+                "Fixture minute bars are not configured"
+            )
+
+        candidates = self._bars[key]
+
+        # 历史分钟查询必须有明确的交易时段。
+        # 不将普通 Bar 悄悄转换成 session=unknown。
+        if any(
+            not isinstance(bar, IntradayBar)
+            for bar in candidates
+        ):
+            raise ValueError(
+                "Fixture minute bars must be IntradayBar"
+            )
+
+        result = [
+            bar
+            for bar in candidates
+            if (
+                # 只返回完整处于请求区间的 K 线。
+                bar.start_at >= request.start_at
+                and bar.end_at <= request.end_at
+
+                # 本次查询只使用完成 K 线。
+                and bar.is_complete
+
+                # 不允许使用研究截止时间之后的 K 线。
+                and bar.end_at <= request.as_of
+
+                # 排除截止时间之后才更新的数据。
+                and bar.updated_at is not None
+                and bar.updated_at <= request.as_of
+            )
+        ]
+
+        return sorted(
+            result,
+            key=lambda bar: bar.start_at,
+        )

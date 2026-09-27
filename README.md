@@ -21,8 +21,9 @@
 | D21–D22 行情 | 已完成 | 统一 Quote/Bar 契约、Fixture Provider、Longbridge 最新报价和至少 60 根已完成日线 |
 | D23 技术分析 | 已完成 | MA5/20/50、收益率、ATR14、成交量、确认拐点及候选支撑阻力 |
 | D24 宏观数据 | 核心链路已完成 | 长桥提供 CPI、PPI、PCE、就业、Claims 及供应商 Forecast；FRED 保留 Fed/SEP 和美债；支持明确标注为非 PIT 的 Estimated Surprise，Macro Tool 已通过真实 Agent 联调 |
-| D25 数据质量 | 核心链路已完成 | Quote、日线、技术指标和宏观发布统一输出 usable/degraded/rejected；未来、过期、缺失和窗口不足数据会降级或停止对应分析 |
-| D26–D45 | 待开发 | Market Reaction、分析引擎、LangGraph、React 联调、评估与部署 |
+| D25 数据质量 | 已完成 | Quote、日线、技术指标和宏观发布统一输出 usable/degraded/rejected；未来、过期、缺失和窗口不足数据会降级或停止对应分析；日线交易日历缺口检测按当前范围暂不实现 |
+| D26 历史分钟行情 | 已完成 | 统一 1m IntradayBar、能力异常、交易时段覆盖和质量检查；已通过专项测试、Fixture 与 NVDA 长桥真实历史行情验收 |
+| D27–D45 | 待开发 | Market Reaction 时间对齐与计算、分析引擎、LangGraph、React 联调、评估与部署 |
 
 各开发日的设计、验收记录和已知限制位于 [`docs/`](docs/)。当前状态以对应 day 文档和测试结果为准，不把 fixture、历史数据或尚未联调的能力描述为实时生产能力。
 
@@ -87,7 +88,7 @@ evals/            离线评估与真实 API 验证脚本
 frontend/         React 前端；当前使用本地 Mock，尚未完成真实后端联调
 ```
 
-Market Reaction 将在 D26–D30 开发，届时再创建对应目录，不预建空模块。
+历史分钟行情已在 D26 接入；事件时间对齐和 Market Reaction 计算将在 D27–D30 开发。
 
 ## 本地环境
 
@@ -165,6 +166,7 @@ pnpm build
 PYTHONPATH=backend/src backend/.venv/bin/python evals/verify_longbridge_market_data.py
 PYTHONPATH=backend/src backend/.venv/bin/python evals/verify_day24_macro.py
 PYTHONPATH=backend/src backend/.venv/bin/python evals/verify_macro_agent.py
+PYTHONPATH=backend/src backend/.venv/bin/python evals/verify_day26_intraday.py
 ```
 
 这些脚本需要相应密钥和外部服务可用。Estimated Surprise 直接使用长桥历史记录中的 Forecast，不具备严格 PIT 保证。长桥事件时间尚未作为经独立核实的实际发布时间，因此不能单独用于 T+5m 等分钟级 Market Reaction。
@@ -178,4 +180,6 @@ PYTHONPATH=backend/src backend/.venv/bin/python evals/verify_macro_agent.py
 - [D21–D22：行情 Provider](docs/day21_22.md)
 - [D23：技术分析](docs/day23.md)
 - [D24：宏观发布事件](docs/day24.md)
+- [D25：数据质量](docs/day25.md)
+- [D26：历史分钟行情](docs/day26.md)
 - [前端开发计划](docs/frontend-development-plan.md)

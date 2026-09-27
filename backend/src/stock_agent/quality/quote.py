@@ -88,8 +88,9 @@ def validate_quote(
     passed_time = (as_of - quote.quoted_at).total_seconds()
 
     # 检查市场状态及新鲜度
+    issues: list[QualityIssue] = []
     if market_state == 'closed':
-        return make_result("degraded", issues=[
+        issues.append(
             QualityIssue(
                 code="market_closed",
                 message=(
@@ -98,13 +99,14 @@ def validate_quote(
                     "未经核实的最近收盘价"
                 ),
                 details={
-                    "quote_age_seconds": passed_time,
-                },
-            )])
+                        "quote_age_seconds": passed_time,
+                    },
+            )
+        )
 
     # trading 和 unknown 都必须校验新鲜度。
     # unknown 只降低可信度，不能让过期报价绕过检查。
-    if passed_time > max_age_seconds:
+    if market_state != "closed" and passed_time > max_age_seconds:
         return make_result('rejected', issues=[QualityIssue(
             code="quote_stale",
                     message="报价超过允许的新鲜度阈值",
@@ -115,13 +117,14 @@ def validate_quote(
         )])
 
     if market_state == "unknown":
-        return make_result("degraded", issues=[QualityIssue(
-                    code="market_state_unknown",
-                    message="无法确认当前市场交易状态",
-                )])
+        issues.append(
+            QualityIssue(
+                code="market_state_unknown",
+                message="无法确认当前市场交易状态",
+            )
+        )
 
     # 收集不会直接否定报价的质量问题
-    issues: list[QualityIssue] = []
     if quote.data_mode != "live":
         issues.append(
             QualityIssue(

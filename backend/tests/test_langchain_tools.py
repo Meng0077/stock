@@ -213,6 +213,48 @@ def test_quote_adapter_uses_runtime_market_provider():
     assert result["evidence_id"].startswith("E-")
 
 
+def test_quote_adapter_does_not_create_evidence_for_stale_quote():
+    as_of = datetime(2026, 9, 27, 12, tzinfo=timezone.utc)
+    quote = Quote(
+        symbol="NVDA",
+        price=Decimal("187.25"),
+        currency="USD",
+        quoted_at=as_of - timedelta(seconds=61),
+        received_at=as_of - timedelta(seconds=60),
+        session="post",
+        data_mode="live",
+        is_delayed=False,
+        source="longbridge",
+    )
+    provider = Mock()
+    provider.get_quote.return_value = quote
+    runtime = ToolRuntime(
+        state={},
+        context=ResearchContext(
+            as_of=as_of,
+            market_provider_factory=lambda: provider,
+        ),
+        config={},
+        stream_writer=lambda _: None,
+        tool_call_id="call-stale-quote",
+        store=None,
+    )
+
+    result = asyncio.run(
+        tools_by_name()["get_quote"].coroutine(
+            company_id="NVDA",
+            runtime=runtime,
+        )
+    )
+
+    assert result["quote"] is None
+    assert "evidence_id" not in result
+    assert result["quality"]["overall_status"] == "rejected"
+    assert result["quality"]["results"][0]["issues"][0]["code"] == (
+        "quote_stale"
+    )
+
+
 def test_unknown_tool_has_no_langchain_or_registry_execution_path():
     assert "delete_file" not in tools_by_name()
 
@@ -463,6 +505,86 @@ def test_macro_full_snapshot_filters_rejected_future_release():
         available.release_id: "usable",
         future.release_id: "rejected",
     }
+
+
+@pytest.mark.parametrize("release_type", [None, "cpi"])
+def test_macro_tool_removes_future_metric_from_degraded_release(
+    release_type,
+):
+    as_of = datetime(2026, 9, 20, 16, tzinfo=timezone.utc)
+    released_at = datetime(
+        2026, 9, 11, 12, 30, tzinfo=timezone.utc
+    )
+    release = MacroReleaseEvent(
+        release_id="cpi:2026-09-11",
+        release_type="cpi",
+        release_date=date(2026, 9, 11),
+        released_at=released_at,
+        release_date_source="fixture",
+        period_binding="verified",
+        metrics=[
+            MacroMetricSnapshot(
+                indicator="cpi",
+                measure="mom",
+                unit="percent",
+                period=date(2026, 8, 1),
+                actual=Decimal("0.3"),
+                release_date=date(2026, 9, 11),
+                released_at=released_at,
+                source="fixture",
+                actual_pit_status="verified",
+            ),
+            MacroMetricSnapshot(
+                indicator="cpi",
+                measure="yoy",
+                unit="percent",
+                period=date(2026, 8, 1),
+                actual=Decimal("2.9"),
+                release_date=date(2026, 9, 21),
+                source="fixture",
+                actual_pit_status="verified",
+            ),
+        ],
+    )
+    builder = Mock()
+    builder.build_latest.return_value = MacroSnapshot(
+        as_of=as_of,
+        recent_releases=[release],
+        fed_policy=None,
+        fed_projections=[],
+        treasury=None,
+        warnings=[],
+    )
+    runtime = ToolRuntime(
+        state={},
+        context=ResearchContext(
+            as_of=as_of,
+            macro_builder_factory=lambda: builder,
+        ),
+        config={},
+        stream_writer=lambda _: None,
+        tool_call_id="call-macro-sanitize",
+        store=None,
+    )
+
+    result = tools_by_name()["get_macro_snapshot"].func(
+        release_type=release_type,
+        runtime=runtime,
+    )
+
+    safe_release = (
+        result["release"]
+        if release_type is not None
+        else result["snapshot"]["recent_releases"][0]
+    )
+    assert [
+        metric["measure"]
+        for metric in safe_release["metrics"]
+    ] == ["mom"]
+    assert result["quality"]["overall_status"] == "degraded"
+    assert result["quality"]["results"][0]["issues"][0]["code"] == (
+        "release_date_after_as_of"
+    )
 
 
 def test_technical_tool_keeps_bars_when_quote_provider_fails():
