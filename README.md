@@ -23,7 +23,8 @@
 | D24 宏观数据 | 核心链路已完成 | 长桥提供 CPI、PPI、PCE、就业、Claims 及供应商 Forecast；FRED 保留 Fed/SEP 和美债；支持明确标注为非 PIT 的 Estimated Surprise，Macro Tool 已通过真实 Agent 联调 |
 | D25 数据质量 | 已完成 | Quote、日线、技术指标和宏观发布统一输出 usable/degraded/rejected；未来、过期、缺失和窗口不足数据会降级或停止对应分析；日线交易日历缺口检测按当前范围暂不实现 |
 | D26 历史分钟行情 | 已完成 | 统一 1m IntradayBar、能力异常、交易时段覆盖和质量检查；已通过专项测试、Fixture 与 NVDA 长桥真实历史行情验收 |
-| D27–D45 | 待开发 | Market Reaction 时间对齐与计算、分析引擎、LangGraph、React 联调、评估与部署 |
+| D27 事件与行情时间对齐 | 已完成 | 区分计划时间与实际发布时间；按实际时间获取并划分事件前后分钟 K 线；时间精度不足时停止分钟级对齐 |
+| D28–D45 | 待开发 | Market Reaction 计算、分析引擎、LangGraph、React 联调、评估与部署 |
 
 各开发日的设计、验收记录和已知限制位于 [`docs/`](docs/)。当前状态以对应 day 文档和测试结果为准，不把 fixture、历史数据或尚未联调的能力描述为实时生产能力。
 
@@ -76,6 +77,7 @@ backend/
     financial/    SEC Company Facts 与精确财务指标
     macro/        宏观 Provider、模型、计算和 MacroSnapshot
     market/       行情 Provider、技术指标和价格结构
+    market_reaction/ 宏观事件时间解析与分钟行情对齐
     quality/      Quote、Bars、宏观数据质量 Guard 与报告
     retrieval/    分段、Embedding、索引和检索
     storage/      PostgreSQL / pgvector 持久化
