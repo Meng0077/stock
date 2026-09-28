@@ -3,6 +3,7 @@ from datetime import datetime
 from stock_agent.market.schemas import (
     Bar,
     BarTimeframe,
+    PriceAdjustment,
     Quote,
 )
 
@@ -106,6 +107,7 @@ class FixtureMarketDataProvider:
         timeframe: BarTimeframe,
         limit: int,
         include_incomplete: bool = False,
+        adjustment: PriceAdjustment | None = None,
     ) -> list[Bar]:
         """获取截至 as_of 已完成的历史 K 线。
 
@@ -146,6 +148,7 @@ class FixtureMarketDataProvider:
             for bar in bars
             if bar.updated_at <= as_of
             and (bar.is_complete or include_incomplete)
+            and (adjustment is None or bar.adjustment == adjustment)
         ]
 
         available_bars.sort(key=lambda bar: bar.start_at)

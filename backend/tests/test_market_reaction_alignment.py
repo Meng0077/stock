@@ -14,6 +14,7 @@ from stock_agent.market_reaction.alignment import (
     prepare_event_market_data,
 )
 from stock_agent.market_reaction.event_time import resolve_event_time
+from stock_agent.market_reaction.service import research_event_reaction
 
 
 EASTERN = ZoneInfo("America/New_York")
@@ -331,3 +332,21 @@ def test_prepare_leaves_capability_error_for_day28() -> None:
             provider=CapabilityUnavailableProvider(),
             as_of=released_at + timedelta(minutes=2),
         )
+
+
+def test_service_converts_minute_capability_error_to_result() -> None:
+    released_at = datetime(2026, 9, 25, 8, 30, tzinfo=EASTERN)
+
+    result = research_event_reaction(
+        release=make_release(released_at=released_at),
+        symbol=" nvda ",
+        provider=CapabilityUnavailableProvider(),
+        as_of=released_at + timedelta(minutes=2),
+    )
+
+    assert result.release_id == "cpi:2026-09-25"
+    assert result.symbol == "NVDA"
+    assert result.event_at == released_at.astimezone(timezone.utc)
+    assert result.reference_price is None
+    assert result.observations == {}
+    assert result.issues == ["minute_data_capability_unavailable"]

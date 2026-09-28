@@ -3,6 +3,7 @@ from decimal import Decimal
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
+import exchange_calendars as xcals
 import pytest
 from longbridge.openapi import (
     AdjustType,
@@ -11,7 +12,10 @@ from longbridge.openapi import (
     TradeSessions,
 )
 
-from stock_agent.market.errors import MarketDataProviderError
+from stock_agent.market.errors import (
+    MarketDataCapabilityError,
+    MarketDataProviderError,
+)
 from stock_agent.market.longbridge.longbridge_mapper import (
     map_longbridge_quote,
     to_longbridge_symbol,
@@ -126,10 +130,19 @@ def test_quote_without_valid_price_returns_none():
 
 
 def test_completed_daily_bars_return_requested_limit():
-    first_day = datetime(2026, 6, 1, 9, 30, tzinfo=NEW_YORK)
+    calendar = xcals.get_calendar("XNYS")
+    sessions = calendar.sessions_in_range(
+        "2026-06-01",
+        "2026-09-01",
+    )[:61]
     source_bars = [
-        raw_bar(first_day + timedelta(days=index), 100 + index)
-        for index in range(61)
+        raw_bar(
+            calendar.session_open(session)
+            .to_pydatetime()
+            .astimezone(NEW_YORK),
+            100 + index,
+        )
+        for index, session in enumerate(sessions)
     ]
     as_of = source_bars[-1].timestamp.replace(
         hour=12,
@@ -159,6 +172,42 @@ def test_completed_daily_bars_return_requested_limit():
         as_of,
         TradeSessions.Intraday,
     )
+
+
+def test_daily_bars_honor_requested_adjustment():
+    trading_day = datetime(2026, 9, 22, 9, 30, tzinfo=NEW_YORK)
+    as_of = trading_day.replace(hour=17)
+    context = RecordingQuoteContext(bars=[raw_bar(trading_day, 200)])
+    provider = LongbridgeMarketDataProvider(quote_context=context)
+
+    bars = provider.get_bars(
+        "NVDA",
+        as_of=as_of,
+        timeframe="1d",
+        limit=1,
+        adjustment="raw",
+    )
+
+    assert len(bars) == 1
+    assert bars[0].adjustment == "raw"
+    assert context.history_args == (
+        "NVDA.US",
+        Period.Day,
+        AdjustType.NoAdjust,
+        False,
+        2,
+        as_of,
+        TradeSessions.Intraday,
+    )
+
+    with pytest.raises(MarketDataCapabilityError):
+        provider.get_bars(
+            "NVDA",
+            as_of=as_of,
+            timeframe="1d",
+            limit=1,
+            adjustment="split_adjusted",
+        )
 
 
 def test_include_incomplete_uses_current_candlesticks():

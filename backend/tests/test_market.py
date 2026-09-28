@@ -88,6 +88,14 @@ def test_completed_bars_use_updated_time(provider):
     assert all(bar.data_mode == "fixture" for bar in bars)
     assert all(bar.adjustment == "split_adjusted" for bar in bars)
 
+    assert provider.get_bars(
+        "NVDA",
+        as_of=during_session,
+        timeframe="1d",
+        limit=60,
+        adjustment="raw",
+    ) == []
+
 
 def test_incomplete_bar_requires_explicit_opt_in_and_visible_snapshot(provider):
     before_snapshot = datetime(

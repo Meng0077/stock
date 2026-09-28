@@ -1,20 +1,20 @@
-from datetime import datetime, time, timedelta
+from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from longbridge.openapi import Period
+import exchange_calendars as xcals
+from longbridge.openapi import AdjustType, Period, TradeSession
 
+from stock_agent.market.errors import MarketDataCapabilityError
 from stock_agent.market.schemas import (
     Bar,
     BarTimeframe,
     MarketSession,
+    PriceAdjustment,
     Quote,
     _QuoteCandidate,
 )
-
-from longbridge.openapi import TradeSession
-
 from stock_agent.market.intraday import IntradayBar
 
 
@@ -149,6 +149,18 @@ def to_longbridge_period(timeframe: BarTimeframe) -> Period:
     }[timeframe]
 
 
+def to_longbridge_adjust_type(adjustment: PriceAdjustment) -> AdjustType:
+    """把项目价格调整口径转换成 Longbridge AdjustType。"""
+
+    if adjustment == "raw":
+        return AdjustType.NoAdjust
+    if adjustment == "forward_adjusted":
+        return AdjustType.ForwardAdjust
+    raise MarketDataCapabilityError(
+        "Longbridge does not support split-adjusted bars"
+    )
+
+
 def build_bar_bounds(
     timestamp: datetime,
     *,
@@ -161,18 +173,16 @@ def build_bar_bounds(
         return start_at, start_at + timedelta(minutes=1)
 
     trading_date = start_at.date()
-    return (
-        datetime.combine(
-            trading_date,
-            time(9, 30),
-            tzinfo=NEW_YORK,
-        ),
-        datetime.combine(
-            trading_date,
-            time(16, 0),
-            tzinfo=NEW_YORK,
-        ),
+
+    calendar = xcals.get_calendar("XNYS")
+    trade_day = calendar.date_to_session(
+        trading_date,
+        direction="none",
     )
+    start_at = calendar.session_open(trade_day).to_pydatetime()
+    end_at = calendar.session_close(trade_day).to_pydatetime()
+
+    return start_at, end_at
 
 
 def map_longbridge_bar(
@@ -180,6 +190,7 @@ def map_longbridge_bar(
     *,
     symbol: str,
     timeframe: BarTimeframe,
+    adjustment: PriceAdjustment,
     received_at: datetime,
     as_of: datetime,
 ) -> Bar:
@@ -202,7 +213,7 @@ def map_longbridge_bar(
         close=Decimal(str(raw_bar.close)),
         volume=int(raw_bar.volume),
         is_complete=is_complete,
-        adjustment="forward_adjusted",
+        adjustment=adjustment,
         updated_at=(end_at if is_complete else received_at),
         received_at=received_at,
         source="longbridge",
@@ -235,6 +246,7 @@ def map_longbridge_intraday_bar(
         raw_bar,
         symbol=symbol,
         timeframe="1m",
+        adjustment="raw",
         received_at=received_at,
         as_of=as_of,
     )

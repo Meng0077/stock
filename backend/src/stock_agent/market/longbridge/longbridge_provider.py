@@ -9,23 +9,23 @@ from longbridge.openapi import (
 )
 
 from stock_agent.market.errors import MarketDataProviderError
+from stock_agent.market.intraday import (
+    HistoricalMinuteBarsRequest,
+    IntradayBar,
+)
 from stock_agent.market.longbridge.longbridge_mapper import (
     map_longbridge_bar,
+    map_longbridge_intraday_bar,
     map_longbridge_quote,
+    to_longbridge_adjust_type,
     to_longbridge_period,
     to_longbridge_symbol,
-    map_longbridge_intraday_bar,
 )
 from stock_agent.market.schemas import (
     Bar,
     BarTimeframe,
+    PriceAdjustment,
     Quote,
-)
-
-
-from stock_agent.market.intraday import (
-    HistoricalMinuteBarsRequest,
-    IntradayBar,
 )
 
 
@@ -121,6 +121,7 @@ class LongbridgeMarketDataProvider:
         timeframe: BarTimeframe,
         limit: int,
         include_incomplete: bool = False,
+        adjustment: PriceAdjustment | None = None,
     ) -> list[Bar]:
         """获取指定 symbol 的统一 Bar 序列。
 
@@ -161,6 +162,8 @@ class LongbridgeMarketDataProvider:
 
         longbridge_symbol = to_longbridge_symbol(symbol)
         period = to_longbridge_period(timeframe)
+        normalized_adjustment = adjustment or "forward_adjusted"
+        adjust_type = to_longbridge_adjust_type(normalized_adjustment)
         request_count = min(
             limit if include_incomplete else limit + 1,
             1000,
@@ -171,14 +174,14 @@ class LongbridgeMarketDataProvider:
                     longbridge_symbol,
                     period,
                     request_count,
-                    AdjustType.ForwardAdjust,
+                    adjust_type,
                     TradeSessions.Intraday,
                 )
             else:
                 raw_bars = self._quote_context.history_candlesticks_by_offset(
                     longbridge_symbol,
                     period,
-                    AdjustType.ForwardAdjust,
+                    adjust_type,
                     False,
                     request_count,
                     as_of,
@@ -195,6 +198,7 @@ class LongbridgeMarketDataProvider:
                 raw_bar,
                 symbol=symbol.strip().upper(),
                 timeframe=timeframe,
+                adjustment=normalized_adjustment,
                 received_at=received_at,
                 as_of=as_of,
             )

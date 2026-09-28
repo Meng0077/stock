@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Protocol
 
 from stock_agent.market.intraday import IntradayBar
-from stock_agent.market.schemas import Bar, BarTimeframe, Quote
+from stock_agent.market.schemas import Bar, BarTimeframe, PriceAdjustment, Quote
 
 
 class MarketDataProvider(Protocol):
@@ -46,6 +46,7 @@ class MarketDataProvider(Protocol):
         timeframe: BarTimeframe,
         limit: int,
         include_incomplete: bool = False,
+        adjustment: PriceAdjustment | None = None,
     ) -> list[Bar]:
         """获取指定 symbol 的历史 K 线。
 
