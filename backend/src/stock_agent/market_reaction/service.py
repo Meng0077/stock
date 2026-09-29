@@ -4,7 +4,7 @@ from datetime import datetime
 from stock_agent.macro.models.release import (
     MacroReleaseEvent,
 )
-from stock_agent.market.errors import MarketDataCapabilityError
+from stock_agent.market.errors import MarketDataCapabilityError, MarketDataProviderError
 from stock_agent.market.provider import MarketDataProvider
 from stock_agent.market_reaction.alignment import (
     prepare_event_market_data,
@@ -17,6 +17,37 @@ from stock_agent.market_reaction.close_data import (
 )
 from stock_agent.market_reaction.event_time import resolve_event_time
 from stock_agent.market_reaction.models import MarketReactionResult
+
+
+def _minute_failure_result(
+    *,
+    release: MacroReleaseEvent,
+    symbol: str,
+    as_of: datetime,
+    reason: str,
+) -> MarketReactionResult:
+    """分钟行情不可用时，返回结构化的失败结果。"""
+
+    resolution = resolve_event_time(
+        release,
+        as_of=as_of,
+    )
+
+    issues = [reason]
+
+    if resolution.warning:
+        issues.append(resolution.warning)
+
+    return MarketReactionResult(
+        release_id=release.release_id,
+        release_type=release.release_type,
+        symbol=symbol.strip().upper(),
+        event_at=resolution.event_at,
+        reference_price=None,
+        reference_at=None,
+        observations={},
+        issues=issues,
+    )
 
 
 def research_event_reaction(
@@ -36,19 +67,18 @@ def research_event_reaction(
             as_of=as_of,
         )
     except MarketDataCapabilityError:
-        resolution = resolve_event_time(release, as_of=as_of)
-        issues = ["minute_data_capability_unavailable"]
-        if resolution.warning:
-            issues.append(resolution.warning)
-        return MarketReactionResult(
-            release_id=release.release_id,
-            release_type=release.release_type,
-            symbol=symbol.strip().upper(),
-            event_at=resolution.event_at,
-            reference_price=None,
-            reference_at=None,
-            observations={},
-            issues=issues,
+        return _minute_failure_result(
+            release=release,
+            symbol=symbol,
+            as_of=as_of,
+            reason="minute_data_capability_unavailable",
+        )
+    except MarketDataProviderError:
+        return _minute_failure_result(
+            release=release,
+            symbol=symbol,
+            as_of=as_of,
+            reason="minute_data_provider_error",
         )
 
     reaction = calculate_market_reaction(alignment)
@@ -65,7 +95,16 @@ def research_event_reaction(
         "close": close_result,
     }
 
+    issues = list(reaction.issues)
+
+    if close_result.reason in {
+        "daily_data_capability_unavailable",
+        "daily_data_provider_error",
+    }:
+        issues.append(close_result.reason)
+
     return replace(
         reaction,
         observations=observations,
+        issues=issues,
     )

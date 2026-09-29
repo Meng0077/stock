@@ -1,6 +1,7 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
+from stock_agent.market.errors import MarketDataCapabilityError, MarketDataProviderError
 from stock_agent.market.provider import MarketDataProvider
 from stock_agent.market.schemas import Bar
 from stock_agent.market_reaction.alignment import EventMarketAlignment
@@ -22,14 +23,24 @@ def get_target_daily_bar(
     close_at: datetime,
     as_of: datetime,
 ) -> Bar | None:
-    """获取目标交易日已完成的原始日线。"""
+    """获取指定历史交易日已完成的原始日线。"""
 
+    # 目标交易日还没有收盘。
     if as_of < close_at:
         return None
+
     target_date = close_at.astimezone(NEW_YORK).date()
+
+    # 定位到目标收盘日附近，而不是研究截止日附近。
+    # 不能超过用户传入的 as_of。
+    query_as_of = min(
+        as_of,
+        close_at + timedelta(days=1),
+    )
+
     bars = provider.get_bars(
         symbol=symbol,
-        as_of=as_of,
+        as_of=query_as_of,
         timeframe="1d",
         limit=5,
         include_incomplete=False,
@@ -82,12 +93,25 @@ def build_close_observation(
     # 避免在收盘前发起无意义的日线查询。
     daily_bar = None
     if alignment.as_of >= close_at:
-        daily_bar = get_target_daily_bar(
-            provider=provider,
-            symbol=alignment.symbol,
-            close_at=close_at,
-            as_of=alignment.as_of,
-        )
+        try:
+            daily_bar = get_target_daily_bar(
+                provider=provider,
+                symbol=alignment.symbol,
+                close_at=close_at,
+                as_of=alignment.as_of,
+            )
+        except MarketDataCapabilityError:
+            return ObservationResult(
+                target_at=close_at,
+                status="unavailable",
+                reason="daily_data_capability_unavailable",
+            )
+        except MarketDataProviderError:
+            return ObservationResult(
+                target_at=close_at,
+                status="unavailable",
+                reason="daily_data_provider_error",
+            )
 
     return calculate_close_observation(
         close_at=close_at,
