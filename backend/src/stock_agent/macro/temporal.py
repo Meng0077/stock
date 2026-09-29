@@ -14,6 +14,7 @@ VERIFIED_RELEASE_DATE_SOURCES = frozenset({
     "fred",
     "longbridge",
     "fixture",
+    "bls",
 })
 
 
