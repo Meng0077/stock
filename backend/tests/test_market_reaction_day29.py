@@ -204,6 +204,8 @@ def test_comparison_uses_worse_status_and_requires_both_returns() -> None:
     lhs = ObservationResult(
         target_at=target_at,
         status="usable",
+        price=Decimal("105"),
+        price_at=target_at,
         return_pct=Decimal("5"),
     )
     rhs = ObservationResult(

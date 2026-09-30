@@ -69,6 +69,18 @@ class TreasurySnapshot:
 
     observation_date: date
     yields: dict[TreasuryTenor, Decimal]
+
+    # 当前完整曲线中每个期限的数据来源。
+    yield_sources: dict[
+        TreasuryTenor,
+        str,
+    ]
+    # daily_change_bps 使用的上一期曲线来源。
+    previous_yield_sources: (
+        dict[TreasuryTenor, str]
+        | None
+    )
+
     previous_observation_date: date | None
     daily_change_bps: dict[TreasuryTenor, Decimal] | None
     spread_10y_2y_bps: Decimal

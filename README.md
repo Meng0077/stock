@@ -27,7 +27,8 @@
 | D28 Market Reaction 计算 | 已完成 | 计算事件前参考价、T+5m、T+30m、T+1h 和正式收盘收益率；支持跨交易时段、交易日历、观察状态及分钟行情能力降级 |
 | D29 基准比较与历史查询 | 已完成 | 支持 NVDA、QQQ 及 Provider 可用行业 ETF 的多标的研究；计算四个观察窗口的相对收益率；查询近期同类宏观发布反应 |
 | D30 离线验收与真实联调 | 核心验收已完成 | 离线覆盖盘前发布、跨时段、休市、缺口、时间错位、未来数据和基准缺失；使用 BLS CPI 与 Longbridge 的 NVDA、QQQ、SOXL 行情完成真实端到端验收 |
-| D31–D45 | 待开发 | 分析引擎、LangGraph、React 联调、评估与部署 |
+| D31 MarketContext 与 Decision 契约 | 已完成 | 聚合 Quote、Technical、Macro 和可选 Market Reaction；区分缺失与未请求组件；汇总来源、计算版本和质量规则版本；定义 FactorOpinion 与 DecisionResult 契约 |
+| D32–D45 | 待开发 | 因子、Guard、Decision Trace、LangGraph、React 联调、评估与部署 |
 
 各开发日的设计、验收记录和已知限制位于 [`docs/`](docs/)。当前状态以对应 day 文档和测试结果为准，不把 fixture、历史数据或尚未联调的能力描述为实时生产能力。
 

@@ -226,7 +226,7 @@ FRED 只返回某次经济数据发布的日期，并不足以独立支持 T+5m 
 
 | 开发日 | 任务 | 完成标准 |
 | --- | --- | --- |
-| D31 | 定义 MarketContext、FactorOpinion 和 DecisionResult | 聚合 Quote、TechnicalContext、MacroSnapshot 和可选 MarketReaction；记录数据来源、版本及 as_of；明确各模块缺失时的输出状态 |
+| D31 | 定义 MarketContext、FactorOpinion 和 DecisionResult | 已完成：聚合 Quote、TechnicalContext、MacroSnapshot 和可选 MarketReaction；记录来源、版本及 as_of；区分缺失与未请求组件，并定义 FactorOpinion、DecisionResult 契约，见 `docs/day31.md` |
 | D32 | 实现 TrendFactor、MomentumFactor、LevelFactor | 复用 D23 的计算结果，使用固定阈值和确定性的规则；避免高度相关的技术信号重复计分 |
 | D33 | 实现 Guard → Factors → Decision 纯函数流程 | 检查行情有效性、指标完整性及数据时间；宏观和 MarketReaction 作为独立研究上下文，缺失时不得编造或强行填充 |
 | D34 | 生成 Decision Trace、反对理由和失效条件 | 每条技术面结论都能追溯指标、阈值及价格来源；宏观实际值、预期差和已观察市场反应分别表述 |

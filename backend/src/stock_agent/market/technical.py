@@ -171,6 +171,15 @@ class MarketTechnicalSnapshot(BaseModel):
     symbol: str
     calculation_version: Literal["technical-v1"]
 
+    # 本次技术快照实际使用的数据来源。
+    #
+    # 例如：
+    # ("longbridge",)
+    #
+    # 如果 Quote 和 Bars 来自不同供应商：
+    # ("provider_a", "provider_b")
+    input_sources: tuple[str, ...] = ()
+
     # 当前用于分析的市场价格。
     current_price: Decimal | None
 
@@ -273,6 +282,19 @@ def build_market_technical_snapshot(
         is_live_query=is_live_query,
     )
 
+    input_sources: list[str] = []
+
+    if quote is not None:
+        if quote.source not in input_sources:
+            input_sources.append(
+                quote.source
+            )
+    for bar in bars:
+        if bar.source not in input_sources:
+            input_sources.append(
+                bar.source
+            )
+
     completed_bars = inputs.completed_bars
 
     current_bar = inputs.current_bar
@@ -309,6 +331,7 @@ def build_market_technical_snapshot(
     return MarketTechnicalSnapshot(
         symbol=symbol.strip().upper(),
         calculation_version=TECHNICAL_CALCULATION_VERSION,
+        input_sources=input_sources,
         current_price=current_price,
         price_source=price_source,
         price_at=price_at,

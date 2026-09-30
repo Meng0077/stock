@@ -98,6 +98,7 @@ def calculate_market_reaction(
             price=price,
             price_at=observation_bar.end_at,
             return_pct=pct,
+            price_source=observation_bar.source,
         )
 
     return MarketReactionResult(
@@ -109,6 +110,7 @@ def calculate_market_reaction(
         reference_at=reference_bar.end_at,
         observations=observations,
         issues=list(prepared.issues),
+        reference_source=reference_bar.source,
     )
 
 
@@ -179,4 +181,5 @@ def calculate_close_observation(
         price_at=close_at,
         return_pct=(close_price / reference_price - Decimal("1"))
         * Decimal("100"),
+        price_source=daily_bar.source,
     )

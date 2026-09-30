@@ -51,6 +51,14 @@ class MacroReleaseEvent(BaseModel):
     release_date: date
     scheduled_release_at: datetime | None = None
     released_at: datetime | None = None
+
+    # released_at 的证据来源。
+    #
+    # 注意：
+    # 它不同于 release_date_source，
+    # 也不同于 schedule_source。
+    released_at_source: str | None = None
+
     release_date_source: str
     schedule_source: str | None = None
     period_binding: ReleasePeriodBinding

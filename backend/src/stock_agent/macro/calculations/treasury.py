@@ -39,7 +39,7 @@ def build_treasury_snapshot(
     """
 
     # 1. 按观测日期和期限组织数据。
-    by_date: dict[date, dict[TreasuryTenor, Decimal]] = {}
+    by_date: dict[date, dict[TreasuryTenor, TreasuryYield]] = {}
 
     for item in observations:
         if item.observation_date > as_of:
@@ -53,7 +53,7 @@ def build_treasury_snapshot(
                 "Duplicate Treasury observation: "
                 f"{item.observation_date}, {item.tenor}"
             )
-        daily[item.tenor] = item.yield_pct
+        daily[item.tenor] = item
 
     required = set(TREASURY_TENORS)
 
@@ -69,37 +69,68 @@ def build_treasury_snapshot(
     # 3. 使用最新的完整观测日期。
     current_date = complete_dates[-1]
     current = by_date[current_date]
+    current_yields = {
+        tenor: current[tenor].yield_pct
+        for tenor in TREASURY_TENORS
+    }
+    current_sources = {
+        tenor: current[tenor].source
+        for tenor in TREASURY_TENORS
+    }
+
 
     # 4. 找到上一期完整曲线。
     previous_date = complete_dates[-2] if len(complete_dates) >= 2 else None
     daily_change_bps = None
+    previous_sources = None
 
     if previous_date is not None:
         previous = by_date[previous_date]
+        previous_yields = {
+            tenor: previous[
+                tenor
+            ].yield_pct
+            for tenor in TREASURY_TENORS
+        }
+
+        previous_sources = {
+            tenor: previous[
+                tenor
+            ].source
+            for tenor in TREASURY_TENORS
+        }
 
         # 收益率单位是百分比：
         # 0.01 个百分点 = 1 bp。
         daily_change_bps = {
-            tenor: (current[tenor] - previous[tenor]) * Decimal("100")
+            tenor: (
+                current_yields[tenor]
+                - previous_yields[tenor]
+            )
+            * Decimal("100")
             for tenor in TREASURY_TENORS
         }
 
     # 5. 计算期限利差，单位为 bp。
-    spread_10y_2y = (current["10y"] - current["2y"]) * Decimal("100")
-    spread_10y_3m = (current["10y"] - current["3m"]) * Decimal("100")
+    spread_10y_2y = (current_yields["10y"] - current_yields["2y"]) * Decimal("100")
+    spread_10y_3m = (current_yields["10y"] - current_yields["3m"]) * Decimal("100")
 
     # 6. 标记数据是否过期。
     age_days = (as_of - current_date).days
+
     return TreasurySnapshot(
         observation_date=current_date,
-        yields={tenor: current[tenor] for tenor in TREASURY_TENORS},
+        yields=current_yields,
+        yield_sources=current_sources,
         previous_observation_date=previous_date,
         daily_change_bps=cast(
             dict[TreasuryTenor, Decimal] | None,
             daily_change_bps,
         ),
+        previous_yield_sources=previous_sources,
         spread_10y_2y_bps=spread_10y_2y,
         spread_10y_3m_bps=spread_10y_3m,
         age_days=age_days,
         is_stale=age_days > max_age_days,
+
     )

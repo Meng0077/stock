@@ -172,6 +172,7 @@ def build_macro_release(
     scheduled_release_at: datetime | None = None,
     schedule_source: str | None = None,
     released_at: datetime | None = None,
+    released_at_source: str | None = None,
     period_binding: ReleasePeriodBinding = "latest_assumed",
 ) -> MacroReleaseEvent:
     """组合一次宏观发布事件。
@@ -201,6 +202,7 @@ def build_macro_release(
         release_date=release_date,
         scheduled_release_at=scheduled_release_at,
         released_at=released_at,
+        released_at_source=released_at_source,
         release_date_source=release_date_source,
         schedule_source=schedule_source,
         period_binding=period_binding,

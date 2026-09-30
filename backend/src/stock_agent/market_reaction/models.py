@@ -5,6 +5,9 @@ from typing import Literal
 
 from stock_agent.market.intraday import IntradayBar
 
+MARKET_REACTION_CALCULATION_VERSION = (
+    "market-reaction-v1"
+)
 
 def select_reference_bar(
     *,
@@ -63,7 +66,60 @@ class ObservationResult:
     price_at: datetime | None = None
     return_pct: Decimal | None = None
 
+    # 实际用于这个 observation 的价格来源。
+    #
+    # 例如：
+    # "longbridge"
+    # "fixture"
+    price_source: str | None = None
+
     reason: str | None = None
+
+    def __post_init__(self) -> None:
+        """保证 observation 状态和结果字段一致。"""
+        if self.status == "usable":
+            if self.price is None:
+                raise ValueError(
+                    "usable observation requires price"
+                )
+
+            if self.price_at is None:
+                raise ValueError(
+                    "usable observation requires price_at"
+                )
+
+            if self.return_pct is None:
+                raise ValueError(
+                    "usable observation requires return_pct"
+                )
+
+            if self.reason is not None:
+                raise ValueError(
+                    "usable observation must not contain reason"
+                )
+
+            return
+
+        # pending / missing / unavailable
+        # 都代表没有可使用的观察结果。
+        if self.price is not None:
+            raise ValueError(
+                "non-usable observation must not contain price"
+            )
+        if self.price_at is not None:
+            raise ValueError(
+                "non-usable observation must not contain price_at"
+            )
+
+        if self.return_pct is not None:
+            raise ValueError(
+                "non-usable observation must not contain return_pct"
+            )
+
+        if not self.reason:
+            raise ValueError(
+                "non-usable observation requires reason"
+            )
 
 
 @dataclass(frozen=True)
@@ -78,3 +134,11 @@ class MarketReactionResult:
 
     observations: dict[str, ObservationResult]
     issues: list[str]
+
+    # 实际 reference bar 的行情来源。
+    reference_source: str | None = None
+
+    # 实际事件时间的证据来源。
+    event_time_source: str | None = None
+
+    calculation_version: str = MARKET_REACTION_CALCULATION_VERSION

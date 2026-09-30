@@ -47,6 +47,7 @@ def _minute_failure_result(
         reference_at=None,
         observations={},
         issues=issues,
+        event_time_source=release.released_at_source,
     )
 
 
@@ -81,7 +82,10 @@ def research_event_reaction(
             reason="minute_data_provider_error",
         )
 
-    reaction = calculate_market_reaction(alignment)
+    reaction = replace(
+        calculate_market_reaction(alignment),
+        event_time_source=release.released_at_source,
+    )
 
     close_result = build_close_observation(
         alignment=alignment,

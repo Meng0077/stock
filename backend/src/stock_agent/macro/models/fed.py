@@ -104,6 +104,9 @@ class FedMedianProjection(BaseModel):
     target_year: ProjectionYear
     median: Decimal
 
+    # 当前 projection 数值的数据来源。
+    source: str
+
 
 class FedMedianProjectionRelease(BaseModel):
     """某个历史时点可获得的一版 SEP。"""

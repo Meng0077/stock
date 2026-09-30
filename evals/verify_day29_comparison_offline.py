@@ -51,6 +51,10 @@ def make_reaction(
         window: ObservationResult(
             target_at=event_at + offset,
             status="usable",
+            price=Decimal("100") * (
+                Decimal("1") + Decimal(return_pct) / Decimal("100")
+            ),
+            price_at=event_at + offset,
             return_pct=Decimal(return_pct),
         )
         for window, offset, return_pct in zip(WINDOWS, offsets, returns)

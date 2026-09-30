@@ -88,6 +88,7 @@ class FedDataProvider:
             FedMedianProjection(
                 target_year=point.period.year,
                 median=point.value,
+                source="fred",
             )
             for point in yearly
         ]
@@ -97,6 +98,7 @@ class FedDataProvider:
                 FedMedianProjection(
                     target_year="longer_run",
                     median=longer_run[0].value,
+                    source="fred",
                 )
             )
 
