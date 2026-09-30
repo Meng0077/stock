@@ -20,6 +20,7 @@ pyproject.toml 的 dev 可选依赖声明测试工具；requirements-dev.lock.tx
 
 - test_tool_params.py：原手工参数案例、长度边界及赋值校验。
 - test_tools.py：模拟数据标记、未知公司、返回副本等业务行为。
+- test_decision_day32.py：RSI14、Trend/Momentum/Level 固定规则、证据和缺失输入。
 - assert 判断结果；pytest.raises 判断预期异常；parametrize 让每行数据单独运行。
 - 不需要手写 passed 或 main。pytest 自动汇总并在失败时返回非零退出码。
 

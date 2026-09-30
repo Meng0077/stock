@@ -12,6 +12,7 @@ from stock_agent.market.indicators import (
     calculate_ma,
     calculate_ma_slope,
     calculate_return,
+    calculate_rsi,
 )
 from stock_agent.market.price_structure import (
     PriceStructureSnapshot,
@@ -208,6 +209,15 @@ class MarketTechnicalSnapshot(BaseModel):
     return_5d_pct: Decimal | None
     return_20d_pct: Decimal | None
 
+    # Wilder RSI14。
+    #
+    # RSI 用于补充描述动能强弱和极端状态，
+    # 不单独决定 bullish / bearish。
+    #
+    # 默认 None，可以避免旧的手工测试 fixture
+    # 因新增字段全部需要修改。
+    rsi14: Decimal | None = None
+
     # ---------- Volatility ----------
     atr14: Decimal | None
 
@@ -354,6 +364,7 @@ def build_market_technical_snapshot(
         ),
         return_5d_pct=calculate_return(closed, period=5),
         return_20d_pct=calculate_return(closed, period=20),
+        rsi14=calculate_rsi(closes=closed, period=14),
         atr14=atr14,
         price_structure=price_structure,
         current_bar_structure=current_bar_structure,

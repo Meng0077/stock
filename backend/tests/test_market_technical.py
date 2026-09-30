@@ -432,6 +432,7 @@ def test_completed_only_snapshot_has_no_current_bar_structure():
     assert snapshot.ma200 is None
     assert snapshot.ma20_slope_5d_pct is not None
     assert snapshot.ma50_slope_5d_pct is not None
+    assert snapshot.rsi14 == Decimal("100")
 
 
 def test_technical_snapshot_calculates_ma200():
