@@ -10,6 +10,7 @@ from pydantic import (
 from stock_agent.market.indicators import (
     calculate_atr,
     calculate_ma,
+    calculate_ma_slope,
     calculate_return,
 )
 from stock_agent.market.price_structure import (
@@ -199,6 +200,9 @@ class MarketTechnicalSnapshot(BaseModel):
     ma5: Decimal | None
     ma20: Decimal | None
     ma50: Decimal | None
+    ma200: Decimal | None
+    ma20_slope_5d_pct: Decimal | None
+    ma50_slope_5d_pct: Decimal | None
 
     # ---------- Momentum ----------
     return_5d_pct: Decimal | None
@@ -339,6 +343,15 @@ def build_market_technical_snapshot(
         ma5=calculate_ma(closed, period=5),
         ma20=calculate_ma(closed, period=20),
         ma50=calculate_ma(closed, period=50),
+        ma200=calculate_ma(closed, period=200),
+        ma20_slope_5d_pct=calculate_ma_slope(
+            closed,
+            period=20,
+        ),
+        ma50_slope_5d_pct=calculate_ma_slope(
+            closed,
+            period=50,
+        ),
         return_5d_pct=calculate_return(closed, period=5),
         return_20d_pct=calculate_return(closed, period=20),
         atr14=atr14,

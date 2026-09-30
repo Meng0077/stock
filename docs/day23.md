@@ -29,7 +29,8 @@ completed bars + current incomplete bar + quote
 
 | 特征 | 规则 |
 | --- | --- |
-| MA5 / MA20 / MA50 | 最近 N 个完成日收盘价的简单平均 |
+| MA5 / MA20 / MA50 / MA200 | 最近 N 个完成日收盘价的简单平均；历史不足时对应字段为 `None` |
+| MA20 / MA50 斜率 | 当前均线相对 5 个交易日前均线的百分比变化；分别至少需要 25 / 55 根完成日线 |
 | 5日 / 20日变化 | 最新完成日收盘价相对 N 个交易日前收盘价的百分比变化 |
 | ATR14 | 前14个 TR 的简单平均作为初始值，后续使用 Wilder 平滑递推 |
 | Recent high / low | 最近20根完成日线的最高价和最低价 |
@@ -68,7 +69,7 @@ pytest -q tests/test_market_technical.py tests/test_market_volume.py
 固定 OHLCV 测试覆盖：
 
 - 完整历史上的 Wilder ATR 递推；
-- MA5 / MA20 / MA50 和固定窗口收益率；
+- MA5 / MA20 / MA50 / MA200、MA20 / MA50 的 5 日斜率和固定窗口收益率；
 - 前20日成交量基准、RVOL、5日成交量趋势和历史不足；
 - 零成交量基准以及 incomplete Bar 隔离；
 - Pivot 同价选择和确认时间；

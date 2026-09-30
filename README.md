@@ -19,7 +19,7 @@
 | D11–D18 财报与财务数据 | 已完成核心链路 | SEC 文档获取、按需索引、PostgreSQL/pgvector 持久化、增量更新、引用定位和 Company Facts |
 | D19–D20 检索评估 | 延后 | 固定评估集和完整检索评估仍需收口 |
 | D21–D22 行情 | 已完成 | 统一 Quote/Bar 契约、Fixture Provider、Longbridge 最新报价和至少 60 根已完成日线 |
-| D23 技术分析 | 已完成 | MA5/20/50、收益率、ATR14、成交量、确认拐点及候选支撑阻力 |
+| D23 技术分析 | 已完成 | MA5/20/50/200、MA20/50 五日斜率、收益率、ATR14、成交量、确认拐点及候选支撑阻力 |
 | D24 宏观数据 | 核心链路已完成 | 长桥提供 CPI、PPI、PCE、就业、Claims 及供应商 Forecast；FRED 保留 Fed/SEP 和美债；支持明确标注为非 PIT 的 Estimated Surprise，Macro Tool 已通过真实 Agent 联调 |
 | D25 数据质量 | 已完成 | Quote、日线、技术指标和宏观发布统一输出 usable/degraded/rejected；未来、过期、缺失和窗口不足数据会降级或停止对应分析；日线交易日历缺口检测按当前范围暂不实现 |
 | D26 历史分钟行情 | 已完成 | 统一 1m IntradayBar、能力异常、交易时段覆盖和质量检查；已通过专项测试、Fixture 与 NVDA 长桥真实历史行情验收 |

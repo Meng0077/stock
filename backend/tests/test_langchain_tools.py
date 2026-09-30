@@ -616,6 +616,13 @@ def test_technical_tool_keeps_bars_when_quote_provider_fails():
     assert result["quality"]["source_warnings"] == [
         "quote_provider_unavailable"
     ]
+    provider.get_bars.assert_called_once_with(
+        "NVDA",
+        as_of=as_of,
+        timeframe="1d",
+        limit=250,
+        include_incomplete=False,
+    )
 
 
 def test_technical_tool_keeps_quote_when_bars_provider_fails():

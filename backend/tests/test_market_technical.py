@@ -5,6 +5,7 @@ from stock_agent.market.fixtures import FIXTURE_BARS, FIXTURE_QUOTES
 from stock_agent.market.indicators import (
     calculate_atr,
     calculate_ma,
+    calculate_ma_slope,
     calculate_return,
 )
 from stock_agent.market.price_structure import (
@@ -281,10 +282,23 @@ def test_atr_uses_full_wilder_history():
 
 def test_ma_and_return_use_fixed_close_windows():
     closes = [Decimal(value) for value in range(1, 52)]
+    slope_closes = [Decimal("100")] * 50 + [Decimal("110")] * 5
 
     assert calculate_ma(closes, period=5) == Decimal("49")
     assert calculate_ma(closes, period=20) == Decimal("41.5")
     assert calculate_ma(closes, period=50) == Decimal("26.5")
+    assert calculate_ma_slope(
+        slope_closes,
+        period=20,
+    ) == Decimal("2.500")
+    assert calculate_ma_slope(
+        slope_closes,
+        period=50,
+    ) == Decimal("1.00")
+    assert calculate_ma_slope(
+        slope_closes[:54],
+        period=50,
+    ) is None
     assert calculate_return(
         [
             Decimal("100"),
@@ -401,7 +415,7 @@ def test_completed_only_snapshot_has_no_current_bar_structure():
             close=str(101 + day),
             volume=100 if day < 20 else 150,
         )
-        for day in range(21)
+        for day in range(60)
     ]
 
     snapshot = build_market_technical_snapshot(
@@ -411,9 +425,35 @@ def test_completed_only_snapshot_has_no_current_bar_structure():
         is_live_query=False,
     )
 
-    assert snapshot.current_price == Decimal("121")
+    assert snapshot.current_price == Decimal("160")
     assert snapshot.price_source == "completed_close"
     assert snapshot.current_bar_structure is None
+    assert snapshot.ma50 is not None
+    assert snapshot.ma200 is None
+    assert snapshot.ma20_slope_5d_pct is not None
+    assert snapshot.ma50_slope_5d_pct is not None
+
+
+def test_technical_snapshot_calculates_ma200():
+    bars = [
+        make_completed_bar(
+            day,
+            open_=str(day + 1),
+            high=str(day + 2),
+            low=str(day + 1),
+            close=str(day + 1),
+        )
+        for day in range(220)
+    ]
+
+    snapshot = build_market_technical_snapshot(
+        symbol="test",
+        quote=None,
+        bars=bars,
+        is_live_query=False,
+    )
+
+    assert snapshot.ma200 == Decimal("120.5")
 
 
 def test_empty_technical_snapshot_marks_price_unavailable():

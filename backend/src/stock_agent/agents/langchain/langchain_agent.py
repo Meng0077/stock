@@ -98,7 +98,7 @@ SYSTEM_PROMPT = """
 
 10. 当问题只涉及当前报价时，使用 get_quote。
 
-    当问题涉及 MA5、MA20、MA50、ATR、历史收益率、
+    当问题涉及 MA5、MA20、MA50、MA200、均线斜率、ATR、历史收益率、
     支撑阻力、价格缺口或成交量特征时，
     使用 get_technical_analysis。
 

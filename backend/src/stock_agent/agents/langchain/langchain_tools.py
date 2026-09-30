@@ -414,7 +414,7 @@ async def get_technical_analysis_tool(
             symbol,
             as_of=as_of,
             timeframe="1d",
-            limit=60,
+            limit=250,
             include_incomplete=False,
         )
     except MarketDataProviderError:

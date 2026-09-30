@@ -20,6 +20,30 @@ def calculate_ma(
     )
 
 
+def calculate_ma_slope(
+    closes: list[Decimal],
+    *,
+    period: int,
+    lookback: int = 5,
+) -> Decimal | None:
+    """计算均线在过去 lookback 个交易日的百分比变化。"""
+    if len(closes) < period + lookback:
+        return None
+
+    current_ma = calculate_ma(closes, period=period)
+    previous_ma = calculate_ma(
+        closes[:-lookback],
+        period=period,
+    )
+    if current_ma is None or previous_ma is None:
+        return None
+
+    return (
+        (current_ma / previous_ma - Decimal("1"))
+        * Decimal("100")
+    )
+
+
 def calculate_return(
     closes: list[Decimal],
     *,
