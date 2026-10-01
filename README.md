@@ -29,7 +29,8 @@
 | D30 离线验收与真实联调 | 核心验收已完成 | 离线覆盖盘前发布、跨时段、休市、缺口、时间错位、未来数据和基准缺失；使用 BLS CPI 与 Longbridge 的 NVDA、QQQ、SOXL 行情完成真实端到端验收 |
 | D31 MarketContext 与 Decision 契约 | 已完成 | 聚合 Quote、Technical、Macro 和可选 Market Reaction；区分缺失与未请求组件；汇总来源、计算版本和质量规则版本；定义 FactorOpinion 与 DecisionResult 契约 |
 | D32 技术因子 | 已完成 | Trend、Momentum、Level 三个确定性因子；Wilder RSI14；固定规则、机器可读原因和结构化证据 |
-| D33–D45 | 待开发 | Guard、Decision Trace、LangGraph、React 联调、评估与部署 |
+| D33 决策流程 | 已完成 | Technical 质量 Guard；Trend → Momentum → Level 因子执行；complete/partial/blocked 状态和确定性市场观点合成 |
+| D34–D45 | 待开发 | Decision Trace、LangGraph、React 联调、评估与部署 |
 
 各开发日的设计、验收记录和已知限制位于 [`docs/`](docs/)。当前状态以对应 day 文档和测试结果为准，不把 fixture、历史数据或尚未联调的能力描述为实时生产能力。
 
@@ -191,4 +192,5 @@ PYTHONPATH=backend/src backend/.venv/bin/python evals/verify_day26_intraday.py
 - [D26：历史分钟行情](docs/day26.md)
 - [D31：MarketContext 与 Decision 契约](docs/day31.md)
 - [D32：Trend、Momentum 与 Level 因子](docs/day32.md)
+- [D33：Guard、Factors 与 Decision 流程](docs/day33.md)
 - [前端开发计划](docs/frontend-development-plan.md)
