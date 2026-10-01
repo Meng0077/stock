@@ -138,22 +138,23 @@ backend/.venv/bin/python -m pytest -q -p no:cacheprovider \
   backend/tests/test_decision_day34.py
 ```
 
-8 个专项用例覆盖：
+9 个专项用例覆盖：
 
 - 指标值、零阈值、RSI 阈值、0.5 ATR 阈值和当前价格来源；
 - bullish 中 Momentum 未确认与靠近阻力；
 - bearish 中靠近支撑；
 - Trend/Momentum 冲突、Trend mixed 和 Level 冲突的重新评估条件；
 - Level 突破方向与主要方向一致时的确认路径；
+- 只有 Level 可用时，neutral 支撑位置的重新评估条件；
 - 非阻断 Decision 必须包含组合理由，blocked 不得包含方向性 Trace。
 
 ## 完成情况
 
 Day34 已于 2026-10-01 完成：
 
-- Day34 专项测试：`8 passed`；
-- D31–D34 跨日回归：`48 passed`；
-- 完整后端回归：`545 passed`；
+- Day34 专项测试：`9 passed`；
+- D31–D34 跨日回归：`49 passed`；
+- 完整后端回归：`546 passed`；
 - `git diff --check HEAD`：通过。
 
 D35 仍需把 MarketContext、DecisionResult、MacroSnapshot 和 MarketReaction 作为独立结构化结果交给 Agent，并验证 Agent 不改写其数值和结论。

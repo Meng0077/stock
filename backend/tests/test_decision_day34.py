@@ -53,9 +53,9 @@ def make_context(
     current_price: str = "100",
     ma20: str = "95",
     ma50: str = "90",
-    ma20_slope: str = "1",
+    ma20_slope: str | None = "1",
     ma50_slope: str = "0.5",
-    return_5d: str = "2",
+    return_5d: str | None = "2",
     return_20d: str = "5",
     rsi14: str = "60",
     structure: PriceStructureSnapshot | None = None,
@@ -73,9 +73,13 @@ def make_context(
         ma20=Decimal(ma20),
         ma50=Decimal(ma50),
         ma200=None,
-        ma20_slope_5d_pct=Decimal(ma20_slope),
+        ma20_slope_5d_pct=(
+            Decimal(ma20_slope) if ma20_slope is not None else None
+        ),
         ma50_slope_5d_pct=Decimal(ma50_slope),
-        return_5d_pct=Decimal(return_5d),
+        return_5d_pct=(
+            Decimal(return_5d) if return_5d is not None else None
+        ),
         return_20d_pct=Decimal(return_20d),
         rsi14=Decimal(rsi14),
         atr14=Decimal("10"),
@@ -259,6 +263,25 @@ def test_breakout_in_primary_direction_is_recorded_as_confirmation() -> None:
         "level_confirms_primary_direction",
     ]
     assert result.opposing_reasons == []
+
+
+def test_neutral_level_decision_has_reassessment_condition() -> None:
+    result = evaluate_market(
+        make_context(
+            ma20_slope=None,
+            return_5d=None,
+            structure=make_structure(
+                support=[make_level("98", atr_distance="0.2")],
+            ),
+        )
+    )
+
+    assert result.status == "partial"
+    assert result.market_view == "neutral"
+    assert result.decision_reasons == ["level_only_available"]
+    assert result.invalidation_conditions == [
+        "support_distance_exceeds_0_5_atr",
+    ]
 
 
 def test_decision_contract_requires_trace_and_rejects_it_when_blocked() -> None:
