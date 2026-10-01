@@ -22,6 +22,7 @@ pyproject.toml 的 dev 可选依赖声明测试工具；requirements-dev.lock.tx
 - test_tools.py：模拟数据标记、未知公司、返回副本等业务行为。
 - test_decision_day32.py：RSI14、Trend/Momentum/Level 固定规则、证据和缺失输入。
 - test_decision_day33.py：技术质量 Guard、因子执行、Decision 状态与方向合成。
+- test_decision_day34.py：Decision Trace、固定阈值、反对理由与失效条件。
 - assert 判断结果；pytest.raises 判断预期异常；parametrize 让每行数据单独运行。
 - 不需要手写 passed 或 main。pytest 自动汇总并在失败时返回非零退出码。
 

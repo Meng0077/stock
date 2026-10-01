@@ -229,7 +229,7 @@ FRED 只返回某次经济数据发布的日期，并不足以独立支持 T+5m 
 | D31 | 定义 MarketContext、FactorOpinion 和 DecisionResult | 已完成：聚合 Quote、TechnicalContext、MacroSnapshot 和可选 MarketReaction；记录来源、版本及 as_of；区分缺失与未请求组件，并定义 FactorOpinion、DecisionResult 契约，见 `docs/day31.md` |
 | D32 | 实现 TrendFactor、MomentumFactor、LevelFactor | 已完成：复用 D23 技术快照并补充 Wilder RSI14；三个因子使用固定规则输出方向、原因和结构化证据，不做重复加权计分，见 `docs/day32.md` |
 | D33 | 实现 Guard → Factors → Decision 纯函数流程 | 已完成：Technical 缺失或质量 rejected 时阻断，degraded/未评估时保留 warning；按固定顺序运行三个因子并生成 complete/partial/blocked Decision；宏观和 MarketReaction 保持独立，见 `docs/day33.md` |
-| D34 | 生成 Decision Trace、反对理由和失效条件 | 每条技术面结论都能追溯指标、阈值及价格来源；宏观实际值、预期差和已观察市场反应分别表述 |
+| D34 | 生成 Decision Trace、反对理由和失效条件 | 已完成：Factor evidence 保留指标、固定阈值及价格来源，Decision 记录组合路径、反对理由和失效条件；宏观实际值、预期差和已观察 Market Reaction 保持独立，见 `docs/day34.md` |
 | D35 | 与 LangChain Agent 整合，完成多维市场研究演示 | 支持“NVDA 当前走势如何”“CPI 发布后 NVDA 有什么反应”“目前有哪些关键价位”等问题；Agent 不能改写工具返回的数值或覆盖 Guard |
 
 这一周不创建复杂的“宏观利好利空评分系统”。宏观事件、技术因子和市场反应先各自输出可追溯的分析，再由 Agent 组织解释。首版的“置信分数”仅为事先定义的规则分数，不能表述为涨跌概率或胜率。

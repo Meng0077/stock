@@ -194,6 +194,8 @@ def test_trend_records_ma200_without_using_it_as_a_required_input() -> None:
         "ma20_slope_5d_pct",
         "ma50_slope_5d_pct",
         "ma200",
+        "current_price_source",
+        "slope_direction_threshold_pct",
     }
 
 
@@ -231,6 +233,10 @@ def test_momentum_uses_returns_for_direction_and_rsi_for_state(
         "return_5d_pct",
         "return_20d_pct",
         "rsi14",
+        "return_direction_threshold_pct",
+        "rsi_overbought_threshold",
+        "rsi_midpoint",
+        "rsi_oversold_threshold",
     ]
 
 

@@ -224,6 +224,7 @@ def test_factor_and_decision_contracts() -> None:
         market_view="bullish",
         rule_version="decision-v1",
         factors=[factor],
+        decision_reasons=["trend_only_available"],
     )
 
     assert decision.symbol == "NVDA"
@@ -254,4 +255,5 @@ def test_factor_and_decision_contracts() -> None:
             market_view="bullish",
             rule_version="decision-v1",
             factors=[factor, factor],
+            decision_reasons=["trend_only_available"],
         )

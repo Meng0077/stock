@@ -196,6 +196,10 @@ def test_complete_decision_requires_all_factors_and_aligned_primary_direction(
     ]
     assert all(factor.status == "usable" for factor in result.factors)
     assert result.missing_information == []
+    assert result.decision_reasons == [
+        "primary_factors_aligned",
+        "level_no_directional_override",
+    ]
 
 
 def test_primary_factor_disagreement_produces_mixed_view() -> None:
@@ -211,6 +215,10 @@ def test_primary_factor_disagreement_produces_mixed_view() -> None:
 
     assert result.status == "complete"
     assert result.market_view == "mixed"
+    assert result.decision_reasons == [
+        "trend_momentum_conflict",
+        "level_no_directional_override",
+    ]
 
 
 def test_level_breakdown_can_conflict_with_bullish_primary_direction() -> None:
@@ -225,6 +233,10 @@ def test_level_breakdown_can_conflict_with_bullish_primary_direction() -> None:
     assert result.status == "complete"
     assert result.market_view == "mixed"
     assert result.factors[2].signal == "bearish"
+    assert result.decision_reasons == [
+        "primary_factors_aligned",
+        "level_conflicts_with_primary_direction",
+    ]
 
 
 def test_degraded_quality_keeps_decision_and_appends_warning() -> None:
@@ -263,6 +275,10 @@ def test_missing_primary_factor_makes_decision_partial() -> None:
     assert result.market_view == "bullish"
     assert result.missing_information == ["trend_inputs_missing"]
     assert result.factors[0].status == "insufficient_data"
+    assert result.decision_reasons == [
+        "momentum_only_available",
+        "level_no_directional_override",
+    ]
 
 
 def test_level_can_drive_partial_decision_when_primary_factors_are_unavailable() -> None:
@@ -284,6 +300,7 @@ def test_level_can_drive_partial_decision_when_primary_factors_are_unavailable()
         "momentum_inputs_missing",
     ]
     assert result.factors[2].signal == "bullish"
+    assert result.decision_reasons == ["level_only_available"]
 
 
 def test_all_unavailable_factors_block_and_remain_in_result() -> None:

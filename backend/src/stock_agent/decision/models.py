@@ -578,6 +578,9 @@ class FactorEvidence(BaseModel):
 
     Day32 的 Factor 不应该只返回一句文本理由，
     还应该保存实际参与规则判断的输入。
+
+    Day34 进一步使用同一结构记录固定阈值和价格来源，
+    source 可以指向 Technical 字段或具体规则版本。
     """
     model_config = ConfigDict(
         extra="forbid",
@@ -669,16 +672,10 @@ MarketView = Literal[
 class DecisionResult(BaseModel):
     """确定性市场分析引擎的标准输出。
 
-    Day31 只定义契约。
-
-    真正的：
-        Guard
-        Factor 执行
-        综合规则
-
-    在 Day32 / Day33 实现。
-
-    Decision Trace 会在 Day34 进一步扩展。
+    Day31 定义基础契约，Day32 / Day33 实现 Factor、Guard
+    和综合规则。Day34 用 factors、decision_reasons、
+    opposing_reasons 与 invalidation_conditions 组成公开、
+    可复算的 Decision Trace。
     """
 
     model_config = ConfigDict(
@@ -707,6 +704,20 @@ class DecisionResult(BaseModel):
         default_factory=list,
     )
 
+    # Decision 层的组合规则为什么得到当前 market_view。
+    #
+    # 这里只记录 Decision 层的规则路径，
+    # 不重复保存 Factor 自己的指标和判断依据。
+    #
+    # 例如：
+    # - primary_factors_aligned
+    # - trend_momentum_conflict
+    # - trend_direction_retained_without_momentum_confirmation
+    # - level_conflicts_with_primary_direction
+    decision_reasons: list[str] = Field(
+        default_factory=list,
+    )
+
     missing_information: list[str] = Field(
         default_factory=list,
     )
@@ -715,11 +726,12 @@ class DecisionResult(BaseModel):
         default_factory=list,
     )
 
-    # Day34 会正式产生这些内容。
+    # 明确方向中仍然存在的反面或未确认信息。
     opposing_reasons: list[str] = Field(
         default_factory=list,
     )
 
+    # 哪些可观察变化会使当前判断依据失效并要求重新评估。
     invalidation_conditions: list[str] = Field(
         default_factory=list,
     )
@@ -749,11 +761,27 @@ class DecisionResult(BaseModel):
                     "contain market_view"
                 )
 
+            if (
+                self.decision_reasons
+                or self.opposing_reasons
+                or self.invalidation_conditions
+            ):
+                raise ValueError(
+                    "blocked decision must not contain "
+                    "directional trace"
+                )
+
         else:
             if self.market_view is None:
                 raise ValueError(
                     "complete/partial decision "
                     "requires market_view"
+                )
+
+            if not self.decision_reasons:
+                raise ValueError(
+                    "complete/partial decision requires "
+                    "decision_reasons"
                 )
 
         factor_names = [

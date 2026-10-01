@@ -134,4 +134,4 @@ Day33 已于 2026-10-01 完成：
 - 完整后端回归：`537 passed`；
 - `git diff --check HEAD`：通过。
 
-D34 仍需在现有 Factor evidence 和 Decision 结果之上生成完整 Decision Trace、反对理由和失效条件；Day33 不提前扩展这些字段。
+D34 已在现有 Factor evidence 和 Decision 结果之上补充 Decision Trace、反对理由和失效条件，见 [`day34.md`](day34.md)。

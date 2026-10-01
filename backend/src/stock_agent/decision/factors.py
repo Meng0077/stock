@@ -12,6 +12,11 @@ MOMENTUM_VERSION = "momentum-v1"
 
 LEVEL_VERSION = "level-v1"
 
+TREND_SLOPE_THRESHOLD_PCT = Decimal("0")
+MOMENTUM_DIRECTION_THRESHOLD_PCT = Decimal("0")
+RSI_OVERBOUGHT_THRESHOLD = Decimal("70")
+RSI_MIDPOINT = Decimal("50")
+RSI_OVERSOLD_THRESHOLD = Decimal("30")
 LEVEL_NEAR_THRESHOLD_ATR = Decimal("0.5")
 
 
@@ -80,6 +85,11 @@ def evaluate_trend(
             source="technical.current_price",
         ),
         FactorEvidence(
+            metric="current_price_source",
+            value=technical.price_source,
+            source="technical.price_source",
+        ),
+        FactorEvidence(
             metric="ma20",
             value=ma20,
             source="technical.ma20",
@@ -98,6 +108,11 @@ def evaluate_trend(
             metric="ma50_slope_5d_pct",
             value=ma50_slope,
             source="technical.ma50_slope_5d_pct",
+        ),
+        FactorEvidence(
+            metric="slope_direction_threshold_pct",
+            value=TREND_SLOPE_THRESHOLD_PCT,
+            source="rule.trend-v1",
         ),
     ]
 
@@ -123,7 +138,11 @@ def evaluate_trend(
     #   价格只是短期反弹到均线上方，
     #   但 MA50 实际仍然向下，
     # 却被直接判断为 bullish。
-    if price > ma20 > ma50 and ma20_slope > 0 and ma50_slope > 0:
+    if (
+        price > ma20 > ma50
+        and ma20_slope > TREND_SLOPE_THRESHOLD_PCT
+        and ma50_slope > TREND_SLOPE_THRESHOLD_PCT
+    ):
         signal = "bullish"
         reasons = [
             "price_above_ma20_above_ma50",
@@ -134,7 +153,11 @@ def evaluate_trend(
     #
     # 价格 < MA20 < MA50
     # 且 MA20 / MA50 都仍在下降。
-    elif price < ma20 < ma50 and ma20_slope < 0 and ma50_slope < 0:
+    elif (
+        price < ma20 < ma50
+        and ma20_slope < TREND_SLOPE_THRESHOLD_PCT
+        and ma50_slope < TREND_SLOPE_THRESHOLD_PCT
+    ):
         signal = "bearish"
 
         reasons = [
@@ -238,11 +261,34 @@ def evaluate_momentum(
             value=rsi14,
             source="technical.rsi14",
         ),
+        FactorEvidence(
+            metric="return_direction_threshold_pct",
+            value=MOMENTUM_DIRECTION_THRESHOLD_PCT,
+            source="rule.momentum-v1",
+        ),
+        FactorEvidence(
+            metric="rsi_overbought_threshold",
+            value=RSI_OVERBOUGHT_THRESHOLD,
+            source="rule.momentum-v1",
+        ),
+        FactorEvidence(
+            metric="rsi_midpoint",
+            value=RSI_MIDPOINT,
+            source="rule.momentum-v1",
+        ),
+        FactorEvidence(
+            metric="rsi_oversold_threshold",
+            value=RSI_OVERSOLD_THRESHOLD,
+            source="rule.momentum-v1",
+        ),
     ]
 
     # ROC5 和 ROC20 同时为正：
     # 短期和中期价格变化方向一致向上。
-    if return_5d > 0 and return_20d > 0:
+    if (
+        return_5d > MOMENTUM_DIRECTION_THRESHOLD_PCT
+        and return_20d > MOMENTUM_DIRECTION_THRESHOLD_PCT
+    ):
         signal = "bullish"
 
         reasons = [
@@ -251,7 +297,10 @@ def evaluate_momentum(
         ]
     # 两个周期同时为负：
     # 短期和中期动能一致向下。
-    elif return_5d < 0 and return_20d < 0:
+    elif (
+        return_5d < MOMENTUM_DIRECTION_THRESHOLD_PCT
+        and return_20d < MOMENTUM_DIRECTION_THRESHOLD_PCT
+    ):
         signal = "bearish"
 
         reasons = [
@@ -260,7 +309,10 @@ def evaluate_momentum(
         ]
     # 两个周期都恰好没有价格变化时，
     # 才定义成明确 neutral。
-    elif return_5d == 0 and return_20d == 0:
+    elif (
+        return_5d == MOMENTUM_DIRECTION_THRESHOLD_PCT
+        and return_20d == MOMENTUM_DIRECTION_THRESHOLD_PCT
+    ):
         signal = "neutral"
 
         reasons = [
@@ -281,13 +333,13 @@ def evaluate_momentum(
     # bullish + RSI 75
     #
     # 直接改成 bearish。
-    if rsi14 > 70:
+    if rsi14 > RSI_OVERBOUGHT_THRESHOLD:
         reasons.append("rsi_overbought")
-    elif rsi14 > 50:
+    elif rsi14 > RSI_MIDPOINT:
         reasons.append("rsi_positive")
-    elif rsi14 == 50:
+    elif rsi14 == RSI_MIDPOINT:
         reasons.append("rsi_neutral")
-    elif rsi14 > 30:
+    elif rsi14 > RSI_OVERSOLD_THRESHOLD:
         reasons.append("rsi_weak")
     else:
         reasons.append("rsi_oversold")
@@ -415,6 +467,11 @@ def evaluate_level(
             value=price,
             source="technical.current_price",
         ),
+        FactorEvidence(
+            metric="current_price_source",
+            value=technical.price_source,
+            source="technical.price_source",
+        ),
     ]
 
     # 有 20 日高点时保存下来，
@@ -521,6 +578,14 @@ def evaluate_level(
         nearest_resistance is not None
         and nearest_resistance.atr_distance is not None
         and nearest_resistance.atr_distance <= LEVEL_NEAR_THRESHOLD_ATR
+    )
+
+    evidence.append(
+        FactorEvidence(
+            metric="near_level_atr_threshold",
+            value=LEVEL_NEAR_THRESHOLD_ATR,
+            source="rule.level-v1",
+        )
     )
 
     # 保存最近 support 的实际价格和 ATR 距离。
