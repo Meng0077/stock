@@ -66,7 +66,10 @@ def build_guarded_market_analysis(
     completed_bars = [bar for bar in bars if bar.is_complete]
     technical = build_market_technical_snapshot(
         symbol=symbol,
-        quote=None,
+        # Quote 已经经过 validate_quote。
+        # rejected Quote 会变成 None，
+        # usable / degraded Quote 可以作为当前参考价格。
+        quote=safe_quote,
         bars=completed_bars,
         is_live_query=False,
     )

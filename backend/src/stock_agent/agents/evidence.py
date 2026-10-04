@@ -21,6 +21,8 @@ EVIDENCE_TOOL_NAMES = {
     "get_financial_facts",
     "get_macro_snapshot",
     "get_technical_analysis",
+    "evaluate_market",
+    "get_market_reaction",
 }
 
 PERSISTED_EVIDENCE_PREFIXES = (

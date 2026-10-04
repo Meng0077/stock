@@ -22,3 +22,6 @@ class MacroToolParams(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     release_type: MacroReleaseType | None = None
+
+class MarketReactionToolParams(CompanyToolParams):
+    release_id: str = Field(min_length=1)

@@ -31,7 +31,8 @@
 | D32 技术因子 | 已完成 | Trend、Momentum、Level 三个确定性因子；Wilder RSI14；固定规则、机器可读原因和结构化证据 |
 | D33 决策流程 | 已完成 | Technical 质量 Guard；Trend → Momentum → Level 因子执行；complete/partial/blocked 状态和确定性市场观点合成 |
 | D34 Decision Trace | 已完成 | 指标、阈值与价格来源证据；Decision 组合路径、反对理由和失效条件；宏观与 Market Reaction 保持独立 |
-| D35–D45 | 待开发 | Agent 整合、LangGraph、React 联调、评估与部署 |
+| D35 Agent 多维市场研究 | 已完成 | `evaluate_market`、Macro 与 Market Reaction 按需编排；保留独立 Evidence、Decision Guard、pending 状态和非因果边界 |
+| D36–D45 | 待开发 | LangGraph、React 联调、评估与部署 |
 
 各开发日的设计、验收记录和已知限制位于 [`docs/`](docs/)。当前状态以对应 day 文档和测试结果为准，不把 fixture、历史数据或尚未联调的能力描述为实时生产能力。
 

@@ -31,6 +31,11 @@ from stock_agent.agents.langchain.langchain_agent import (
 )
 from stock_agent.agents.langchain.langchain_tools import build_langchain_tools
 from stock_agent.agents.evidence import collect_evidence_ids, validate_evidence
+from stock_agent.decision.models import DecisionResult
+from stock_agent.market_reaction.models import (
+    MarketReactionResult,
+    ObservationResult,
+)
 from stock_agent.schemas.research import ResearchRequest
 from stock_agent.schemas.research_output import ResearchOutput
 from stock_agent.schemas.errors import make_public_error
@@ -149,6 +154,20 @@ def test_build_agent_uses_internal_tools_and_system_prompt(monkeypatch):
     }
 
 
+def test_system_prompt_preserves_day35_routing_and_safety_contract():
+    required_rules = [
+        "使用 evaluate_market",
+        "使用 get_technical_analysis",
+        "再调用 get_market_reaction",
+        "status == blocked 时，不得自行给出",
+        "不能把它描述成 0%、缺失或已经完成",
+        "不得把时间上的先后关系表述成已经证明的因果关系",
+        "不要自行创建未经定义的综合评分",
+    ]
+
+    assert all(rule in SYSTEM_PROMPT for rule in required_rules)
+
+
 def test_fake_model_completes_real_langchain_tool_loop(
     research_request,
     market_provider_factory,
@@ -185,6 +204,8 @@ def test_fake_model_completes_real_langchain_tool_loop(
         "get_financial_facts",
         "get_macro_snapshot",
         "get_technical_analysis",
+        "evaluate_market",
+        "get_market_reaction",
     ]
     assert [type(message) for message in messages] == [
         HumanMessage,
@@ -336,6 +357,330 @@ def test_macro_tool_completes_agent_flow_with_historical_evidence():
     assert result["output"] == output
     builder.build_latest.assert_called_once_with(as_of=as_of)
     assert result["events"][1]["tool"] == "get_macro_snapshot"
+
+
+def test_multidimensional_market_research_preserves_structured_results(
+    monkeypatch,
+    market_provider_factory,
+):
+    as_of = datetime(2026, 9, 14, 16, tzinfo=timezone.utc)
+    event_at = datetime(2026, 9, 11, 12, 30, tzinfo=timezone.utc)
+
+    class FixedUUID:
+        hex = "day35"
+
+    monkeypatch.setattr(
+        langchain_tools,
+        "uuid4",
+        lambda: FixedUUID(),
+    )
+
+    provider = market_provider_factory.return_value
+    provider.get_quote.return_value = Quote(
+        symbol="NVDA",
+        price=Decimal("220"),
+        currency="USD",
+        quoted_at=as_of - timedelta(seconds=30),
+        received_at=as_of - timedelta(seconds=29),
+        session="regular",
+        data_mode="live",
+        is_delayed=False,
+        source="longbridge",
+    )
+    provider.get_bars.return_value = make_completed_bars(
+        as_of=as_of,
+        count=60,
+    )
+
+    decision = DecisionResult(
+        symbol="NVDA",
+        as_of=as_of,
+        status="complete",
+        market_view="bullish",
+        factors=[],
+        decision_reasons=[
+            "trend_direction_retained_without_momentum_confirmation",
+        ],
+        opposing_reasons=["momentum_not_confirmed"],
+        invalidation_conditions=["price_not_above_ma20"],
+        missing_information=[],
+        warnings=[],
+        rule_version="decision-v1",
+    )
+    monkeypatch.setattr(
+        langchain_tools,
+        "evaluate_market_decision",
+        Mock(return_value=decision),
+    )
+
+    release = MacroReleaseEvent(
+        release_id="cpi:2026-09-11",
+        release_type="cpi",
+        release_date=date(2026, 9, 11),
+        released_at=event_at,
+        released_at_source="fixture",
+        release_date_source="fixture",
+        period_binding="verified",
+        metrics=[
+            MacroMetricSnapshot(
+                indicator="cpi",
+                measure="mom",
+                unit="percent",
+                period=date(2026, 8, 1),
+                actual=Decimal("0.4"),
+                consensus=Decimal("0.3"),
+                estimated_surprise=Decimal("0.1"),
+                release_date=date(2026, 9, 11),
+                released_at=event_at,
+                source="fixture",
+                actual_pit_status="verified",
+            )
+        ],
+    )
+    snapshot = MacroSnapshot(
+        as_of=as_of,
+        recent_releases=[release],
+        fed_policy=None,
+        fed_projections=[],
+        treasury=None,
+        warnings=[],
+    )
+    builder = Mock()
+    builder.build_latest.return_value = snapshot
+
+    reaction = MarketReactionResult(
+        release_id=release.release_id,
+        release_type="cpi",
+        symbol="NVDA",
+        event_at=event_at,
+        reference_price=Decimal("219"),
+        reference_at=event_at - timedelta(minutes=1),
+        observations={
+            "5m": ObservationResult(
+                target_at=event_at + timedelta(minutes=5),
+                status="usable",
+                price=Decimal("221.19"),
+                price_at=event_at + timedelta(minutes=5),
+                return_pct=Decimal("1"),
+                price_source="fixture",
+            ),
+        },
+        issues=[],
+        reference_source="fixture",
+        event_time_source="fixture",
+    )
+    monkeypatch.setattr(
+        langchain_tools,
+        "research_event_reaction",
+        Mock(return_value=reaction),
+    )
+
+    output = ResearchOutput(
+        status="completed",
+        facts=[
+            {
+                "text": "最近一次 CPI 环比为 0.4%，consensus 为 0.3%。",
+                "evidence_ids": ["macro:cpi:2026-09-11"],
+            },
+            {
+                "text": "该 CPI 发布后 5 分钟，NVDA 上涨 1%。",
+                "evidence_ids": [
+                    "market-reaction:cpi:2026-09-11:NVDA"
+                ],
+            },
+        ],
+        inferences=[
+            {
+                "text": (
+                    "NVDA 当前确定性技术 Decision 为 bullish，"
+                    "但 Momentum 尚未确认。"
+                ),
+                "evidence_ids": [
+                    "market:quote:day35",
+                    "market:technical:day35",
+                ],
+            }
+        ],
+        missing_information=[],
+        data_mode="mixed",
+    )
+    model = ToolCallingFakeModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "evaluate_market",
+                        "args": {"company_id": "NVDA"},
+                        "id": "call-decision",
+                        "type": "tool_call",
+                    },
+                    {
+                        "name": "get_macro_snapshot",
+                        "args": {"release_type": "cpi"},
+                        "id": "call-macro",
+                        "type": "tool_call",
+                    },
+                ],
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "get_market_reaction",
+                        "args": {
+                            "company_id": "NVDA",
+                            "release_id": "cpi:2026-09-11",
+                        },
+                        "id": "call-reaction",
+                        "type": "tool_call",
+                    }
+                ],
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "ResearchOutput",
+                        "args": output.model_dump(),
+                        "id": "call-output",
+                        "type": "tool_call",
+                    }
+                ],
+            ),
+        ]
+    )
+    request = ResearchRequest(
+        company_id="NVDA",
+        question=(
+            "NVDA 当前走势如何，"
+            "最近一次 CPI 后又是怎么走的？"
+        ),
+        data_mode="mixed",
+        as_of=as_of,
+    )
+
+    result = asyncio.run(
+        run_research(
+            build_langchain_agent(
+                model,
+                response_format=ToolStrategy(ResearchOutput),
+            ),
+            request,
+            macro_builder_factory=lambda: builder,
+            market_provider_factory=market_provider_factory,
+        )
+    )
+
+    assert result["error"] is None, result
+    assert result["status"] == "completed"
+    assert result["output"] == output
+    requested_tools = [
+        event["tool"]
+        for event in result["events"]
+        if event["type"] == "tool_requested"
+    ]
+    assert requested_tools[:3] == [
+        "evaluate_market",
+        "get_macro_snapshot",
+        "get_market_reaction",
+    ]
+    assert builder.build_latest.call_count == 2
+    assert result["output"].facts[0].evidence_ids == [
+        "macro:cpi:2026-09-11"
+    ]
+    assert result["output"].facts[1].evidence_ids == [
+        "market-reaction:cpi:2026-09-11:NVDA"
+    ]
+    assert set(result["output"].inferences[0].evidence_ids) == {
+        "market:quote:day35",
+        "market:technical:day35",
+    }
+
+
+def test_agent_preserves_blocked_market_decision(
+    monkeypatch,
+    market_provider_factory,
+):
+    as_of = datetime(2026, 9, 14, 16, tzinfo=timezone.utc)
+    blocked_decision = DecisionResult(
+        symbol="NVDA",
+        as_of=as_of,
+        status="blocked",
+        market_view=None,
+        factors=[],
+        decision_reasons=[],
+        missing_information=["technical_missing"],
+        warnings=[],
+        opposing_reasons=[],
+        invalidation_conditions=[],
+        rule_version="decision-v1",
+    )
+    monkeypatch.setattr(
+        langchain_tools,
+        "evaluate_market_decision",
+        Mock(return_value=blocked_decision),
+    )
+    provider = market_provider_factory.return_value
+    provider.get_bars.return_value = []
+
+    output = ResearchOutput(
+        status="insufficient_information",
+        facts=[],
+        inferences=[],
+        missing_information=[
+            "Technical 数据不足，当前无法形成市场方向判断。"
+        ],
+        data_mode=None,
+    )
+    model = ToolCallingFakeModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "evaluate_market",
+                        "args": {"company_id": "NVDA"},
+                        "id": "call-decision",
+                        "type": "tool_call",
+                    }
+                ],
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "ResearchOutput",
+                        "args": output.model_dump(),
+                        "id": "call-output",
+                        "type": "tool_call",
+                    }
+                ],
+            ),
+        ]
+    )
+    request = ResearchRequest(
+        company_id="NVDA",
+        question="NVDA 当前走势如何？",
+        data_mode="mixed",
+        as_of=as_of,
+    )
+
+    result = asyncio.run(
+        run_research(
+            build_langchain_agent(
+                model,
+                response_format=ToolStrategy(ResearchOutput),
+            ),
+            request,
+            market_provider_factory=market_provider_factory,
+        )
+    )
+
+    assert result["error"] is None
+    assert result["status"] == "insufficient_information"
+    assert result["output"].inferences == []
+    assert result["output"].data_mode is None
 
 
 @pytest.mark.parametrize("company_id", ["NVDA", "TSLA"])

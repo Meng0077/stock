@@ -5,11 +5,12 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 import json
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 import uuid
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import (
+    AgentMiddleware,
     ModelCallLimitMiddleware,
     ModelRequest,
     ModelResponse,
@@ -37,6 +38,9 @@ from stock_agent.agents.langchain.langchain_tools import (
 )
 from stock_agent.agents.langchain.tool_middleware import handle_tool_errors
 from stock_agent.schemas.research import ResearchRequest
+
+if TYPE_CHECKING:
+    from stock_agent.schemas.research_output import ResearchOutput
 
 SYSTEM_PROMPT = """
 你是只读的股票教学研究助手。
@@ -112,6 +116,121 @@ SYSTEM_PROMPT = """
 
     Quote 和技术指标拥有不同的 evidence_id。
     当一个结论同时依赖两者时，应同时引用两份证据。
+11. 当用户询问股票当前整体技术走势、技术观点、偏多偏空、
+    趋势与动能是否一致、当前观点的反对因素或失效条件时，
+    使用 evaluate_market。
+
+    例如：
+    - “NVDA 当前走势如何？”
+    - “NVDA 技术面现在怎么看？”
+    - “NVDA 当前偏多还是偏空？”
+    - “当前判断什么时候会失效？”
+
+    evaluate_market 返回的是确定性 Decision Engine 的结果。
+
+    必须遵守：
+    - status == blocked 时，不得自行给出 bullish、bearish、
+      neutral 或 mixed 等方向结论；
+    - market_view 不得被模型重新计算或改写；
+    - factors、decision_reasons、opposing_reasons、
+      invalidation_conditions 可以翻译成自然语言，
+      但不能改变其业务含义；
+    - 不得根据 MA、RSI 或其他工具结果，
+      覆盖 evaluate_market 已经给出的 market_view。
+
+
+12. 当用户只询问具体技术指标或价格结构时，
+    使用 get_technical_analysis。
+
+    例如：
+    - MA20 / MA50 是多少；
+    - RSI14 是多少；
+    - ATR 是多少；
+    - 当前支撑、阻力在哪里；
+    - 当前价格相对 20 日高低点的位置。
+
+    不要仅因为用户询问某个具体指标，
+    就强制调用 evaluate_market。
+
+    如果问题既要求具体指标，
+    又要求整体技术观点，
+    可以同时使用 get_technical_analysis 和 evaluate_market。
+
+
+13. 当用户询问某次宏观数据发布之后股票实际发生了什么变化时，
+    使用 get_market_reaction。
+
+    get_market_reaction 必须使用具体的 release_id。
+
+    如果用户只给出事件类型，例如：
+    “最近一次 CPI 后 NVDA 怎么走？”
+
+    应先使用 get_macro_snapshot 获取可用的具体发布事件和 release_id，
+    再调用 get_market_reaction。
+
+
+14. Market Reaction 只描述事件前后实际观察到的价格变化。
+
+    不得把时间上的先后关系表述成已经证明的因果关系。
+
+    可以说：
+    “CPI 发布后 30 分钟内 NVDA 下跌 1.2%。”
+
+    不应直接说：
+    “CPI 导致 NVDA 下跌 1.2%。”
+
+    除非存在其他独立证据支持因果判断。
+
+
+15. 必须严格保留 Market Reaction observation 的状态。
+
+    usable：
+    可以引用实际 price / return_pct。
+
+    pending：
+    观察窗口尚未形成，不能把它描述成 0%、缺失或已经完成。
+
+    missing：
+    对应窗口本应已经形成，但缺少可用行情。
+
+    unavailable：
+    当前数据能力或前置条件不足，不能伪造收益率。
+
+
+16. 工具返回的数值、时间、状态和确定性业务结论不得由模型修改。
+
+    包括但不限于：
+    - Quote.price
+    - MA / RSI / ATR
+    - Macro actual / consensus / estimated_surprise
+    - MarketReaction reference_price / return_pct
+    - DecisionResult.status
+    - DecisionResult.market_view
+
+    模型可以负责：
+    - 组织内容；
+    - 翻译机器可读 reason；
+    - 解释不同证据之间的关系。
+
+    模型不负责：
+    - 重新计算工具数值；
+    - 用自己的判断覆盖 Guard；
+    - 修改确定性 Decision 的方向；
+    - 将 unavailable / pending 数据补成具体结果。
+
+
+17. 技术 Decision、宏观数据和 Market Reaction 保持独立。
+
+    不要自行创建未经定义的综合评分、confidence、上涨概率或胜率。
+
+    例如，一个回答可以同时说明：
+
+    - 当前 Technical Decision 为 bullish；
+    - CPI actual 高于 consensus；
+    - CPI 发布后 NVDA 30 分钟下跌 1.2%。
+
+    但不能自行把这些内容计算成：
+    “综合看涨概率 72%”。
 """
 
 
@@ -155,24 +274,29 @@ def build_langchain_agent(
 ) -> Any:
     """创建 LangChain Agent，提供只读研究工具。"""
 
+    middleware = cast(
+        list[AgentMiddleware[Any, ResearchContext, Any]],
+        [
+            handle_tool_errors,
+            ModelCallLimitMiddleware(
+                run_limit=MAX_MODEL_ROUNDS,
+                exit_behavior="error"
+            ),
+            ToolCallLimitMiddleware(
+                run_limit=MAX_TOOL_CALLS,
+                exit_behavior="error"
+            ),
+            reject_truncated_response,
+        ],
+    )
+
     return create_agent(
         model=model,
         tools=build_langchain_tools(),
         context_schema=ResearchContext,
         system_prompt=SYSTEM_PROMPT,
         response_format=response_format,
-        middleware=[
-                handle_tool_errors,
-                ModelCallLimitMiddleware(
-                    run_limit=MAX_MODEL_ROUNDS,
-                    exit_behavior="error"
-                ),
-                ToolCallLimitMiddleware(
-                    run_limit=MAX_TOOL_CALLS,
-                    exit_behavior="error"
-                ),
-                reject_truncated_response,
-            ],
+        middleware=middleware,
 
     )
 
@@ -207,9 +331,11 @@ async def run_research(
 ):
     """运行边界：统一返回运行身份、终态、结果、安全错误和事件。"""
     run_id = str(uuid.uuid4())
-    events = [{"type": "run_started", "run_id": run_id}]
-    latest_state = build_agent_input(request)
-    runtime_error = None
+    events: list[dict[str, Any]] = [
+        {"type": "run_started", "run_id": run_id}
+    ]
+    latest_state: dict[str, Any] = build_agent_input(request)
+    runtime_error: Exception | None = None
     try:
         async with asyncio.timeout(TASK_TIMEOUT_SECONDS):
             async for state in agent.astream(
@@ -229,12 +355,15 @@ async def run_research(
         runtime_error = error
 
     events.extend(collect_tool_events(latest_state["messages"], run_id))
-    output = None
-    public_error = None
+    output: ResearchOutput | None = None
+    public_error: dict[str, Any] | None = None
     if runtime_error is not None:
         public_error = make_public_error(map_error(runtime_error)).model_dump()
     else:
-        output = latest_state["structured_response"]
+        output = cast(
+            "ResearchOutput",
+            latest_state["structured_response"],
+        )
 
         # print(
         #     json.dumps(
@@ -264,7 +393,11 @@ async def run_research(
             public_error = make_public_error(map_error(error)).model_dump()
             output = None
 
-    status = "failed" if public_error is not None else output.status
+    if public_error is not None:
+        status = "failed"
+    else:
+        assert output is not None
+        status = output.status
     events.append({
         "type": "run_finished",
         "run_id": run_id,
