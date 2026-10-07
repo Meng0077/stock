@@ -149,3 +149,5 @@ Day35 已于 2026-10-04 完成：
 - `git diff --check HEAD`：通过。
 
 下一步进入 D36：建立 LangGraph 状态与按需取数、检索、校验、分析和解释节点。
+
+Day35 完成后又在相同 Agent/Evidence 边界上增加了 Earnings 8-K 披露后的 Market Reaction，但没有把该扩展误标为 D36。设计、时间限制与验收见 [`earnings-market-reaction.md`](earnings-market-reaction.md)。

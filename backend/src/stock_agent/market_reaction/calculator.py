@@ -21,7 +21,7 @@ WINDOWS = {
 def calculate_market_reaction(
     prepared: EventMarketAlignment,
 ) -> MarketReactionResult:
-    """计算宏观事件后 5m、30m、1h 的实际收益率。"""
+    """计算事件后 5m、30m、1h 的实际收益率。"""
     event_at = prepared.event_at
     as_of = prepared.as_of
 

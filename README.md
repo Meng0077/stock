@@ -7,7 +7,8 @@
 1. 财报 RAG 与结构化财务数据；
 2. 行情与技术分析；
 3. 宏观数据与 Estimated Surprise；
-4. 宏观事件后的 Market Reaction。
+4. 宏观事件后的 Market Reaction；
+5. SEC Earnings 8-K 披露后的 Market Reaction。
 
 新闻检索、用户仓位、个人风险建议、券商下单和自动交易不在首版范围内。本项目仅用于工程学习与研究演示，不构成投资建议。
 
@@ -32,6 +33,7 @@
 | D33 决策流程 | 已完成 | Technical 质量 Guard；Trend → Momentum → Level 因子执行；complete/partial/blocked 状态和确定性市场观点合成 |
 | D34 Decision Trace | 已完成 | 指标、阈值与价格来源证据；Decision 组合路径、反对理由和失效条件；宏观与 Market Reaction 保持独立 |
 | D35 Agent 多维市场研究 | 已完成 | `evaluate_market`、Macro 与 Market Reaction 按需编排；保留独立 Evidence、Decision Guard、pending 状态和非因果边界 |
+| Earnings Market Reaction 扩展 | 已完成 | 以 SEC 8-K Item 2.02 确认最近财报披露，以 SEC accepted_at 为受限事件时间，复用 5m/30m/1h/正式收盘 Reaction 引擎 |
 | D36–D45 | 待开发 | LangGraph、React 联调、评估与部署 |
 
 各开发日的设计、验收记录和已知限制位于 [`docs/`](docs/)。当前状态以对应 day 文档和测试结果为准，不把 fixture、历史数据或尚未联调的能力描述为实时生产能力。
@@ -51,7 +53,8 @@ LangChain Agent ────────────────┐
    └─ Macro Tool                │
         └─ MacroReleaseEvent → MacroSnapshot
                                  │
-MacroReleaseEvent + 分钟行情 ──→ MarketReactionEngine（D26–D30）
+MacroReleaseEvent / EarningsReleaseEvent + 分钟行情
+   └─→ MarketReactionEngine（D26–D30 及 Earnings 扩展）
                                  │
 结构化结果 + Evidence + 时间边界 ┘
    ↓

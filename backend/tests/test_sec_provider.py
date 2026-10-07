@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 import pytest
 
 from stock_agent.documents import sec_provider
+from stock_agent.documents.schemas import FilingFile, FilingMetadata
 
 
 @pytest.fixture
@@ -87,3 +88,44 @@ def test_optional_as_of_defaults_to_current_utc(recent, monkeypatch, kwargs):
     assert len(sec_provider.get_recent_filings("EXAMPLE", **kwargs)) == 1
     recent["acceptanceDateTime"] = ["2026-03-01T12:00:01Z"]
     assert sec_provider.get_recent_filings("EXAMPLE", **kwargs) == []
+
+
+def test_earnings_8k_selects_primary_and_html_exhibit():
+    accepted_at = datetime.fromisoformat("2026-03-01T12:00:00+00:00")
+    filing = FilingMetadata(
+        company_id="NVDA",
+        cik="0001045810",
+        form="8-K",
+        filing_date=accepted_at.date(),
+        report_date=accepted_at.date(),
+        accepted_at=accepted_at,
+        accession_number="0001045810-26-000100",
+        primary_document="nvda-8k.htm",
+        document_url="https://www.sec.gov/nvda-8k.htm",
+    )
+    primary = FilingFile(
+        sequence="1",
+        document_name="nvda-8k.htm",
+        document_type="8-K",
+        document_url="https://www.sec.gov/nvda-8k.htm",
+        is_primary=True,
+    )
+    earnings_exhibit = FilingFile(
+        sequence="2",
+        document_name="earnings-release.htm",
+        document_type="EX-99.1",
+        document_url="https://www.sec.gov/earnings-release.htm",
+        is_primary=False,
+    )
+    unsupported_exhibit = FilingFile(
+        sequence="3",
+        document_name="data.xml",
+        document_type="EX-99.2",
+        document_url="https://www.sec.gov/data.xml",
+        is_primary=False,
+    )
+
+    assert sec_provider.select_relevant_filing_files(
+        filing,
+        [primary, earnings_exhibit, unsupported_exhibit],
+    ) == [primary, earnings_exhibit]

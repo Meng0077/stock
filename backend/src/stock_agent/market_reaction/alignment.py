@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 
-from stock_agent.macro.models.release import MacroReleaseEvent, MacroReleaseType
+from stock_agent.macro.models.release import MacroReleaseEvent
 from stock_agent.market.intraday import (
     HistoricalMinuteBarsRequest,
     IntradayBar,
@@ -187,10 +187,13 @@ def assess_event_alignment(
         return "incomplete", issues
     return "ready", issues
 
+
 @dataclass(slots=True)
 class EventMarketAlignment:
     release_id: str
-    release_type: MacroReleaseType
+    # release_type: MacroReleaseType
+    release_type: str
+
     symbol: str
     as_of: datetime
     event_at: datetime | None
@@ -203,6 +206,75 @@ class EventMarketAlignment:
     issues: list[str]
 
 
+def prepare_timed_event_market_data(
+    *,
+    event_id: str,
+    event_type: str,
+    event_at: datetime,
+    symbol: str,
+    provider: MarketDataProvider,
+    as_of: datetime,
+    extra_issues: list[str] | None = None,
+) -> EventMarketAlignment:
+    """
+    为一个已经确定实际发生时间的事件准备分钟行情。
+
+    这里不负责判断事件是什么类型，
+    也不负责解析事件时间来源。
+
+    调用方必须已经确定：
+    - event_id
+    - event_type
+    - event_at
+
+    本函数只负责：
+    - 查询事件附近分钟行情；
+    - 按 event_at 切分事件前后 K 线；
+    - 判断行情对齐是否可用。
+    """
+    symbol = symbol.strip().upper()
+    if not symbol:
+        raise ValueError("symbol must not be empty")
+
+    # 获取事件前后的分钟行情。
+    _request, bars = fetch_event_intraday_bars(
+        event_at=event_at,
+        symbol=symbol,
+        provider=provider,
+        as_of=as_of,
+    )
+
+    # 按事件发生时间切分。
+    pre, post, crossing = align_event_with_bars(
+        event_at=event_at,
+        bars=bars,
+    )
+
+    status, issues = assess_event_alignment(
+        event_at=event_at,
+        as_of=as_of,
+        pre_bars=pre,
+        post_bars=post,
+        crossing_bar=crossing,
+    )
+
+    if extra_issues:
+        issues.extend(extra_issues)
+
+    return EventMarketAlignment(
+        release_id=event_id,
+        release_type=event_type,
+        symbol=symbol,
+        as_of=as_of,
+        event_at=event_at,
+        pre_bars=pre,
+        post_bars=post,
+        crossing_bar=crossing,
+        status=status,
+        issues=issues,
+    )
+
+
 def prepare_event_market_data(
     *,
     release: MacroReleaseEvent,
@@ -210,13 +282,17 @@ def prepare_event_market_data(
     provider: MarketDataProvider,
     as_of: datetime,
 ) -> EventMarketAlignment:
-    """为一次宏观事件准备目标股票的分钟行情。"""
-    symbol = symbol.strip().upper()
+    """
+    为一次宏观发布准备市场行情。
 
-    if not symbol:
-        raise ValueError("symbol must not be empty")
+    Macro 层负责解析 released_at；
+    真正的行情对齐复用
+    prepare_timed_event_market_data()。
+    """
 
-    def unavailable(reason: str) -> EventMarketAlignment:
+    # 解析实际发布时间。
+    resolution = resolve_event_time(release=release, as_of=as_of)
+    if resolution.event_at is None:
         return EventMarketAlignment(
             release_id=release.release_id,
             release_type=release.release_type,
@@ -227,49 +303,19 @@ def prepare_event_market_data(
             post_bars=[],
             crossing_bar=None,
             status="unavailable",
-            issues=[reason],
+            issues=[resolution.reason or "event_time_unavailable"],
         )
 
-    # 解析实际发布时间。
-    resolution = resolve_event_time(release=release, as_of=as_of)
-    if resolution.event_at is None:
-        return unavailable(resolution.reason or "event_time_unavailable")
+    extra_issues = []
+    if resolution.warning:
+        extra_issues.append(resolution.warning)
 
-    # 获取事件前后的分钟行情。
-    _request, bars = fetch_event_intraday_bars(
+    return prepare_timed_event_market_data(
+        event_id=release.release_id,
+        event_type=release.release_type,
         event_at=resolution.event_at,
         symbol=symbol,
         provider=provider,
         as_of=as_of,
-    )
-
-    # 按事件时间划分 K 线。
-    pre, post, crossing = align_event_with_bars(
-        event_at=resolution.event_at,
-        bars=bars,
-    )
-
-    # 判断事件附近的数据是否足够。
-    status, issues = assess_event_alignment(
-        event_at=resolution.event_at,
-        as_of=as_of,
-        post_bars=post,
-        pre_bars=pre,
-        crossing_bar=crossing,
-    )
-
-    if resolution.warning:
-        issues.append(resolution.warning)
-
-    return EventMarketAlignment(
-        release_id=release.release_id,
-        release_type=release.release_type,
-        symbol=symbol,
-        as_of=as_of,
-        event_at=resolution.event_at,
-        pre_bars=pre,
-        post_bars=post,
-        crossing_bar=crossing,
-        status=status,
-        issues=issues,
+        extra_issues=extra_issues,
     )

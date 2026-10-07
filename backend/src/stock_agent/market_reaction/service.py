@@ -7,7 +7,7 @@ from stock_agent.macro.models.release import (
 from stock_agent.market.errors import MarketDataCapabilityError, MarketDataProviderError
 from stock_agent.market.provider import MarketDataProvider
 from stock_agent.market_reaction.alignment import (
-    prepare_event_market_data,
+    prepare_timed_event_market_data,
 )
 from stock_agent.market_reaction.calculator import (
     calculate_market_reaction,
@@ -19,76 +19,102 @@ from stock_agent.market_reaction.event_time import resolve_event_time
 from stock_agent.market_reaction.models import MarketReactionResult
 
 
-def _minute_failure_result(
+def _timed_event_failure_result(
     *,
-    release: MacroReleaseEvent,
+    event_id: str,
+    event_type: str,
+    event_at: datetime,
+    event_time_source: str | None,
     symbol: str,
-    as_of: datetime,
     reason: str,
+    extra_issues: list[str] | None = None,
 ) -> MarketReactionResult:
-    """分钟行情不可用时，返回结构化的失败结果。"""
-
-    resolution = resolve_event_time(
-        release,
-        as_of=as_of,
-    )
+    """分钟行情不可用时返回结构化事件反应结果。"""
 
     issues = [reason]
 
-    if resolution.warning:
-        issues.append(resolution.warning)
+    if extra_issues:
+        issues.extend(extra_issues)
 
     return MarketReactionResult(
-        release_id=release.release_id,
-        release_type=release.release_type,
+        release_id=event_id,
+        release_type=event_type,
         symbol=symbol.strip().upper(),
-        event_at=resolution.event_at,
+        event_at=event_at,
         reference_price=None,
         reference_at=None,
         observations={},
         issues=issues,
-        event_time_source=release.released_at_source,
+        event_time_source=event_time_source,
     )
 
 
-def research_event_reaction(
+def research_timed_event_reaction(
     *,
-    release: MacroReleaseEvent,
+    event_id: str,
+    event_type: str,
+    event_at: datetime,
+    event_time_source: str | None,
     symbol: str,
     provider: MarketDataProvider,
     as_of: datetime,
+    extra_issues: list[str] | None = None,
 ) -> MarketReactionResult:
-    """准备行情并计算所有市场反应窗口。"""
+    """
+    研究一个已经确定发生时间的事件之后的市场反应。
+
+    不关心事件是：
+    - CPI
+    - PPI
+    - Earnings
+    - 其他未来事件
+
+    这里只负责：
+    - 分钟行情；
+    - reference price；
+    - 5m / 30m / 1h；
+    - close；
+    - 行情异常结构化返回。
+    """
 
     try:
-        alignment = prepare_event_market_data(
-            release=release,
+        market_data = prepare_timed_event_market_data(
+            event_id=event_id,
+            event_type=event_type,
+            event_at=event_at,
             symbol=symbol,
             provider=provider,
             as_of=as_of,
+            extra_issues=extra_issues,
         )
     except MarketDataCapabilityError:
-        return _minute_failure_result(
-            release=release,
+        return _timed_event_failure_result(
+            event_id=event_id,
+            event_type=event_type,
+            event_at=event_at,
+            event_time_source=event_time_source,
             symbol=symbol,
-            as_of=as_of,
             reason="minute_data_capability_unavailable",
+            extra_issues=extra_issues,
         )
     except MarketDataProviderError:
-        return _minute_failure_result(
-            release=release,
+        return _timed_event_failure_result(
+            event_id=event_id,
+            event_type=event_type,
+            event_at=event_at,
+            event_time_source=event_time_source,
             symbol=symbol,
-            as_of=as_of,
             reason="minute_data_provider_error",
+            extra_issues=extra_issues,
         )
 
     reaction = replace(
-        calculate_market_reaction(alignment),
-        event_time_source=release.released_at_source,
+        calculate_market_reaction(market_data),
+        event_time_source=event_time_source,
     )
 
     close_result = build_close_observation(
-        alignment=alignment,
+        alignment=market_data,
         provider=provider,
     )
     if close_result is None:
@@ -98,7 +124,6 @@ def research_event_reaction(
         **reaction.observations,
         "close": close_result,
     }
-
     issues = list(reaction.issues)
 
     if close_result.reason in {
@@ -111,4 +136,51 @@ def research_event_reaction(
         reaction,
         observations=observations,
         issues=issues,
+    )
+
+
+def research_event_reaction(
+    *,
+    release: MacroReleaseEvent,
+    symbol: str,
+    provider: MarketDataProvider,
+    as_of: datetime,
+) -> MarketReactionResult:
+    """准备行情并计算所有市场反应窗口。"""
+    resolution = resolve_event_time(
+        release,
+        as_of=as_of,
+    )
+
+    if resolution.event_at is None:
+        return MarketReactionResult(
+            release_id=release.release_id,
+            release_type=release.release_type,
+            symbol=symbol.strip().upper(),
+            event_at=None,
+            reference_price=None,
+            reference_at=None,
+            observations={},
+            issues=[
+                resolution.reason
+                or "event_time_unavailable"
+            ],
+            event_time_source=(
+                release.released_at_source
+            ),
+        )
+    extra_issues = []
+
+    if resolution.warning:
+        extra_issues.append(resolution.warning)
+
+    return research_timed_event_reaction(
+        event_id=release.release_id,
+        event_type=release.release_type,
+        event_at=resolution.event_at,
+        event_time_source=release.released_at_source,
+        symbol=symbol,
+        provider=provider,
+        as_of=as_of,
+        extra_issues=extra_issues,
     )

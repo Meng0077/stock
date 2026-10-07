@@ -163,6 +163,10 @@ def test_system_prompt_preserves_day35_routing_and_safety_contract():
         "不能把它描述成 0%、缺失或已经完成",
         "不得把时间上的先后关系表述成已经证明的因果关系",
         "不要自行创建未经定义的综合评分",
+        "使用 get_earnings_market_reaction",
+        "模型不得自行猜测财报事件时间或 event_id",
+        "以 SEC 8-K 的公开接收时间为基准",
+        "下一个正式交易日收盘表现",
     ]
 
     assert all(rule in SYSTEM_PROMPT for rule in required_rules)
@@ -206,6 +210,7 @@ def test_fake_model_completes_real_langchain_tool_loop(
         "get_technical_analysis",
         "evaluate_market",
         "get_market_reaction",
+        "get_earnings_market_reaction",
     ]
     assert [type(message) for message in messages] == [
         HumanMessage,

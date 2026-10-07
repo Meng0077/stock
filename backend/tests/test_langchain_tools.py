@@ -17,6 +17,7 @@ from stock_agent.macro.models.metric import MacroMetricSnapshot
 from stock_agent.macro.models.release import MacroReleaseEvent
 from stock_agent.macro.models.snapshot import MacroSnapshot
 from stock_agent.market.errors import MarketDataProviderError
+from stock_agent.market.earnings import EarningsReleaseEvent
 from stock_agent.market.schemas import Bar, Quote
 from stock_agent.market_reaction.models import (
     MarketReactionResult,
@@ -148,8 +149,9 @@ def test_build_langchain_tools_returns_exact_allowlist():
         "get_technical_analysis",
         "evaluate_market",
         "get_market_reaction",
+        "get_earnings_market_reaction",
     ]
-    assert len({tool.name for tool in tools}) == len(TOOL_NAMES) + 6
+    assert len({tool.name for tool in tools}) == len(TOOL_NAMES) + 7
 
 
 def test_company_profile_adapter_reuses_company_tool_params_schema():
@@ -184,6 +186,15 @@ def test_market_reaction_tool_exposes_only_company_and_release_id():
     assert set(tool.tool_call_schema.model_json_schema()["properties"]) == {
         "company_id",
         "release_id",
+    }
+
+
+def test_earnings_market_reaction_tool_exposes_only_company_id():
+    tool = tools_by_name()["get_earnings_market_reaction"]
+
+    assert issubclass(tool.args_schema, CompanyToolParams)
+    assert set(tool.tool_call_schema.model_json_schema()["properties"]) == {
+        "company_id"
     }
 
 
@@ -1219,3 +1230,134 @@ def test_market_reaction_tool_preserves_pending_observation(
     assert observations["5m"]["status"] == "usable"
     assert observations["30m"]["status"] == "pending"
     assert observations["30m"]["return_pct"] is None
+
+
+def test_earnings_market_reaction_tool_returns_event_and_evidence(
+    monkeypatch,
+):
+    as_of = datetime(2026, 9, 14, 16, tzinfo=timezone.utc)
+    event_at = datetime(2026, 9, 11, 20, 5, tzinfo=timezone.utc)
+    earnings = EarningsReleaseEvent(
+        event_id="earnings:NVDA:0001045810-26-000100",
+        symbol="NVDA",
+        released_at=event_at,
+        released_at_source="sec_8k_accepted_at",
+        report_date=date(2026, 7, 26),
+        accession_number="0001045810-26-000100",
+        source_url="https://www.sec.gov/example.htm",
+        warnings=("event_time_uses_sec_8k_acceptance",),
+    )
+    reaction = MarketReactionResult(
+        release_id=earnings.event_id,
+        release_type="earnings",
+        symbol="NVDA",
+        event_at=event_at,
+        reference_price=Decimal("120"),
+        reference_at=event_at - timedelta(minutes=1),
+        observations={
+            "5m": ObservationResult(
+                target_at=event_at + timedelta(minutes=5),
+                status="usable",
+                price=Decimal("123.6"),
+                price_at=event_at + timedelta(minutes=5),
+                return_pct=Decimal("3"),
+                price_source="fixture",
+            )
+        },
+        issues=["event_time_uses_sec_8k_acceptance"],
+        reference_source="fixture",
+        event_time_source="sec_8k_accepted_at",
+    )
+    get_latest = Mock(return_value=earnings)
+    research = Mock(return_value=reaction)
+    monkeypatch.setattr(
+        langchain_tools,
+        "get_latest_earnings_release",
+        get_latest,
+    )
+    monkeypatch.setattr(
+        langchain_tools,
+        "research_earnings_reaction",
+        research,
+    )
+    provider = Mock()
+    factory = Mock(return_value=provider)
+    runtime = ToolRuntime(
+        state={},
+        context=ResearchContext(
+            as_of=as_of,
+            market_provider_factory=factory,
+        ),
+        config={},
+        stream_writer=lambda _: None,
+        tool_call_id="call-earnings-reaction",
+        store=None,
+    )
+
+    result = asyncio.run(
+        tools_by_name()["get_earnings_market_reaction"].coroutine(
+            company_id=" nvda ",
+            runtime=runtime,
+        )
+    )
+
+    get_latest.assert_called_once_with(symbol="NVDA", as_of=as_of)
+    research.assert_called_once_with(
+        earnings=earnings,
+        symbol="NVDA",
+        provider=provider,
+        as_of=as_of,
+    )
+    assert result["symbol"] == "NVDA"
+    assert result["data_mode"] == "historical"
+    assert result["evidence_id"] == (
+        "market-reaction:earnings:NVDA:"
+        "0001045810-26-000100:NVDA"
+    )
+    assert result["earnings"]["released_at_source"] == (
+        "sec_8k_accepted_at"
+    )
+    assert result["reaction"]["release_type"] == "earnings"
+    assert result["reaction"]["observations"]["5m"]["return_pct"] == "3"
+    assert result["warnings"] == [
+        "event_time_uses_sec_8k_acceptance"
+    ]
+
+
+def test_earnings_market_reaction_tool_omits_evidence_without_release(
+    monkeypatch,
+):
+    as_of = datetime(2026, 9, 14, 16, tzinfo=timezone.utc)
+    get_latest = Mock(return_value=None)
+    monkeypatch.setattr(
+        langchain_tools,
+        "get_latest_earnings_release",
+        get_latest,
+    )
+    factory = Mock()
+    runtime = ToolRuntime(
+        state={},
+        context=ResearchContext(
+            as_of=as_of,
+            market_provider_factory=factory,
+        ),
+        config={},
+        stream_writer=lambda _: None,
+        tool_call_id="call-earnings-reaction-missing",
+        store=None,
+    )
+
+    result = asyncio.run(
+        tools_by_name()["get_earnings_market_reaction"].coroutine(
+            company_id="NVDA",
+            runtime=runtime,
+        )
+    )
+
+    assert result["earnings"] is None
+    assert result["reaction"] is None
+    assert "evidence_id" not in result
+    assert result["warnings"] == [
+        "earnings_release_not_available_as_of"
+    ]
+    factory.assert_not_called()

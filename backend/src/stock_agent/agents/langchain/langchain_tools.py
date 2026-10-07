@@ -26,6 +26,11 @@ from stock_agent.macro.temporal import (
     validate_release_as_of,
 )
 from stock_agent.agents.context import ResearchContext
+from stock_agent.market.earnings import (
+    EarningsReleaseEvent,
+    get_latest_earnings_release,
+    research_earnings_reaction,
+)
 from stock_agent.market.errors import MarketDataProviderError
 from stock_agent.quality.macro import check_required_macro_releases, validate_macro_snapshot
 from stock_agent.quality.market_service import build_guarded_market_analysis
@@ -663,9 +668,79 @@ async def evaluate_market_tool(
         "quality": quality_report.model_dump(mode="json"),
     }
 
-
+EARNINGS_EVENT_ADAPTER = TypeAdapter(EarningsReleaseEvent)
 MARKET_REACTION_ADAPTER = TypeAdapter(MarketReactionResult)
 
+
+@tool("get_earnings_market_reaction", args_schema=QuoteToolRuntimeParams)
+async def get_earnings_market_reaction_tool(
+    company_id: str,
+    runtime: ToolRuntime[ResearchContext],
+) -> dict[str, object]:
+    """
+    查询截至 as_of 最近一次已确认财报发布后的市场反应。
+
+    当前使用 SEC 8-K Item 2.02 确认 Earnings Event，
+    并以 8-K accepted_at 作为事件时间基准。
+
+    返回：
+    - 财报事件信息；
+    - reference price；
+    - 5m / 30m / 1h；
+    - close；
+    - 数据限制和 warnings。
+    """
+
+    market_factory = runtime.context.market_provider_factory
+    if market_factory is None:
+        raise RuntimeError("MarketDataProvider is not configured")
+
+    symbol = company_id.strip().upper()
+    earnings = await asyncio.to_thread(
+        get_latest_earnings_release,
+        symbol=symbol,
+        as_of=runtime.context.as_of,
+    )
+    if earnings is None:
+        return {
+            "symbol": symbol,
+            "as_of": runtime.context.as_of.isoformat(),
+            "earnings": None,
+            "reaction": None,
+            "warnings": [
+                "earnings_release_not_available_as_of"
+            ],
+        }
+
+    market_provider = await asyncio.to_thread(market_factory)
+
+    reaction = await asyncio.to_thread(
+        research_earnings_reaction,
+        earnings=earnings,
+        symbol=symbol,
+        provider=market_provider,
+        as_of=runtime.context.as_of,
+    )
+
+    return {
+        "symbol": symbol,
+        "as_of": runtime.context.as_of.isoformat(),
+        "earnings": EARNINGS_EVENT_ADAPTER.dump_python(
+            earnings,
+            mode="json",
+        ),
+        "reaction": MARKET_REACTION_ADAPTER.dump_python(
+            reaction,
+            mode="json",
+        ),
+        "evidence_id": (
+            "market-reaction:"
+            f"{earnings.event_id}:"
+            f"{symbol}"
+        ),
+        "data_mode": "historical",
+        "warnings": list(earnings.warnings),
+    }
 
 class MarketReactionToolRuntimeParams(
     MarketReactionToolParams
@@ -830,6 +905,7 @@ def build_langchain_tools() -> list[BaseTool]:
         get_technical_analysis_tool,
         evaluate_market_tool,
         get_market_reaction_tool,
+        get_earnings_market_reaction_tool,
     ]
 
 def collect_tool_events(messages, run_id: str) -> list[dict]:

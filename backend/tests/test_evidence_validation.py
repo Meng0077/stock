@@ -196,3 +196,25 @@ def test_failed_rag_and_structured_output_do_not_supply_evidence():
         ),
     ]
     assert collect_evidence_ids(messages) == set()
+
+
+def test_earnings_market_reaction_supplies_historical_evidence():
+    evidence_id = (
+        "market-reaction:earnings:NVDA:"
+        "0001045810-26-000100:NVDA"
+    )
+    messages = [
+        ToolMessage(
+            name="get_earnings_market_reaction",
+            tool_call_id="call-earnings-reaction",
+            content=json.dumps({
+                "evidence_id": evidence_id,
+                "data_mode": "historical",
+            }),
+        )
+    ]
+
+    assert collect_evidence_ids(messages) == {evidence_id}
+    assert collect_evidence_data_modes(messages) == {
+        evidence_id: "historical"
+    }

@@ -23,6 +23,7 @@ EVIDENCE_TOOL_NAMES = {
     "get_technical_analysis",
     "evaluate_market",
     "get_market_reaction",
+    "get_earnings_market_reaction",
 }
 
 PERSISTED_EVIDENCE_PREFIXES = (

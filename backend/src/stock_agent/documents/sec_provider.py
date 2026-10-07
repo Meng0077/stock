@@ -21,6 +21,7 @@ SUPPORTED_FORMS = {
     "20-F",
     "40-F",
     "6-K",
+    "8-K",
     "10-K/A",
     "10-Q/A",
     "20-F/A",
@@ -36,6 +37,7 @@ SEC_ARCHIVES_URL = (
 ATTACHMENT_FORMS = {
     "6-K",
     "6-K/A",
+    "8-K",
 }
 
 SUPPORTED_HTML_SUFFIXES = {
