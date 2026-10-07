@@ -139,3 +139,33 @@ backend/.venv/bin/python -m pytest -q -p no:cacheprovider \
 - 完整后端：`572 passed`；
 - 本次生产文件 Pyright：`0 errors`；
 - `git diff --check HEAD`：通过。
+
+### SEC + Longbridge 真实联调
+
+真实外部服务验收与默认离线 pytest 分开，避免网络、密钥或供应商状态影响日常回归。运行：
+
+```bash
+PYTHONPATH=backend/src backend/.venv/bin/python \
+  evals/verify_earnings_market_reaction.py
+```
+
+该脚本动态使用运行时刻作为 `as_of`，通过 SEC 找到 NVDA 最近一次 Item 2.02 8-K，再通过 Longbridge 计算 5m、30m、1h 和正式收盘反应。验收要求包括：
+
+- SEC 事件 ID、accession number、`accepted_at` 和来源 URL 一致；
+- reference price 来自 Longbridge 且位于事件时间之前；
+- 四个观察窗口均为 `usable`，价格、时间与收益率完整；
+- 所有行情证据来源均为 Longbridge，且不超过本次 `as_of`。
+
+2026-10-07 使用真实 SEC 与 Longbridge 数据完成一次 NVDA 联调：
+
+| 项目 | 实际结果 |
+| --- | --- |
+| SEC accession number | `0001045810-26-000073` |
+| SEC accepted_at | `2026-08-26 20:21:19+00:00` |
+| reference | `206.500`，`2026-08-26 16:21:00-04:00` |
+| 5m | `207.883`，`+0.6697%`，`usable` |
+| 30m | `209.660`，`+1.5303%`，`usable` |
+| 1h | `218.100`，`+5.6174%`，`usable` |
+| next official close | `227.980`，`+10.4019%`，`usable` |
+
+本次结果只表示相对 SEC `accepted_at` 的实际价格变化，不证明财报内容与价格变化之间存在确定因果关系。

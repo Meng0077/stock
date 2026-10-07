@@ -180,6 +180,7 @@ PYTHONPATH=backend/src backend/.venv/bin/python evals/verify_longbridge_market_d
 PYTHONPATH=backend/src backend/.venv/bin/python evals/verify_day24_macro.py
 PYTHONPATH=backend/src backend/.venv/bin/python evals/verify_macro_agent.py
 PYTHONPATH=backend/src backend/.venv/bin/python evals/verify_day26_intraday.py
+PYTHONPATH=backend/src backend/.venv/bin/python evals/verify_earnings_market_reaction.py
 ```
 
 这些脚本需要相应密钥和外部服务可用。Estimated Surprise 直接使用长桥历史记录中的 Forecast，不具备严格 PIT 保证。长桥事件时间尚未作为经独立核实的实际发布时间，因此不能单独用于 T+5m 等分钟级 Market Reaction。
