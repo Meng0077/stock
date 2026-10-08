@@ -166,19 +166,16 @@ def research_event_reaction(
                 or "event_time_unavailable"
             ],
             event_time_source=(
-                release.released_at_source
+                resolution.event_time_source
             ),
         )
-    extra_issues = []
-
-    if resolution.warning:
-        extra_issues.append(resolution.warning)
+    extra_issues = list(resolution.warnings)
 
     return research_timed_event_reaction(
         event_id=release.release_id,
         event_type=release.release_type,
         event_at=resolution.event_at,
-        event_time_source=release.released_at_source,
+        event_time_source=resolution.event_time_source,
         symbol=symbol,
         provider=provider,
         as_of=as_of,

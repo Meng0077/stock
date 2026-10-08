@@ -1,5 +1,5 @@
 from collections.abc import Callable
-from datetime import datetime, tzinfo
+from datetime import date, datetime, timedelta, tzinfo
 from typing import cast
 from zoneinfo import ZoneInfo
 
@@ -23,10 +23,12 @@ from stock_agent.macro.providers.trading_economics import (
 )
 from stock_agent.macro.providers.treasury import TreasuryRatesProvider
 from stock_agent.macro.release_builders import (
+    MACRO_RELEASE_SERIES,
     build_bls_inflation_release,
     build_employment_release,
     build_pce_release,
     build_weekly_claims_release,
+    get_release_dates,
 )
 from stock_agent.macro.temporal import filter_releases_as_of
 
@@ -300,6 +302,135 @@ class MacroSnapshotBuilder:
             warnings=warnings,
         )
 
+    def build_release_history(
+        self,
+        *,
+        release_type: MacroReleaseType,
+        as_of: datetime,
+        limit: int,
+        before: date | None = None,
+    ) -> tuple[
+        list[MacroReleaseEvent],
+        list[str],
+    ]:
+        """
+        构建最近若干次同类宏观发布事件。
+
+        当前历史 Release 使用：
+        - FRED 确定官方发布日期；
+        - Longbridge 获取对应日期的历史指标数据；
+        - 现有 release builder 组装 MacroReleaseEvent。
+
+        返回：
+            releases
+            warnings
+
+        releases 按最近发布时间在前。
+        """
+        if (
+            as_of.tzinfo is None
+            or as_of.utcoffset() is None
+        ):
+            raise ValueError(
+                "as_of must be timezone-aware"
+            )
+
+        if limit <= 0:
+            raise ValueError(
+                "limit must be positive"
+            )
+
+        # 当前历史 MacroReleaseEvent 的指标数据
+        # 依赖 Longbridge 历史宏观数据。
+        if self.longbridge_macro is None:
+            return (
+                [],
+                [
+                    (
+                        f"{release_type}_history_"
+                        "longbridge_not_configured"
+                    )
+                ],
+            )
+
+        assert self.longbridge_vendor_timezone is not None
+        research_date = as_of.astimezone(EASTERN).date()
+        #  Longbridge 历史 Builder 当前明确不使用
+        # “研究当天”的发布数据，因为缺少独立确认的
+        # actual release timestamp。
+        #
+        # 因此这里和现有 latest Longbridge 路径一样，
+        # 最晚只查询昨天。
+        history_as_of = research_date - timedelta(days=1)
+
+        release_dates = get_release_dates(
+            fred=self.fred,
+            series_id=MACRO_RELEASE_SERIES[release_type],
+            as_of=history_as_of,
+            limit=limit,
+            before=before,
+        )
+
+        releases: list[MacroReleaseEvent] = []
+        warnings: list[str] = []
+
+        for release_date in release_dates:
+            release = self._build_longbridge_release_for_date(
+                release_type=release_type,
+                release_date=release_date,
+                as_of=as_of,
+                warnings=warnings,
+            )
+            # 单次 Release 构建失败，
+            # 不删除其他已经成功构建的历史事件。
+            if release is not None:
+                releases.append(release)
+        return releases, warnings
+
+    def _build_longbridge_release_for_date(
+        self,
+        *,
+        release_type: MacroReleaseType,
+        release_date: date,
+        as_of: datetime,
+        warnings: list[str],
+    ) -> MacroReleaseEvent | None:
+        assert self.longbridge_macro is not None
+        assert self.longbridge_vendor_timezone is not None
+
+        if release_type in {
+            "cpi",
+            "ppi",
+            "pce",
+        }:
+            return build_longbridge_release(
+                macro=self.longbridge_macro,
+                release_type=cast(
+                    InflationReleaseType,
+                    release_type,
+                ),
+                release_date=release_date,
+                as_of=as_of,
+                vendor_timezone=(
+                    self.longbridge_vendor_timezone
+                ),
+                warnings=warnings,
+            )
+
+        return build_longbridge_labor_release(
+            macro=self.longbridge_macro,
+            release_type=cast(
+                LaborReleaseType,
+                release_type,
+            ),
+            release_date=release_date,
+            as_of=as_of,
+            vendor_timezone=(
+                self.longbridge_vendor_timezone
+            ),
+            warnings=warnings,
+        )
+
     def _append_release(
         self,
         *,
@@ -365,34 +496,12 @@ class MacroSnapshotBuilder:
                 )
                 return fallback()
 
-            if release_type in ("cpi", "ppi", "pce"):
-                release = build_longbridge_release(
-                    macro=self.longbridge_macro,
-                    release_type=cast(
-                        InflationReleaseType,
-                        release_type,
-                    ),
-                    release_date=release_date,
-                    as_of=as_of,
-                    vendor_timezone=(
-                        self.longbridge_vendor_timezone
-                    ),
-                    warnings=warnings,
-                )
-            else:
-                release = build_longbridge_labor_release(
-                    macro=self.longbridge_macro,
-                    release_type=cast(
-                        LaborReleaseType,
-                        release_type,
-                    ),
-                    release_date=release_date,
-                    as_of=as_of,
-                    vendor_timezone=(
-                        self.longbridge_vendor_timezone
-                    ),
-                    warnings=warnings,
-                )
+            release = self._build_longbridge_release_for_date(
+                release_type=release_type,
+                release_date=release_date,
+                as_of=as_of,
+                warnings=warnings,
+            )
 
             if release is not None:
                 # 部分发布也是有效结果；

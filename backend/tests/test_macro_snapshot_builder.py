@@ -1,5 +1,6 @@
 from datetime import date, datetime, timezone
 from decimal import Decimal
+from unittest.mock import Mock
 
 import pytest
 
@@ -155,3 +156,42 @@ def test_snapshot_builder_does_not_hide_programming_errors(monkeypatch):
 def test_snapshot_builder_requires_timezone_aware_as_of():
     with pytest.raises(ValueError, match="timezone-aware"):
         make_builder().build_latest(as_of=datetime(2026, 9, 20, 16))
+
+
+def test_release_history_uses_completed_research_date(monkeypatch):
+    builder = MacroSnapshotBuilder(
+        bls=object(),  # type: ignore[arg-type]
+        bea=object(),  # type: ignore[arg-type]
+        consensus=None,
+        fred=object(),  # type: ignore[arg-type]
+        fed=FakeFed(),  # type: ignore[arg-type]
+        treasury=FakeTreasury(),  # type: ignore[arg-type]
+        claims=object(),  # type: ignore[arg-type]
+        longbridge_macro=object(),  # type: ignore[arg-type]
+        longbridge_vendor_timezone=timezone.utc,
+    )
+    get_dates = Mock(
+        return_value=[date(2026, 9, 11), date(2026, 8, 12)]
+    )
+    monkeypatch.setattr(builder_module, "get_release_dates", get_dates)
+    releases = [
+        make_release("cpi", date(2026, 9, 11)),
+        make_release("cpi", date(2026, 8, 12)),
+    ]
+    build_release = Mock(side_effect=releases)
+    monkeypatch.setattr(
+        builder,
+        "_build_longbridge_release_for_date",
+        build_release,
+    )
+
+    result, warnings = builder.build_release_history(
+        release_type="cpi",
+        as_of=AS_OF,
+        limit=2,
+    )
+
+    assert result == releases
+    assert warnings == []
+    assert get_dates.call_args.kwargs["as_of"] == date(2026, 9, 19)
+    assert build_release.call_count == 2

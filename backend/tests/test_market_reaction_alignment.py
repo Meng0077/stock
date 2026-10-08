@@ -39,6 +39,7 @@ def make_release(
     *,
     release_date: date = date(2026, 9, 25),
     scheduled_release_at: datetime | None = None,
+    vendor_release_at: datetime | None = None,
     released_at: datetime | None = None,
 ) -> MacroReleaseEvent:
     return MacroReleaseEvent(
@@ -46,6 +47,10 @@ def make_release(
         release_type="cpi",
         release_date=release_date,
         scheduled_release_at=scheduled_release_at,
+        vendor_release_at=vendor_release_at,
+        vendor_release_at_source=(
+            "longbridge" if vendor_release_at else None
+        ),
         released_at=released_at,
         release_date_source="fixture",
         schedule_source="fixture" if scheduled_release_at else None,
@@ -154,6 +159,31 @@ def test_resolve_event_time_normalizes_actual_time_to_utc() -> None:
         tzinfo=timezone.utc,
     )
     assert resolution.reason is None
+
+
+def test_resolve_event_time_uses_vendor_time_with_warning() -> None:
+    vendor_release_at = datetime(
+        2026, 9, 25, 8, 30, tzinfo=EASTERN
+    )
+
+    resolution = resolve_event_time(
+        make_release(vendor_release_at=vendor_release_at),
+        as_of=datetime(2026, 9, 25, 9, 0, tzinfo=EASTERN),
+    )
+
+    assert resolution.event_at == datetime(
+        2026,
+        9,
+        25,
+        12,
+        30,
+        tzinfo=timezone.utc,
+    )
+    assert resolution.event_time_source == "longbridge"
+    assert resolution.reason is None
+    assert resolution.warnings == (
+        "event_time_uses_vendor_timestamp",
+    )
 
 
 def test_fetch_uses_utc_window_and_as_of_cutoff() -> None:

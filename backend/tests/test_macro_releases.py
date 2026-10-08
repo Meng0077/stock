@@ -10,6 +10,7 @@ from stock_agent.macro.release_builders import (
     build_macro_release,
     get_latest_release,
     get_latest_release_date,
+    get_release_dates,
     resolve_scheduled_release_at,
 )
 from stock_agent.macro.models.snapshot import MacroSnapshot
@@ -58,6 +59,41 @@ def test_latest_release_date_excludes_future_dates():
     )
 
     assert result == date(2026, 9, 11)
+
+
+def test_release_dates_apply_history_boundary_order_and_limit():
+    class FakeFred:
+        def get_series_release(self, series_id: str) -> FredRelease:
+            return FredRelease(release_id=10, name=series_id)
+
+        def get_release_dates(
+            self,
+            release_id: int,
+            *,
+            include_future: bool,
+        ) -> list[date]:
+            assert release_id == 10
+            assert include_future is False
+            return [
+                date(2026, 6, 11),
+                date(2026, 9, 11),
+                date(2026, 8, 12),
+                date(2026, 10, 14),
+                date(2026, 7, 14),
+            ]
+
+    result = get_release_dates(
+        fred=FakeFred(),  # type: ignore[arg-type]
+        series_id="CPIAUCSL",
+        as_of=date(2026, 10, 20),
+        before=date(2026, 9, 11),
+        limit=2,
+    )
+
+    assert result == [
+        date(2026, 8, 12),
+        date(2026, 7, 14),
+    ]
 
 
 def test_build_macro_release_groups_metrics_and_schedule():

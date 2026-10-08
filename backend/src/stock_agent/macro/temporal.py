@@ -227,6 +227,7 @@ def validate_release_as_of(
 
     普通研究：
         已确认 released_at 的事件按精确时间判断；
+        vendor_release_at 可以作为带 warning 的时间；
         只有 release_date 的事件保守地等到下一天。
 
     严格 PIT：
@@ -239,31 +240,53 @@ def validate_release_as_of(
 
     research_date = as_of.astimezone(EASTERN).date()
 
-    # 1. 已取得经核实的实际发布时间。
-    if release.released_at is not None:
-        released_at = release.released_at
+    uses_vendor_timestamp = (
+        release.released_at is None
+        and release.vendor_release_at is not None
+    )
+    event_at = (
+        release.released_at
+        if release.released_at is not None
+        else release.vendor_release_at
+    )
+
+    # 1. 已取得经核实的实际发布时间，
+    #    或普通研究允许使用的供应商事件时间。
+    if event_at is not None:
 
         if (
-            released_at.tzinfo is None
-            or released_at.utcoffset() is None
+            event_at.tzinfo is None
+            or event_at.utcoffset() is None
         ):
             return TemporalValidation(
                 decision="reject",
-                reason="invalid_release_timestamp",
+                reason=(
+                    "invalid_vendor_release_timestamp"
+                    if uses_vendor_timestamp
+                    else "invalid_release_timestamp"
+                ),
             )
 
-        if released_at > as_of:
+        if event_at > as_of:
             return TemporalValidation(
                 decision="reject",
-                reason="release_not_yet_published",
+                reason=(
+                    "vendor_release_after_as_of"
+                    if uses_vendor_timestamp
+                    else "release_not_yet_published"
+                ),
             )
 
-        if released_at.astimezone(EASTERN).date() != (
+        if event_at.astimezone(EASTERN).date() != (
             release.release_date
         ):
             return TemporalValidation(
                 decision="reject",
-                reason="release_date_time_conflict",
+                reason=(
+                    "vendor_release_date_time_conflict"
+                    if uses_vendor_timestamp
+                    else "release_date_time_conflict"
+                ),
             )
 
     # 2. 只有发布日期，没有实际发布时间。
@@ -294,6 +317,14 @@ def validate_release_as_of(
             reason="release_date_source_unverified",
         )
 
+    # Vendor timestamp 不是已经独立核实的实际发布时间，
+    # 因此不能进入严格 PIT 研究。
+    if strict_pit and uses_vendor_timestamp:
+        return TemporalValidation(
+            decision="reject",
+            reason="vendor_release_time_unverified",
+        )
+
     # 4. 严格 PIT 需要验证事件和统计期的对应关系。
     if (
         strict_pit
@@ -309,6 +340,12 @@ def validate_release_as_of(
         return TemporalValidation(
             decision="usable_with_warning",
             reason="release_period_binding_unverified",
+        )
+
+    if uses_vendor_timestamp:
+        return TemporalValidation(
+            decision="usable_with_warning",
+            reason="event_time_uses_vendor_timestamp",
         )
 
     return TemporalValidation(

@@ -306,9 +306,7 @@ def prepare_event_market_data(
             issues=[resolution.reason or "event_time_unavailable"],
         )
 
-    extra_issues = []
-    if resolution.warning:
-        extra_issues.append(resolution.warning)
+    extra_issues = list(resolution.warnings)
 
     return prepare_timed_event_market_data(
         event_id=release.release_id,

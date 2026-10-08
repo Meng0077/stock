@@ -34,7 +34,8 @@
 | D34 Decision Trace | 已完成 | 指标、阈值与价格来源证据；Decision 组合路径、反对理由和失效条件；宏观与 Market Reaction 保持独立 |
 | D35 Agent 多维市场研究 | 已完成 | `evaluate_market`、Macro 与 Market Reaction 按需编排；保留独立 Evidence、Decision Guard、pending 状态和非因果边界 |
 | Earnings Market Reaction 扩展 | 已完成 | 以 SEC 8-K Item 2.02 确认最近财报披露，以 SEC accepted_at 为受限事件时间，复用 5m/30m/1h/正式收盘 Reaction 引擎 |
-| D36–D45 | 待开发 | LangGraph、React 联调、评估与部署 |
+| D36 LangGraph 按需研究工作流 | 已完成 | Planner → Research → Checker → Answer；财报 RAG、行情、宏观和 Market Reaction 按问题组合执行，资料不足最多补查一次 |
+| D37–D45 | 待开发 | Checkpoint、取消恢复、React 联调、评估与部署 |
 
 各开发日的设计、验收记录和已知限制位于 [`docs/`](docs/)。当前状态以对应 day 文档和测试结果为准，不把 fixture、历史数据或尚未联调的能力描述为实时生产能力。
 
@@ -200,4 +201,5 @@ PYTHONPATH=backend/src backend/.venv/bin/python evals/verify_earnings_market_rea
 - [D32：Trend、Momentum 与 Level 因子](docs/day32.md)
 - [D33：Guard、Factors 与 Decision 流程](docs/day33.md)
 - [D34：Decision Trace、反对理由与失效条件](docs/day34.md)
+- [D36：LangGraph 按需研究工作流](docs/day36.md)
 - [前端开发计划](docs/frontend-development-plan.md)

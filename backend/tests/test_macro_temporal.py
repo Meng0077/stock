@@ -38,6 +38,7 @@ def make_metric(
 def make_release(
     *,
     release_date: date = date(2026, 9, 11),
+    vendor_release_at: datetime | None = None,
     released_at: datetime | None = None,
     release_date_source: str = "fixture",
     period_binding: str = "latest_assumed",
@@ -47,6 +48,10 @@ def make_release(
         release_id=f"cpi:{release_date.isoformat()}",
         release_type="cpi",
         release_date=release_date,
+        vendor_release_at=vendor_release_at,
+        vendor_release_at_source=(
+            "longbridge" if vendor_release_at else None
+        ),
         released_at=released_at,
         release_date_source=release_date_source,
         period_binding=period_binding,
@@ -97,6 +102,65 @@ def test_precise_release_time_blocks_future_and_accepts_past():
     assert before.decision == "reject"
     assert after.reason == "release_available"
     assert after.decision == "usable"
+
+
+def test_vendor_release_time_is_warning_and_not_strict_pit() -> None:
+    release = make_release(
+        vendor_release_at=datetime(
+            2026, 9, 11, 8, 30, tzinfo=EASTERN
+        ),
+        period_binding="verified",
+    )
+    as_of = datetime(2026, 9, 11, 9, 0, tzinfo=EASTERN)
+
+    ordinary = validate_release_as_of(release, as_of=as_of)
+    strict = validate_release_as_of(
+        release,
+        as_of=as_of,
+        strict_pit=True,
+    )
+
+    assert ordinary.decision == "usable_with_warning"
+    assert ordinary.reason == "event_time_uses_vendor_timestamp"
+    assert strict.decision == "reject"
+    assert strict.reason == "vendor_release_time_unverified"
+
+
+@pytest.mark.parametrize(
+    ("vendor_release_at", "as_of", "reason"),
+    [
+        (
+            datetime(2026, 9, 11, 8, 30),
+            datetime(2026, 9, 11, 9, 0, tzinfo=EASTERN),
+            "invalid_vendor_release_timestamp",
+        ),
+        (
+            datetime(2026, 9, 11, 8, 30, tzinfo=EASTERN),
+            datetime(2026, 9, 11, 8, 29, tzinfo=EASTERN),
+            "vendor_release_after_as_of",
+        ),
+        (
+            datetime(2026, 9, 12, 8, 30, tzinfo=EASTERN),
+            datetime(2026, 9, 12, 9, 0, tzinfo=EASTERN),
+            "vendor_release_date_time_conflict",
+        ),
+    ],
+)
+def test_vendor_release_time_must_be_temporally_valid(
+    vendor_release_at: datetime,
+    as_of: datetime,
+    reason: str,
+) -> None:
+    validation = validate_release_as_of(
+        make_release(
+            vendor_release_at=vendor_release_at,
+            period_binding="verified",
+        ),
+        as_of=as_of,
+    )
+
+    assert validation.decision == "reject"
+    assert validation.reason == reason
 
 
 def test_release_date_and_precise_time_must_agree():

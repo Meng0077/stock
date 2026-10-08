@@ -1,6 +1,10 @@
-"""公司资料工具练习：以下为本地教学数据，不是实时查询结果。"""
-
+from stock_agent.documents.sec_provider import (
+    UnknownTickerError,
+    get_company_submissions,
+    ticker_to_cik,
+)
 from stock_agent.tools.errors import UnsupportedCompanyError
+
 
 COMPANY_PROFILE = {
     "company_id": "NVDA",
@@ -11,20 +15,128 @@ COMPANY_PROFILE = {
     "as_of": "2026-09-11T09:00:00+08:00",
 }
 
-# TODO：你来实现 get_company_profile(company_id: str) -> dict。
-# 仅支持 NVDA；其他标识抛出 ValueError。
-# 返回字典副本（COMPANY_PROFILE.copy()），避免调用者修改这份固定数据。
+
 def get_company_profile(company_id: str) -> dict:
+    """返回原有教学用公司资料，不访问网络。"""
     if company_id != "NVDA":
-        raise UnsupportedCompanyError(f"不支持的公司标识：{company_id}")
+        raise UnsupportedCompanyError(
+            f"不支持的公司标识：{company_id}"
+        )
     return COMPANY_PROFILE.copy()
 
-if __name__ == "__main__":
-    # 测试 get_company_profile() 函数
-    try:
-        profile = get_company_profile("NVDA")
-        print("公司资料查询成功：")
-        for k, v in profile.items():
-            print(f"  {k}: {v}")
-    except ValueError as e:
-        print(f"查询失败：{e}")
+
+def get_sec_company_profile(
+    company_id: str,
+) -> dict:
+    """
+    从 SEC 获取公司的真实基础资料。
+
+    数据流程：
+
+        ticker
+          ↓
+        SEC ticker mapping
+          ↓
+        CIK
+          ↓
+        SEC submissions
+          ↓
+        company profile
+
+    当前返回的是 SEC 当前提供的公司元数据，
+    不是历史 point-in-time profile。
+    """
+
+    symbol = (
+        company_id
+        .strip()
+        .upper()
+    )
+
+    cik = ticker_to_cik(
+        symbol
+    )
+
+    if cik is None:
+        raise UnknownTickerError(
+            symbol
+        )
+
+    submissions = (
+        get_company_submissions(
+            cik=cik
+        )
+    )
+
+    return {
+        "company_id": symbol,
+        "company_name": (
+            submissions["name"]
+        ),
+        "cik": cik,
+
+        "tickers": (
+            submissions.get(
+                "tickers",
+                [],
+            )
+        ),
+
+        "exchanges": (
+            submissions.get(
+                "exchanges",
+                [],
+            )
+        ),
+
+        "sic": (
+            submissions.get(
+                "sic"
+            )
+        ),
+
+        "sic_description": (
+            submissions.get(
+                "sicDescription"
+            )
+        ),
+
+        "entity_type": (
+            submissions.get(
+                "entityType"
+            )
+        ),
+
+        "fiscal_year_end": (
+            submissions.get(
+                "fiscalYearEnd"
+            )
+        ),
+
+        "state_of_incorporation": (
+            submissions.get(
+                "stateOfIncorporation"
+            )
+        ),
+
+        "website": (
+            submissions.get(
+                "website"
+            )
+        ),
+
+        "investor_website": (
+            submissions.get(
+                "investorWebsite"
+            )
+        ),
+
+        "description": (
+            submissions.get(
+                "description"
+            )
+        ),
+
+        "data_mode": "live",
+        "source": "SEC submissions",
+    }

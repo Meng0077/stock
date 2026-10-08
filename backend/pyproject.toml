@@ -32,7 +32,10 @@ dependencies = [
 where = ["src"]
 
 [project.optional-dependencies]
-dev = ["pytest==9.1.1"]
+dev = [
+    "pyright==1.1.414",
+    "pytest==9.1.1",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -137,6 +137,46 @@ def fetch_optional_consensus(
         warnings.append(f"{release_type}_consensus_unavailable")
         return []
 
+def get_release_dates(
+    *,
+    fred: FredProvider,
+    series_id: str,
+    as_of: date,
+    limit: int,
+    before: date | None = None,
+) -> list[date]:
+    """
+    获取截至 as_of 最近 N 个官方发布日期。
+
+    as_of：
+        当前研究允许看到的最大日期。
+
+    before：
+        可选的严格历史边界。
+        如果提供，只返回 release_date < before。
+
+    limit：
+        最多返回多少个发布日期。
+    """
+    if limit <= 0:
+        raise ValueError(
+            "limit must be positive"
+        )
+
+    release = fred.get_series_release(series_id)
+    release_dates = fred.get_release_dates(
+        release.release_id,
+        include_future=False,
+    )
+
+    candidates = [
+        release_date
+        for release_date in release_dates
+        if release_date <= as_of and (before is None or release_date < before)
+    ]
+    candidates.sort(reverse=True)
+
+    return candidates[:limit]
 
 def get_latest_release_date(
     *,
@@ -150,17 +190,14 @@ def get_latest_release_date(
     release_date 与某个 reference period 已经严格一一对应。
     """
 
-    release = fred.get_series_release(series_id)
-    release_dates = fred.get_release_dates(
-        release.release_id,
-        include_future=False,
+    dates = get_release_dates(
+        fred=fred,
+        series_id=series_id,
+        as_of=as_of,
+        limit=1,
     )
-    candidates = [
-        release_date
-        for release_date in release_dates
-        if release_date <= as_of
-    ]
-    return max(candidates) if candidates else None
+
+    return dates[0] if dates else None
 
 
 def build_macro_release(
@@ -838,7 +875,7 @@ def build_longbridge_release(
         )
         return None
 
-    scheduled_at = next(iter(times))
+    vendor_release_at = next(iter(times))
 
     # 第三阶段：生成有 Actual 的指标。
     metrics: list[MacroMetricSnapshot] = []
@@ -911,8 +948,16 @@ def build_longbridge_release(
         release_id=f"{release_type}:{release_date.isoformat()}",
         release_type=release_type,
         release_date=release_date,
-        scheduled_release_at=scheduled_at,
+        # Longbridge 返回的是供应商事件时间，
+        # 不是日历 scheduled time。
+        scheduled_release_at=None,
+        schedule_source=None,
+        vendor_release_at=vendor_release_at,
+        vendor_release_at_source=(
+            "longbridge"
+        ),
         released_at=None,
+        released_at_source=None,
         release_date_source="longbridge",
         # 已检查供应商内部的一致性，但尚未独立核实
         # 统计期与发布日期的官方绑定关系。
@@ -1041,7 +1086,7 @@ def build_longbridge_labor_release(
         )
         return None
 
-    scheduled_at = next(iter(event_times))
+    vendor_release_at = next(iter(event_times))
 
     # ---------- 第三阶段：组装实际指标 ----------
 
@@ -1118,11 +1163,16 @@ def build_longbridge_labor_release(
         release_type=release_type,
         release_date=release_date,
 
-        scheduled_release_at=scheduled_at,
-        schedule_source="longbridge",
+        vendor_release_at=vendor_release_at,
+        vendor_release_at_source="longbridge",
+
+        scheduled_release_at=None,
+        schedule_source=None,
+
+        released_at=None,
+        released_at_source=None,
 
         # 没有单独核实的实际发布时间。
-        released_at=None,
         release_date_source="longbridge",
 
         # 供应商内部校验不等于官方 PIT 验证。

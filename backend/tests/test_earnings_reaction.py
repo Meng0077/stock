@@ -8,6 +8,7 @@ from stock_agent.documents.schemas import FilingFile, FilingMetadata
 from stock_agent.market import earnings
 from stock_agent.market.earnings import (
     EarningsReleaseEvent,
+    get_earnings_releases,
     get_latest_earnings_release,
     is_earnings_8k,
     research_earnings_reaction,
@@ -125,10 +126,10 @@ def test_latest_earnings_release_skips_non_earnings_8k(monkeypatch):
     )
 
     get_recent.assert_called_once_with(
-        "NVDA",
-        as_of,
+        company_id="NVDA",
+        as_of=as_of,
         forms={"8-K"},
-        limit=20,
+        limit=earnings.EARNINGS_8K_SCAN_LIMIT,
     )
     assert classify.call_args_list == [
         call(other),
@@ -147,6 +148,54 @@ def test_latest_earnings_release_skips_non_earnings_8k(monkeypatch):
         source_url=target.document_url,
         warnings=("event_time_uses_sec_8k_acceptance",),
     )
+
+
+def test_earnings_history_scans_candidates_and_respects_before(monkeypatch):
+    filings = [
+        make_filing(
+            accession_number=f"0001045810-26-00010{index}",
+            accepted_at=datetime(
+                2026,
+                9,
+                day,
+                20,
+                tzinfo=timezone.utc,
+            ),
+        )
+        for index, day in enumerate((12, 10, 9, 8))
+    ]
+    get_recent = Mock(return_value=filings)
+    classify = Mock(side_effect=[False, True])
+    monkeypatch.setattr(earnings, "get_recent_filings", get_recent)
+    monkeypatch.setattr(earnings, "is_earnings_8k", classify)
+
+    result = get_earnings_releases(
+        symbol=" nvda ",
+        as_of=datetime(2026, 9, 14, tzinfo=timezone.utc),
+        before=datetime(2026, 9, 11, tzinfo=timezone.utc),
+        limit=1,
+    )
+
+    get_recent.assert_called_once_with(
+        company_id="NVDA",
+        as_of=datetime(2026, 9, 14, tzinfo=timezone.utc),
+        forms={"8-K"},
+        limit=earnings.EARNINGS_8K_SCAN_LIMIT,
+    )
+    assert classify.call_args_list == [call(filings[1]), call(filings[2])]
+    assert [item.accession_number for item in result] == [
+        filings[2].accession_number
+    ]
+
+
+def test_earnings_history_requires_aware_before() -> None:
+    with pytest.raises(ValueError, match="before must be timezone-aware"):
+        get_earnings_releases(
+            symbol="NVDA",
+            as_of=datetime(2026, 9, 14, tzinfo=timezone.utc),
+            before=datetime(2026, 9, 11),
+            limit=3,
+        )
 
 
 def test_research_earnings_reaction_uses_generic_timed_service(

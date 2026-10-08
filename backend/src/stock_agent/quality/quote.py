@@ -31,7 +31,7 @@ def validate_quote(
 ) -> DataQualityResult:
     # 检查一条报价是否适合当前价格分析
 
-    target_id = symbol.upper()
+    target_id = symbol.strip().upper()
 
     def make_result(
         status: QualityStatus,

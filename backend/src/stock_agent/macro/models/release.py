@@ -50,8 +50,13 @@ class MacroReleaseEvent(BaseModel):
     release_type: MacroReleaseType
     release_date: date
     scheduled_release_at: datetime | None = None
-    released_at: datetime | None = None
 
+    # 数据供应商报告的事件时间。
+    vendor_release_at: datetime | None = None
+    vendor_release_at_source: str | None = None
+
+    # 已确认的真实发布时间。
+    released_at: datetime | None = None
     # released_at 的证据来源。
     #
     # 注意：
