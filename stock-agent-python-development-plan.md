@@ -1,6 +1,6 @@
 # AI 辅助美股研究 Agent · Python 开发计划
 
-- 版本：v3.3，2026-09-25；聚焦财报 RAG、行情与技术分析、宏观数据和 Market Reaction 四条核心研究链路。
+- 版本：v3.4，2026-10-08；补充 Company Registry、Target Resolver 与 Workflow 接入，并保留财报 RAG、行情与技术分析、宏观数据和 Market Reaction 四条核心研究链路。
 - 定位：面向 Agent 开发岗位的可演示项目；模型负责理解问题、调用只读工具、检索资料和解释结果，行情、宏观、市场反应与决策规则由可复现的 Python 模块完成。
 - 排期：面试版 9 周、45 个开发日、约 180 小时；按每天 4 小时、每周 5 天估算。若 Python 异步、数据源接入或部署比预期慢，另留 1–2 周缓冲。
 - 当前进度：D11–D15 已完成本地 RAG、通用 Knowledge Tool、SEC Provider、HTML 解析和任意 ticker 的首次按需索引，见对应 day 文档；中文检索、SEC 历史清单及无匹配资料的细分原因等已记录遗留项继续保留。D16 已完成 PostgreSQL / pgvector 的原文、chunk、embedding 和索引快照持久化。D17 已完成 exact snapshot、latest compatible snapshot、按 accession 增量更新和历史检索时间边界。D18 已完成最小 SEC Company Facts、Financial Tool、精确数值存储及 Financial / Knowledge evidence 组合校验。D21 已完成 MarketDataProvider、Quote / Bar 契约和离线 Fixture 验收。D22 已完成 Longbridge 适配器、离线测试及 NVDA / AMD 真实在线验收。D24 已完成 CPI、PPI、PCE、就业、Claims、Fed / SEP 和美债核心链路、基于供应商 Forecast 的非 PIT Estimated Surprise、Macro Tool 及 evidence 校验，并通过离线测试、真实 Provider 和真实模型 Agent 端到端验收；严格 PIT Surprise、历史 vintage 回放和可靠实际发布时间不在首版范围。D25 已完成 Quote、日线、技术指标和宏观发布的统一质量状态、未来/过期/缺失/窗口不足检查、部分结果降级及 Agent Tool 接入。D26 已完成 1m IntradayBar、分钟行情能力异常、交易时段覆盖、长桥历史分钟行情接入及真实 NVDA 核心链路验收，见 docs/day26.md。D19、D20 延后。
@@ -32,7 +32,176 @@
 
 RAG 用于非结构化资料和可追溯引用；报价、K 线、精确财务指标、宏观数据和 Market Reaction 从结构化接口与确定性计算读取，不让模型从文章中猜精确数字。Market、Financial、Knowledge、Macro 和 Market Reaction 各自保持独立来源与时间语义，模型按问题组合调用。
 
-### 1.2 任意 ticker 的按需索引
+### 1.2 Company Registry、Target Resolver 与 Workflow 接入
+
+Company 层采用 `Registry + Resolver + Workflow 接入` 三层结构。目标不是只把某个中文公司名转换成 ticker，而是把用户自然语言中的一个或多个公司 / 证券标的完整识别，并归一化成系统内部可验证的 ticker。Resolver 可以发现多个标的；首阶段研究业务仍只在唯一标的 `resolved` 时继续，不能因为当前只支持单股票就从解析阶段丢掉其他标的。
+
+```text
+User Message
+    ↓
+TargetResolver
+    ├─ Explicit Ticker Scan
+    ├─ Known Alias Scan
+    ├─ Coverage Check
+    └─ LLM Semantic Resolution（仅在覆盖不足时）
+    ↓ candidate tickers
+CompanyRegistry（统一验证）
+    ↓
+TargetResolution
+    ├─ resolved
+    ├─ multiple
+    ├─ ambiguous
+    └─ unresolved
+```
+
+#### CompanyRegistry：统一的确定性公司数据层
+
+建议目录：
+
+```text
+backend/src/stock_agent/company/
+├── __init__.py
+├── registry.py
+├── aliases.py
+└── resolver.py
+```
+
+Registry 复用 SEC `company_tickers.json`，统一回答“ticker 是否为认可的真实证券，以及对应的公司名称和 CIK”。SEC Documents、Financial、Knowledge 与 TargetResolver 必须共享这一层，不能分别维护平行的 ticker / CIK 映射。
+
+```python
+@dataclass(frozen=True)
+class CompanyRecord:
+    ticker: str
+    title: str
+    cik: str
+```
+
+首版核心接口：
+
+```python
+load_company_registry()
+
+find_company_by_ticker(
+    ticker: str,
+) -> CompanyRecord | None
+```
+
+Registry 是证券真实性的最终确定性校验层。LLM、别名表和正则扫描都只能产生 candidate，未经 Registry 验证的 token 不能成为研究标的。
+
+#### Explicit ticker 与 Alias 扫描
+
+现有“1–5 个英文字母就当作 ticker”的 `extract_company_id()` 需要替换为“扫描 ticker-like token → Registry 验证”。例如 `CPI 后 NVDA 怎么走` 中，`CPI` 验证失败后丢弃，`NVDA` 验证通过后保留。
+
+`aliases.py` 只维护高频且含义明确的中文名、英文简称和投资社区昵称，例如 `英伟达 / nvidia / 达子 → NVDA`、`苹果 / apple / 果子 → AAPL`。它不是全市场公司数据库，长尾表达交给 LLM。Alias scanner 必须扫描完整句子并与显式 ticker 合并、去重，不能命中第一个标的后提前返回。因此“比较 NVDA 和果子”必须得到 `NVDA, AAPL`。
+
+#### TargetResolver 与 TargetResolution
+
+Resolver 只负责“用户要研究谁”，不负责行情、SEC filings、技术分析或研究结论。入口使用复数名称以保留多标的发现能力：
+
+```python
+async def resolve_targets(
+    message: str,
+    *,
+    model: BaseChatModel,
+) -> TargetResolution:
+    ...
+```
+
+```python
+TargetResolutionStatus = Literal[
+    "resolved",
+    "multiple",
+    "ambiguous",
+    "unresolved",
+]
+
+class TargetResolution(BaseModel):
+    status: TargetResolutionStatus
+    company_id: str | None = None
+    candidates: list[str] = Field(default_factory=list)
+```
+
+状态语义固定为：
+
+| 状态 | 含义 |
+| --- | --- |
+| `resolved` | 唯一明确且经过 Registry 验证的 ticker；`company_id` 有值 |
+| `multiple` | 用户明确要求研究多个不同标的；所有已识别标的保留在 `candidates` |
+| `ambiguous` | 用户想研究一个实体，但该实体可能对应多个证券，例如 Google 对应 GOOG / GOOGL |
+| `unresolved` | 无法可靠判断用户指向的公司或证券 |
+
+Resolver 的固定执行顺序为：
+
+```text
+message
+  ↓
+explicit ticker scan → Registry Verify
+  ↓
+known alias scan → Registry Verify
+  ↓
+merge + deduplicate
+  ↓
+Coverage Check
+  ├─ coverage enough → classify TargetResolution
+  └─ coverage unsure
+       ↓
+     LLM semantic resolution
+       ↓
+     Registry Verify
+       ↓
+     merge + classify
+```
+
+Coverage Check 不能简单写成“识别出一个 target 就返回”。当句子包含“比较、对比、和、与、跟、以及、vs、versus、另外、再看看、相比、哪个、两者”等明显多标的或未覆盖迹象，而 deterministic 路径只找到一个标的时，必须进入 LLM fallback，不能偷偷只研究已识别出的那一个。
+
+LLM 的职责严格限制为理解长尾实体指代，不负责验证 ticker、维护证券数据库或覆盖 deterministic 事实。调用 LLM 时同时传入 `verified_targets`，要求它只找仍未覆盖的实体；LLM 返回的 candidate 仍必须经过 Registry 验证后才能接受。
+
+#### Workflow 接入与阶段边界
+
+输入层保持三个对象的职责分离：
+
+```text
+ResearchInput
+= 用户原始自然语言
+
+TargetResolution
+= 标的解析结果
+
+ResearchRequest
+= 标的已经唯一归一化后的正式研究命令
+```
+
+`ResearchRequest.company_id` 继续保持必填，不改成 Optional。第一阶段完成 Registry、显式 ticker、Alias、Coverage Check、LLM fallback 和四种状态；只有 `resolved` 进入现有单股票 `ResearchRequest`，`multiple / ambiguous / unresolved` 明确停止并保留全部候选，不能静默丢弃。
+
+第二阶段接入 LangGraph：
+
+```text
+START
+  ↓
+resolve_target
+  ↓
+TargetResolution
+  ├─ resolved → build ResearchRequest → planner
+  ├─ multiple → 首阶段 terminal；后续进入 multi-target workflow
+  ├─ ambiguous → clarify_target → interrupt() → resume → planner
+  └─ unresolved → answer / terminal
+```
+
+Graph State 届时增加 `research_input`、`target_resolution` 和解析完成后的 `request`。Resolver 单测先独立通过，再接 Graph；多股票研究流程不与第一阶段标的解析同时实现。
+
+固定验收样例至少包括：
+
+| 输入 | 预期 |
+| --- | --- |
+| `NVDA 现在多少钱` | `resolved / NVDA` |
+| `最近 CPI 后 NVDA 怎么走` | `CPI` 被 Registry 丢弃，`resolved / NVDA` |
+| `英伟达接下来的走势`、`达子最近怎么看` | Alias 命中，`resolved / NVDA` |
+| `比较 NVDA 和苹果` | `multiple / [NVDA, AAPL]` |
+| `Google 怎么看` | `ambiguous / [GOOG, GOOGL]` |
+| `帮我看看那个芯片公司` | 无可靠上下文时 `unresolved` |
+| `比较 NVDA 和一家我最近提到的芯片公司` | Coverage 不足时进入 LLM；无法确认时不得只研究 NVDA |
+
+### 1.3 任意 ticker 的按需索引
 
 ```text
 retrieve_knowledge(company_id, question)
@@ -57,7 +226,7 @@ Agent 只使用 `retrieve_knowledge(company_id: str, question: str)`，不接触
 
 Freshness 以 Provider 返回的可用 filing 清单与本地已索引清单比较，记录检查时间；“最新”指声明的文档范围内截至任务 as_of 的可用版本。新增 accession 才触发新增文档处理；修订文件保留独立版本。未变文档不重复下载、分段或生成向量。Embedding 或分段配置变化时重建受影响索引，失败或只完成部分导入不能被标记为最新可用索引。索引是可重建的本地缓存，原文、版本和引用仍需保留。
 
-### 1.3 Agent 与确定性分析模块的职责
+### 1.4 Agent 与确定性分析模块的职责
 
 1. LangChain Agent 识别用户意图，调用白名单只读工具，并决定是否需要检索更多证据。
 2. Knowledge Tool 内部负责索引检查、必要的获取和更新；检索层返回本次实际提供的文档片段及证据 ID，应用层校验引用归属和资料时间。
@@ -65,13 +234,13 @@ Freshness 以 Provider 返回的可用 filing 清单与本地已索引清单比�
 4. Decision Engine 使用 TechnicalContext、MacroSnapshot 和可选 MarketReaction，通过固定规则生成市场观点和 Decision Trace。分数只是规则分数；未经校准不能称为获利概率。
 5. 模型把上述结构化结果解释给用户，不得改变工具数值、时间边界或 Guard 结论。宏观 Estimated Surprise、技术观点和已观察市场反应分别表述；Estimated Surprise 不能表述为严格 PIT Surprise，市场反应不能被解释为已证明的因果关系。
 
-### 1.4 数据时间与保密边界
+### 1.5 数据时间与保密边界
 
 每个外部输入至少记录 source、data_mode、event_at 或统计期、published_at（如适用）、received_at 和任务 as_of；所有具体时间带时区。研究只使用截至 as_of 已可获得的信息；历史评估不能把后来发布的宏观数据、财报修订或模型知识伪装成当时已知。
 
 API 密钥、数据库凭据和供应商令牌不进入模型上下文、响应或日志。首版不保存用户账户和持仓，不提供个人风险阈值或仓位建议。
 
-### 1.5 技术分析与决策的衔接
+### 1.6 技术分析与决策的衔接
 
 ```text
 Market Data：Quote + 已完成 Bars
@@ -128,7 +297,7 @@ API 可先同步返回完整结果，随后根据演示需要加有限的流式�
 | 第 5 周 | D21–D25 | 行情、TechnicalContext、MacroSnapshot 与时间校验 | 技术指标和宏观发布可复核，行情与宏观时间边界清楚可见 |
 | 第 6 周 | D26–D30 | 宏观事件与 Market Reaction | 宏观发布与分钟行情可靠对齐，观察窗口收益和基准差异可复算 |
 | 第 7 周 | D31–D35 | 可复现的多维市场分析引擎 | 技术面、宏观与市场反应分别可追溯，结构化研究结论可复现 |
-| 第 8 周 | D36–D40 | 小范围 LangGraph 与 React 工作台 | 四条核心研究链路按需运行，网页展示与取消恢复路径可演示 |
+| 第 8 周 | D36–D40 | Company 标的解析、小范围 LangGraph 与 React 工作台 | 自然语言标的先完成 Registry 验证和解析分流；四条核心研究链路按需运行，网页展示与取消恢复路径可演示 |
 | 第 9 周 | D41–D45 | 集成评估、故障演示、部署与面试讲解 | 可从干净环境启动并完成 5–8 分钟面试演示 |
 
 前端任务已提取为独立并行开发线，详见 `docs/frontend-development-plan.md`。当前可在 D08/D09 期间基于公开 API 契约与 mock 完成 FE01/FE02；真实 API 联调在 D10 收口，后期引用、数据时间、Decision Trace、MacroSnapshot 与 Market Reaction 界面继续受对应后端契约约束。
@@ -239,10 +408,10 @@ FRED 只返回某次经济数据发布的日期，并不足以独立支持 T+5m 
 | 开发日 | 任务 | 完成标准 |
 | --- | --- | --- |
 | D36 | 建立 LangGraph 状态及取数、检索、校验、分析、解释节点 | 已完成：财报 RAG、行情、宏观和 MarketReaction 按问题组合执行；证据不足时最多补查一次，然后进入 `cannot_retry` 明确结束，见 `docs/day36.md` |
-| D37 | 加入 Checkpoint、取消及恢复演示 | 可以取消长时间任务，恢复时明确区分已完成和需要重跑的节点；旧任务结果不能覆盖新任务 |
-| D38 | 完善 React 对话界面与结构化研究结果展示 | 支持动态 ticker；展示行情时间、技术指标、财报引用、宏观统计期及数据质量提示 |
-| D39 | 展示技术面、宏观与市场反应可视化 | 展示均线、关键价位、失效条件、宏观 Actual/Consensus/Estimated Surprise 及其非 PIT 标记、市场反应观察窗口及基准对比 |
-| D40 | 完成端到端工作流验收 | 演示正常研究、财报缺失、宏观数据缺失、分钟行情不可用、过期数据及任务取消场景 |
+| D37 | 实现 CompanyRegistry 与 TargetResolver | SEC Registry 成为 ticker / CIK 统一数据层；完整扫描显式 ticker 与 Alias；Coverage Check 只在必要时触发 LLM；LLM candidate 再经 Registry 验证；固定案例覆盖 `resolved / multiple / ambiguous / unresolved` |
+| D38 | 将 TargetResolver 接入 LangGraph，并加入 Checkpoint、澄清、取消及恢复 | `resolved` 才构造 ResearchRequest 并进入 Planner；`multiple` 首阶段明确停止；`ambiguous` 可通过 `interrupt()` 澄清并 resume；`unresolved` 进入终态回答；恢复时区分已完成节点和需要重跑节点，旧任务不能覆盖新任务 |
+| D39 | 完善 React 对话界面、标的澄清与结构化研究可视化 | 展示标的解析状态与候选项，以及行情时间、技术指标、财报引用、宏观统计期、数据质量、均线、关键价位、失效条件和市场反应窗口 |
+| D40 | 完成端到端工作流验收 | 演示唯一标的正常研究、多标的停止、歧义标的澄清、无法解析、财报缺失、宏观数据缺失、分钟行情不可用、过期数据及任务取消场景 |
 
 界面中的市场反应先用简单表格和折线图，不开发复杂的专业交易终端。如果增加 SSE，持久事件与临时 token 分开处理；断线后读取快照，不把不完整文本当成最终对象。
 
@@ -262,6 +431,7 @@ FRED 只返回某次经济数据发布的日期，并不足以独立支持 T+5m 
 
 | 模块 | 首版安排 |
 | --- | --- |
+| Company Registry 与 Target Resolver | 新增 D37–D38；首阶段完整识别多个候选，但只让唯一 `resolved` 标的进入现有单股票研究流程 |
 | 财报 RAG 与结构化财务数据 | 保留 |
 | 实时或延迟行情、日线与技术分析 | 保留 |
 | 宏观数据与 Estimated Surprise | 保留；严格 PIT Surprise 不在首版范围 |
@@ -280,7 +450,7 @@ FRED 只返回某次经济数据发布的日期，并不足以独立支持 T+5m 
 
 | 方法与路径 | 用途 | 关键检查 |
 | --- | --- | --- |
-| POST /api/chat/runs | 从自然语言创建对话式研究 | 消息校验、标的识别、服务端 as_of/data_mode、信息不足路径 |
+| POST /api/chat/runs | 从自然语言创建对话式研究 | 原始 `ResearchInput` 先经过 TargetResolver；保留 `resolved / multiple / ambiguous / unresolved`，只有唯一标的才构造 ResearchRequest；服务端控制 as_of/data_mode |
 | POST /api/runs | 创建已归一化的研究任务 | 问题、标的、资料截止时间、身份和预算；保留现有教学与评估契约 |
 | GET /api/runs/{run_id} | 读取结果快照 | 任务身份、最新状态和版本 |
 | GET /api/runs/{run_id}/events | 可选事件订阅 | run_id、seq、断线后快照重建 |
@@ -300,13 +470,15 @@ Agent 的只读工具边界：
 | get_macro_snapshot(as_of) | 截至 as_of 的结构化宏观发布、政策和收益率曲线 | D24 接真实 Macro Provider 与确定性计算 |
 | get_market_reaction(company_id, release_id) | 宏观事件后的观察窗口收益和基准差异 | D26–D30 接分钟行情、时间对齐与 MarketReactionEngine |
 
-工具命名不带特定公司。公司解析、按需索引和 freshness 属于工具内部实现；任务 as_of 由应用层上下文传入。请求 data_mode 是应用层访问策略，单条证据模式由实际 Provider 产生，最终模式从回答引用的证据反推，不能由模型绕过或传入底层改变资料性质。fixture 工具仍可限定教学资料，但真实 Provider 不能沿用只允许 NVDA 的判断。宏观文档与公司 filings 分开标识，不伪造所属公司；当前 None 宏观过滤保留为本地练习。
+工具命名不带特定公司。CompanyRegistry 是 SEC Documents、Financial、Knowledge 与 TargetResolver 共享的 ticker / CIK 基础数据层；TargetResolver 在正式 ResearchRequest 之前完成自然语言标的解析。按需索引和 freshness 继续属于对应业务模块内部实现；任务 as_of 由应用层上下文传入。请求 data_mode 是应用层访问策略，单条证据模式由实际 Provider 产生，最终模式从回答引用的证据反推，不能由模型绕过或传入底层改变资料性质。fixture 工具仍可限定教学资料，但真实 Provider 不能沿用只允许 NVDA 的判断。宏观文档与公司 filings 分开标识，不伪造所属公司；当前 None 宏观过滤保留为本地练习。
 
 ### 5.2 关键领域对象
 
 | 对象 | 必要内容 | 主要业务校验 |
 | --- | --- | --- |
 | ResearchOutput | status、facts、inferences、missing_information、data_mode | 本次证据 ID、资料模式与事实支持 |
+| CompanyRecord | 规范 ticker、公司名称、CIK | 来自统一 SEC Registry；所有 candidate 必须验证通过后才能进入研究 |
+| TargetResolution | status、唯一 company_id、完整 candidates | `resolved` 才有唯一 company_id；`multiple / ambiguous / unresolved` 不得静默选择单一标的 |
 | CompanyIdentity | 查询 ticker、规范 ticker、发行人 CIK、公司名、来源 | 未预置代码可解析；不同股类可共享发行人文档，报价仍分别查询 |
 | FilingDocument | CIK、accession、form、主文档及必要附件、报告期、接受 / 可用时间、来源、版本与 hash | 获取范围与任务匹配；修订和原文独立可追踪，文档位置可回查 |
 | CompanyIndexState | 发行人、已索引文档版本、索引配置、覆盖范围、检查时间与完成状态 | 配置匹配才复用；未完成的索引不冒充最新；未来 filing 不进入历史研究 |
@@ -328,6 +500,7 @@ Pydantic 校验字段和类型；应用层继续检查证据归属、资料发�
 | 路径 | 职责 |
 | --- | --- |
 | backend/src/stock_agent/agents/ | LangChain Agent 与 Manual Agent 对照 |
+| backend/src/stock_agent/company/ | SEC CompanyRegistry、确定性 Alias、显式 ticker 扫描、Coverage Check 与 TargetResolver |
 | backend/src/stock_agent/tools/ | 白名单只读工具和注册表 |
 | backend/src/stock_agent/retrieval/ | 复用 D11 代码；Document Provider、按需索引、分段、持久化检索和引用，不再新建平行 knowledge 包 |
 | backend/src/stock_agent/market_data/ | 报价、日线、时间和来源适配 |
@@ -360,6 +533,7 @@ HTTP 客户端在合适生命周期内复用；异步数据库 session 按请求
 8. 固定样例覆盖同一发行人的不同股类、外国发行人适用表单、无效 ticker、无 filing、报告期错误、新增 filing、修订与索引配置变化。只处理应更新文档；更新失败、部分索引和资料不足均有明确结果。
 9. 分别验证 Market / Financial / Knowledge / Macro / Market Reaction 工具选择。精确财务和宏观数值不能由 RAG 摘要替代，Market Reaction 不能脱离可靠事件时间和行情计算。首次获取和复用耗时分开记录；离线评估固定 filing 与宏观事件版本，不能让真实 freshness 更新改变资料版本。
 10. 技术分析使用固定 OHLCV 样例复核收益、均线、ATR 初始化、成交量窗口、拐点确认、价位选择和距离；覆盖历史不足、缺交易日、拆股口径、同价拐点、未完成 K 线与未来确认时间。Market Reaction 覆盖盘前发布、交易时段切换、休市、行情缺口、时间错位、未来数据和基准缺失。Agent 的价位、宏观数值、观察窗口收益和失效条件必须与结构化结果一致。
+11. TargetResolver 固定案例同时覆盖 ticker、中文名、英文简称、昵称、混合显式 ticker + Alias、类似 `CPI` 的无效 ticker token、多个标的、同一实体多证券、长尾指代和无法解析。记录 LLM 是否被调用；deterministic 覆盖充分时不得调用模型，模型 candidate 未经 Registry 验证不得进入 ResearchRequest。
 
 ## 7. 后续阶段：模拟与自动交易
 
@@ -403,7 +577,8 @@ HTTP 客户端在合适生命周期内复用；异步数据库 session 按请求
 - [x] Manual Agent 与 LangChain Agent 共用只读工具契约，并有固定案例对照（D08 轻量 runner 与报告已完成）。
 - [x] D11 本地 RAG 基础链路跑通，已记录中文检索失败；不代表真实按需索引已完成。
 - [x] Day12 通用 Knowledge Tool 接入统一注册表与 Agent，本次引用归属及无资料路径通过验证（见 docs/day12.md）。
-- [ ] 未预置 ticker 可动态解析并按需获取资料，无需增加公司白名单。
+- [ ] CompanyRegistry、Alias、Coverage Check 和 LLM fallback 可把自然语言标的归一化为 `resolved / multiple / ambiguous / unresolved`；LLM candidate 必须再次经过 Registry 验证。
+- [ ] 未预置 ticker 可动态解析并按需获取资料，无需增加公司白名单；只有唯一 `resolved` 标的进入现有 ResearchRequest。
 - [x] 原文、索引状态和向量持久化；重复查询及重启后复用，新增 filing / 修订增量更新可验证（D16 / D17 核心验收完成，生产并发与完整 SEC 历史范围仍按对应文档边界处理）。
 - [ ] RAG 有小型资料集、关键词基线、向量 / 混合对照、证据定位与评估报告。
 - [ ] Market / Financial / Knowledge / Macro / Market Reaction 工具独立；报价、日线、分钟行情、精确财务、宏观发布和市场反应均有来源、时间与数据模式。

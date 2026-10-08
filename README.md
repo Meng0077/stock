@@ -2,7 +2,7 @@
 
 这是一个面向 Agent 开发岗位的学习与演示项目。系统通过只读工具组合财报证据、结构化财务数据、行情与技术指标、宏观发布事件，并逐步加入宏观事件后的 Market Reaction，最终输出可追溯、可复算的研究结果。
 
-项目按 [9 周、45 个开发日计划](stock-agent-python-development-plan.md) 推进。首版聚焦四条研究链路：
+项目按 [9 周、45 个开发日计划](stock-agent-python-development-plan.md) 推进。首版当前包含五条研究链路：
 
 1. 财报 RAG 与结构化财务数据；
 2. 行情与技术分析；
@@ -34,32 +34,37 @@
 | D34 Decision Trace | 已完成 | 指标、阈值与价格来源证据；Decision 组合路径、反对理由和失效条件；宏观与 Market Reaction 保持独立 |
 | D35 Agent 多维市场研究 | 已完成 | `evaluate_market`、Macro 与 Market Reaction 按需编排；保留独立 Evidence、Decision Guard、pending 状态和非因果边界 |
 | Earnings Market Reaction 扩展 | 已完成 | 以 SEC 8-K Item 2.02 确认最近财报披露，以 SEC accepted_at 为受限事件时间，复用 5m/30m/1h/正式收盘 Reaction 引擎 |
-| D36 LangGraph 按需研究工作流 | 已完成 | Planner → Research → Checker → Answer；财报 RAG、行情、宏观和 Market Reaction 按问题组合执行，资料不足最多补查一次 |
-| D37–D45 | 待开发 | Checkpoint、取消恢复、React 联调、评估与部署 |
+| D36 LangGraph 按需研究工作流 | 已完成 | Planner → Research → Checker → Answer；财报 RAG、行情、宏观和 Market Reaction 按问题组合执行，资料不足最多补查一次；已通过真实 DeepSeek + Longbridge + Macro Provider 三场景 Live Smoke |
+| D37–D38 Company 与恢复流程 | 计划中 | CompanyRegistry、Alias、TargetResolver、四种解析状态及 Workflow 接入；Checkpoint、澄清、取消和恢复尚未完成 |
+| D39–D45 | 待开发 | React 联调、完整评估、故障演示、部署与面试材料 |
 
 各开发日的设计、验收记录和已知限制位于 [`docs/`](docs/)。当前状态以对应 day 文档和测试结果为准，不把 fixture、历史数据或尚未联调的能力描述为实时生产能力。
 
 ## 架构
 
 ```text
-用户问题
+当前公开 API
    ↓
-LangChain Agent ────────────────┐
-   ├─ Knowledge Tool            │
-   │    └─ SEC Documents → RAG  │
-   ├─ Financial Tool            │
-   │    └─ SEC Company Facts    │
-   ├─ Market Tool               │
-   │    └─ Quote / Bars → Technical Analysis
-   └─ Macro Tool                │
-        └─ MacroReleaseEvent → MacroSnapshot
-                                 │
-MacroReleaseEvent / EarningsReleaseEvent + 分钟行情
-   └─→ MarketReactionEngine（D26–D30 及 Earnings 扩展）
-                                 │
-结构化结果 + Evidence + 时间边界 ┘
+LangChain Agent → 白名单只读 Tools
+   ├─ SEC Documents → RAG
+   ├─ SEC Company Facts
+   ├─ Quote / Bars → Technical Analysis → Decision
+   └─ MacroReleaseEvent / EarningsReleaseEvent
+                        + 分钟行情
+                        ↓
+                 MarketReactionEngine
+
+D36 独立 LangGraph 工作流（尚未替换公开 API）
    ↓
-Agent 解释结果，不改写工具数值或 Guard 结论
+Planner → Research → Checker
+              ↑          │
+              └─ retry ──┘
+                         ↓
+                       Answer
+
+D37–D38 计划接入
+User Message → TargetResolver → CompanyRegistry Verify
+             → resolved / multiple / ambiguous / unresolved
 ```
 
 核心原则：
@@ -67,23 +72,24 @@ Agent 解释结果，不改写工具数值或 Guard 结论
 - RAG 负责非结构化资料与原文引用；
 - 精确财务、行情和宏观数值来自结构化 Provider；
 - 技术指标、Estimated Surprise 和 Market Reaction 使用确定性 Python 计算；
+- LangGraph Planner 只决定需要哪些能力，Research 执行现有业务函数，Checker 判断资料是否足够，Answer 只解释结构化结果；
 - 所有外部数据保留来源、事件时间、接收时间或统计期，并受任务 `as_of` 约束；
 - Market Reaction 只描述事件前后的实际价格变化，不直接宣称因果关系。
 
 ## 技术栈
 
-- 后端：Python 3.11、FastAPI、Pydantic、LangChain、SQLAlchemy
+- 后端：Python 3.11、FastAPI、Pydantic、LangChain、LangGraph、SQLAlchemy
 - 数据与检索：PostgreSQL、pgvector、Sentence Transformers
 - 数据源：SEC EDGAR / Company Facts、Longbridge、BLS、BEA、FRED、Trading Economics、Federal Reserve、U.S. Treasury
 - 前端：React 19、TypeScript、Vite、Tailwind CSS
-- 测试：pytest、Vitest、React Testing Library
+- 测试与类型检查：pytest、Pyright、Vitest、React Testing Library
 
 ## 目录
 
 ```text
 backend/
   src/stock_agent/
-    agents/       Manual Agent、LangChain Agent 与输出校验
+    agents/       Manual Agent、LangChain Agent、LangGraph 工作流与输出校验
     api/          FastAPI 路由和公开响应
     documents/    SEC 文档发现、下载和解析
     financial/    SEC Company Facts 与精确财务指标
@@ -101,6 +107,8 @@ docs/             每日实现、验收和遗留项记录
 evals/            离线评估与真实 API 验证脚本
 frontend/         React 前端；当前使用本地 Mock，尚未完成真实后端联调
 ```
+
+`backend/src/stock_agent/company/` 是 D37 计划目录，目前尚未创建。CompanyRegistry 与 TargetResolver 的完整边界见 [开发计划](stock-agent-python-development-plan.md#12-company-registrytarget-resolver-与-workflow-接入)。
 
 历史分钟行情、事件时间对齐、Market Reaction 计算、基准比较和历史查询已完成 D26–D29 的离线验收；D30 已使用 BLS CPI 与 Longbridge 的 NVDA、QQQ、SOXL 行情完成真实端到端验收，结果见 [`docs/day30.md`](docs/day30.md)。
 
@@ -140,9 +148,9 @@ PYTHONPATH=backend/src backend/.venv/bin/uvicorn stock_agent.api.app:app --reloa
 | 方法与路径 | 说明 |
 | --- | --- |
 | `POST /api/runs` | 接收已归一化的 `ResearchRequest`，运行现有 Manual Agent 路径 |
-| `POST /api/research` | 接收自然语言 `message`，识别 ticker 后运行 LangChain Agent；宏观问题可按需调用 Macro Tool |
+| `POST /api/research` | 接收自然语言 `message`，使用当前 ticker 提取逻辑后运行 LangChain Agent；宏观问题可按需调用 Macro Tool |
 
-目标公开接口为 `POST /api/chat/runs`，尚未完成。当前 API 是开发阶段契约，不代表 D36–D40 的最终工作流已经实现。
+目标公开接口为 `POST /api/chat/runs`，尚未完成。D36 LangGraph 当前是可独立调用和验收的后端能力，尚未替换 `/api/research`；Company TargetResolver 及其 `multiple / ambiguous / unresolved` 分流也尚未接入 API。
 
 ### 3. 启动前端
 
@@ -164,6 +172,15 @@ pnpm dev
 backend/.venv/bin/python -m pytest -c backend/pyproject.toml
 ```
 
+当前已验证结果为 `601 passed`。运行 Day36 LangGraph 类型检查：
+
+```bash
+backend/.venv/bin/pyright backend/src/stock_agent/agents/langgraph \
+  backend/examples/verify_langgraph_workflow.py
+```
+
+当前结果为 `0 errors, 0 warnings, 0 informations`。
+
 运行前端检查：
 
 ```bash
@@ -182,9 +199,11 @@ PYTHONPATH=backend/src backend/.venv/bin/python evals/verify_day24_macro.py
 PYTHONPATH=backend/src backend/.venv/bin/python evals/verify_macro_agent.py
 PYTHONPATH=backend/src backend/.venv/bin/python evals/verify_day26_intraday.py
 PYTHONPATH=backend/src backend/.venv/bin/python evals/verify_earnings_market_reaction.py
+PYTHONPATH=backend/src backend/.venv/bin/python evals/verify_day36_longbridge_workflow.py
+PYTHONPATH=backend/src backend/.venv/bin/python backend/examples/verify_langgraph_workflow.py
 ```
 
-这些脚本需要相应密钥和外部服务可用。Estimated Surprise 直接使用长桥历史记录中的 Forecast，不具备严格 PIT 保证。长桥事件时间尚未作为经独立核实的实际发布时间，因此不能单独用于 T+5m 等分钟级 Market Reaction。
+这些脚本需要相应密钥和外部服务可用。`verify_day36_longbridge_workflow.py` 使用真实 Longbridge 与固定 Answer；`verify_langgraph_workflow.py` 使用真实 DeepSeek、LangGraph、Longbridge 和 Macro Provider。Estimated Surprise 直接使用长桥历史记录中的 Forecast，不具备严格 PIT 保证。合法的长桥供应商事件时间可用于普通研究的分钟对齐，但结果必须保留 `event_time_uses_vendor_timestamp` warning；严格 PIT 验证仍会拒绝未经独立核实的供应商时间。
 
 ## 文档入口
 
@@ -201,5 +220,6 @@ PYTHONPATH=backend/src backend/.venv/bin/python evals/verify_earnings_market_rea
 - [D32：Trend、Momentum 与 Level 因子](docs/day32.md)
 - [D33：Guard、Factors 与 Decision 流程](docs/day33.md)
 - [D34：Decision Trace、反对理由与失效条件](docs/day34.md)
+- [D35：Agent 多维市场研究](docs/day35.md)
 - [D36：LangGraph 按需研究工作流](docs/day36.md)
 - [前端开发计划](docs/frontend-development-plan.md)
