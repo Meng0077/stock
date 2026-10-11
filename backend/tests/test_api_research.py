@@ -1,6 +1,7 @@
-"""D10：自然语言研究 API、生产依赖配置和 CLI 的离线验收。
+"""自然语言研究 API、生产依赖配置和 CLI 的离线验收。
 
-保留真实 FastAPI、LangChain loop、registry 和证据校验，只替换模型响应。
+保留真实 FastAPI 路由和 LangGraph Workflow 边界，只替换 Graph 运行时。
+原有 LangChain 生产依赖和 CLI 仍保留离线验收。
 不读取 .env，不创建真实模型客户端，不访问网络，不包含前端测试。
 """
 
@@ -22,7 +23,6 @@ from langchain.agents.structured_output import ToolStrategy
 from langchain.messages import AIMessage
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 
-from stock_agent.agents.langchain import langchain_tools
 from stock_agent.api import dependencies
 from stock_agent.api.app import create_app
 from stock_agent.api.research import build_research_request
@@ -30,6 +30,7 @@ from stock_agent.schemas.errors import make_public_error
 from stock_agent.schemas.research import ResearchInput
 from stock_agent.schemas.research_output import ResearchOutput
 from stock_agent.market.schemas import Quote
+from stock_agent.schemas.research import ResearchRequest
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -80,11 +81,16 @@ def clear_agent_cache(monkeypatch):
         "build_longbridge_market_provider",
         Mock(return_value=provider),
     )
+
+    dependencies.get_chat_model.cache_clear()
     dependencies.get_langchain_agent.cache_clear()
+    dependencies.get_research_graph.cache_clear()
     dependencies.get_macro_snapshot_builder.cache_clear()
     dependencies.get_market_data_provider.cache_clear()
     yield
+    dependencies.get_chat_model.cache_clear()
     dependencies.get_langchain_agent.cache_clear()
+    dependencies.get_research_graph.cache_clear()
     dependencies.get_macro_snapshot_builder.cache_clear()
     dependencies.get_market_data_provider.cache_clear()
 
@@ -96,9 +102,26 @@ def offline_config(monkeypatch):
     return config
 
 
-def client_for(agent):
+class FakeResearchGraph:
+    def __init__(self, *, result=None, error=None, state_values=None):
+        self.result = result or {"output": "研究完成"}
+        self.error = error
+        self.state_values = state_values or {}
+        self.calls = []
+
+    async def ainvoke(self, graph_input, **kwargs):
+        self.calls.append((graph_input, kwargs))
+        if self.error is not None:
+            raise self.error
+        return self.result
+
+    async def aget_state(self, config):
+        return SimpleNamespace(values=self.state_values)
+
+
+def client_for(graph):
     application = create_app()
-    application.dependency_overrides[dependencies.get_langchain_agent] = lambda: agent
+    application.dependency_overrides[dependencies.get_research_graph] = lambda: graph
     return TestClient(application)
 
 
@@ -178,14 +201,19 @@ def test_production_dependency_configures_structured_output_and_non_thinking(
 ])
 def test_natural_language_is_normalized_on_server(message):
     before = datetime.now(timezone.utc)
-    request = build_research_request(ResearchInput(message=message))
+    request = build_research_request(
+        ResearchInput(message=message),
+        company_id="NVDA",
+    )
     after = datetime.now(timezone.utc)
 
     assert request.company_id == "NVDA"
     assert request.question == message
     assert request.data_mode == "mixed"
     assert before <= request.as_of <= after
-    assert request.as_of.utcoffset().total_seconds() == 0
+    offset = request.as_of.utcoffset()
+    assert offset is not None
+    assert offset.total_seconds() == 0
 
 
 @pytest.mark.parametrize("message", [
@@ -193,73 +221,66 @@ def test_natural_language_is_normalized_on_server(message):
     "NVDA今日行情如何",
     "nvda今日行情如何",
 ])
-def test_research_api_runs_real_tool_and_returns_public_result(
-    monkeypatch, offline_config, message,
-):
-    monkeypatch.setattr(langchain_tools, "uuid4", lambda: EVIDENCE_UUID)
-    model = OfflineToolModel(responses=[
-        tool_message("get_quote", {"company_id": "NVDA"}, "call-quote"),
-        tool_message("ResearchOutput", quote_output(), "call-output"),
-    ])
-    monkeypatch.setattr(dependencies, "ChatDeepSeek", lambda **kwargs: model)
+def test_research_api_starts_workflow_and_returns_public_result(message):
+    graph = FakeResearchGraph(result={"output": "NVDA 报价研究完成"})
 
-    # 不替换 Agent 依赖：让生产依赖真实创建配置了 ToolStrategy 的 graph。
-    with TestClient(create_app()) as client:
+    # 不替换路由实现；只用离线 Graph 隔离模型和 Provider。
+    with client_for(graph) as client:
         response = client.post("/api/research", json={"message": message})
 
     assert response.status_code == 200
     body = response.json()
-    assert set(body) == {"run_id", "status", "result", "error"}
-    UUID(body["run_id"])
+    assert set(body) == {
+        "thread_id",
+        "status",
+        "result",
+        "clarification",
+        "error",
+    }
+    UUID(body["thread_id"])
     assert body["status"] == "completed"
-    assert body["result"] == quote_output()
+    assert body["result"] == "NVDA 报价研究完成"
+    assert body["clarification"] is None
     assert body["error"] is None
-    assert "output" not in body
-    assert "events" not in body
-    assert offline_config.api_key not in response.text
+    initial_state, kwargs = graph.calls[0]
+    assert initial_state["request"].company_id is None
+    assert initial_state["request"].question == message
+    assert kwargs["config"]["configurable"]["thread_id"] == body["thread_id"]
 
 
-def test_repeated_requests_to_cached_agent_have_distinct_run_ids(
-    monkeypatch, offline_config,
-):
-    monkeypatch.setattr(langchain_tools, "uuid4", lambda: EVIDENCE_UUID)
-    model = OfflineToolModel(responses=[
-        tool_message("get_quote", {"company_id": "NVDA"}, "call-quote"),
-        tool_message("ResearchOutput", quote_output(), "call-output"),
-    ])
-    monkeypatch.setattr(dependencies, "ChatDeepSeek", lambda **kwargs: model)
+def test_repeated_requests_use_distinct_workflow_thread_ids():
+    graph = FakeResearchGraph()
 
-    with TestClient(create_app()) as client:
+    with client_for(graph) as client:
         first = client.post("/api/research", json={"message": "查询 NVDA 教学报价"})
         second = client.post("/api/research", json={"message": "查询 NVDA 教学报价"})
 
     assert first.status_code == second.status_code == 200
     assert first.json()["status"] == second.json()["status"] == "completed"
-    assert UUID(first.json()["run_id"]) != UUID(second.json()["run_id"])
-    assert dependencies.get_langchain_agent.cache_info().misses == 1
+    assert UUID(first.json()["thread_id"]) != UUID(second.json()["thread_id"])
+    assert len(graph.calls) == 2
 
 
-def test_unsupported_company_returns_insufficient_information():
-    output = {
-        "status": "insufficient_information",
-        "facts": [],
-        "inferences": [],
-        "missing_information": ["当前仅支持 NVDA，缺少 TSLA 的教学模拟报价。"],
-        "data_mode": None,
+def test_research_api_returns_target_clarification_interrupt():
+    clarification = {
+        "type": "target_clarification",
+        "message": "请选择一个 ticker。",
+        "candidates": ["GOOG", "GOOGL"],
     }
-    model = OfflineToolModel(responses=[
-        tool_message("get_quote", {"company_id": "TSLA"}, "call-tsla"),
-        tool_message("ResearchOutput", output, "call-output"),
-    ])
-    agent = dependencies.build_langchain_agent(model, response_format=ToolStrategy(ResearchOutput))
+    graph = FakeResearchGraph(
+        result={
+            "__interrupt__": [SimpleNamespace(value=clarification)],
+        }
+    )
 
-    with client_for(agent) as client:
-        response = client.post("/api/research", json={"message": "查询 TSLA 教学报价"})
+    with client_for(graph) as client:
+        response = client.post("/api/research", json={"message": "Google 怎么看"})
 
     assert response.status_code == 200
     body = response.json()
-    assert body["status"] == "insufficient_information"
-    assert body["result"] == output
+    assert body["status"] == "needs_input"
+    assert body["clarification"] == clarification
+    assert body["result"] is None
     assert body["error"] is None
 
 
@@ -270,21 +291,23 @@ def test_unsupported_company_returns_insufficient_information():
     {"message": 123},
     {"message": "查询 NVDA", "company_id": "TSLA"},
 ])
-def test_invalid_request_returns_422_without_invoking_agent(payload):
-    with client_for(object()) as client:
+def test_invalid_request_returns_422_without_invoking_graph(payload):
+    graph = FakeResearchGraph()
+    with client_for(graph) as client:
         response = client.post("/api/research", json=payload)
 
     assert response.status_code == 422
     assert response.json()["detail"][0]["loc"][0] == "body"
+    assert graph.calls == []
 
 
-@pytest.mark.parametrize("message", ["查询教学报价", "   "])
-def test_missing_company_returns_400_without_invoking_agent(message):
-    with client_for(object()) as client:
-        response = client.post("/api/research", json={"message": message})
+def test_request_without_security_target_keeps_company_id_none():
+    request = build_research_request(
+        ResearchInput(message="最新 CPI 是多少"),
+        company_id=None,
+    )
 
-    assert response.status_code == 400
-    assert response.json() == {"detail": "没有识别到股票代码"}
+    assert request.company_id is None
 
 
 @pytest.mark.parametrize("error,code", [
@@ -295,21 +318,18 @@ def test_missing_company_returns_400_without_invoking_agent(message):
     (RuntimeError("PRIVATE_API_KEY Authorization traceback"), "model_error"),
 ])
 def test_runtime_failure_returns_only_safe_public_fields(error, code):
-    class FailingAgent:
-        async def astream(self, state, **kwargs):
-            yield state
-            raise error
-
-    with client_for(FailingAgent()) as client:
+    graph = FakeResearchGraph(error=error)
+    with client_for(graph) as client:
         response = client.post("/api/research", json={"message": "查询 NVDA 教学报价"})
 
     assert response.status_code == 200
     body = response.json()
-    UUID(body["run_id"])
+    UUID(body["thread_id"])
     assert body == {
-        "run_id": body["run_id"],
+        "thread_id": body["thread_id"],
         "status": "failed",
         "result": None,
+        "clarification": None,
         "error": make_public_error(code).model_dump(),
     }
     assert "private" not in response.text.casefold()
@@ -317,35 +337,97 @@ def test_runtime_failure_returns_only_safe_public_fields(error, code):
     assert "traceback" not in response.text.casefold()
 
 
-def test_api_does_not_publish_unknown_evidence():
-    output = quote_output()
+def test_resume_returns_404_for_unknown_workflow():
+    graph = FakeResearchGraph(state_values={})
+    with client_for(graph) as client:
+        response = client.post(
+            "/api/research/resume",
+            json={"thread_id": "missing", "answer": "NVDA"},
+        )
 
-    class UnverifiedAgent:
-        async def astream(self, state, **kwargs):
-            yield {"messages": [], "structured_response": ResearchOutput.model_validate(output)}
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Research workflow does not exist"}
+    assert graph.calls == []
 
-    with client_for(UnverifiedAgent()) as client:
-        response = client.post("/api/research", json={"message": "查询 NVDA 教学报价"})
+
+def test_resume_uses_saved_request_and_same_thread_id():
+    request = ResearchRequest(
+        company_id=None,
+        question="比较 NVDA 和 AAPL",
+        data_mode="mixed",
+        as_of=datetime(2026, 10, 10, 16, tzinfo=timezone.utc),
+    )
+    graph = FakeResearchGraph(
+        result={"output": "NVDA 研究完成"},
+        state_values={"request": request},
+    )
+
+    with client_for(graph) as client:
+        response = client.post(
+            "/api/research/resume",
+            json={"thread_id": "thread-1", "answer": "NVDA"},
+        )
 
     assert response.status_code == 200
-    body = response.json()
-    assert body["status"] == "failed"
-    assert body["result"] is None
-    assert body["error"] == make_public_error("invalid_evidence").model_dump()
+    assert response.json() == {
+        "thread_id": "thread-1",
+        "status": "completed",
+        "result": "NVDA 研究完成",
+        "clarification": None,
+        "error": None,
+    }
+    command, kwargs = graph.calls[0]
+    assert command.resume == "NVDA"
+    assert kwargs["config"] == {
+        "configurable": {"thread_id": "thread-1"}
+    }
+    assert kwargs["context"].as_of == request.as_of
+
+
+def test_resume_runtime_failure_returns_safe_public_error():
+    request = ResearchRequest(
+        company_id=None,
+        question="Google 怎么看",
+        data_mode="mixed",
+        as_of=datetime(2026, 10, 10, 16, tzinfo=timezone.utc),
+    )
+    graph = FakeResearchGraph(
+        error=RuntimeError("PRIVATE_API_KEY resume traceback"),
+        state_values={"request": request},
+    )
+
+    with client_for(graph) as client:
+        response = client.post(
+            "/api/research/resume",
+            json={"thread_id": "thread-1", "answer": "GOOGL"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "thread_id": "thread-1",
+        "status": "failed",
+        "result": None,
+        "clarification": None,
+        "error": make_public_error("model_error").model_dump(),
+    }
+    assert "private" not in response.text.casefold()
+    assert "traceback" not in response.text.casefold()
 
 
 def test_structured_verification_cli_can_run_offline(monkeypatch, capsys):
     spec = importlib.util.spec_from_file_location(
         "verify_langchain_structured", ROOT / "evals" / "verify_langchain_structured.py",
     )
+    assert spec is not None
+    assert spec.loader is not None
     cli = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(cli)
     output = {
         "status": "insufficient_information", "facts": [], "inferences": [],
-        "missing_information": ["缺少 TSLA 的教学模拟报价。"], "data_mode": None,
+        "missing_information": ["缺少 NVDA 的教学模拟报价。"], "data_mode": None,
     }
     model = OfflineToolModel(responses=[
-        tool_message("get_quote", {"company_id": "TSLA"}, "call-tsla"),
+        tool_message("get_quote", {"company_id": "NVDA"}, "call-nvda"),
         tool_message("ResearchOutput", output, "call-output"),
     ])
     monkeypatch.setattr(cli, "get_llm_config", lambda path: SimpleNamespace(

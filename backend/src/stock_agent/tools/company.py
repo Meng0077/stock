@@ -1,3 +1,6 @@
+from langgraph.prebuilt import ToolRuntime
+
+from stock_agent.agents.context import ResearchContext
 from stock_agent.documents.sec_provider import (
     UnknownTickerError,
     get_company_submissions,
@@ -140,3 +143,40 @@ def get_sec_company_profile(
         "data_mode": "live",
         "source": "SEC submissions",
     }
+
+def require_request_company_id(
+    company_id: str,
+    runtime: ToolRuntime[ResearchContext],
+) -> str:
+    """
+    校验 Tool 使用的证券 target
+    与 Target Resolver 确认的请求 target 一致。
+
+    LLM 可以决定调用哪个 Tool，
+    但不能自行更换研究标的。
+    """
+
+    request_company_id = (
+        runtime.context.company_id
+    )
+
+    if request_company_id is None:
+        raise ValueError(
+            "current research request "
+            "does not have a security target"
+        )
+
+    requested = company_id.strip().upper()
+    resolved = (
+        request_company_id
+        .strip()
+        .upper()
+    )
+
+    if requested != resolved:
+        raise ValueError(
+            "tool company_id must match "
+            "the resolved request target"
+        )
+
+    return resolved

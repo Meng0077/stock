@@ -1,7 +1,5 @@
 from datetime import date
 from decimal import Decimal
-from typing import cast
-
 from stock_agent.macro.models.treasury import (
     TREASURY_TENORS,
     TreasurySnapshot,
@@ -69,11 +67,11 @@ def build_treasury_snapshot(
     # 3. 使用最新的完整观测日期。
     current_date = complete_dates[-1]
     current = by_date[current_date]
-    current_yields = {
+    current_yields: dict[TreasuryTenor, Decimal] = {
         tenor: current[tenor].yield_pct
         for tenor in TREASURY_TENORS
     }
-    current_sources = {
+    current_sources: dict[TreasuryTenor, str] = {
         tenor: current[tenor].source
         for tenor in TREASURY_TENORS
     }
@@ -81,12 +79,12 @@ def build_treasury_snapshot(
 
     # 4. 找到上一期完整曲线。
     previous_date = complete_dates[-2] if len(complete_dates) >= 2 else None
-    daily_change_bps = None
-    previous_sources = None
+    daily_change_bps: dict[TreasuryTenor, Decimal] | None = None
+    previous_sources: dict[TreasuryTenor, str] | None = None
 
     if previous_date is not None:
         previous = by_date[previous_date]
-        previous_yields = {
+        previous_yields: dict[TreasuryTenor, Decimal] = {
             tenor: previous[
                 tenor
             ].yield_pct
@@ -123,10 +121,7 @@ def build_treasury_snapshot(
         yields=current_yields,
         yield_sources=current_sources,
         previous_observation_date=previous_date,
-        daily_change_bps=cast(
-            dict[TreasuryTenor, Decimal] | None,
-            daily_change_bps,
-        ),
+        daily_change_bps=daily_change_bps,
         previous_yield_sources=previous_sources,
         spread_10y_2y_bps=spread_10y_2y,
         spread_10y_3m_bps=spread_10y_3m,

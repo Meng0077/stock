@@ -35,6 +35,22 @@ PriceAdjustment = Literal[
     "forward_adjusted",
 ]
 
+@dataclass(frozen=True)
+class SecurityInfo:
+    """
+    行情数据源确认存在的一只证券。
+
+    当前 Target Resolution 只需要：
+    - 标准 ticker；
+    - 证券名称。
+
+    CIK 属于 SEC issuer identity，
+    不属于 Market Provider 的职责。
+    """
+
+    symbol: str
+    name: str
+
 class Quote(BaseModel):
     """一条股票报价。
 

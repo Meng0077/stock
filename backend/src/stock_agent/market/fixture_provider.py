@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import cast
 
 from stock_agent.market.schemas import (
     Bar,
@@ -146,7 +147,8 @@ class FixtureMarketDataProvider:
         available_bars = [
             bar
             for bar in bars
-            if bar.updated_at <= as_of
+            if bar.updated_at is not None
+            and bar.updated_at <= as_of
             and (bar.is_complete or include_incomplete)
             and (adjustment is None or bar.adjustment == adjustment)
         ]
@@ -194,9 +196,13 @@ class FixtureMarketDataProvider:
                 "Fixture minute bars must be IntradayBar"
             )
 
+        intraday_candidates = cast(
+            list[IntradayBar],
+            candidates,
+        )
         result = [
             bar
-            for bar in candidates
+            for bar in intraday_candidates
             if (
                 # 只返回完整处于请求区间的 K 线。
                 bar.start_at >= request.start_at

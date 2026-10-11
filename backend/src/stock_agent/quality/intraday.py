@@ -196,7 +196,7 @@ def validate_intraday_bars(
     coverage = inspect_intraday_coverage(
         request=request,
         bars=bars,
-        required_sessions=required_sessions,
+        required_sessions=set(required_sessions),
     )
 
     if coverage.unobserved_sessions:

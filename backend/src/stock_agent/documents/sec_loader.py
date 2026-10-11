@@ -4,7 +4,7 @@ from pathlib import Path
 import re
 from typing import Literal
 
-from lxml import etree
+import lxml.etree as etree
 from lxml import html as lxml_html
 
 from stock_agent.documents.schemas import (

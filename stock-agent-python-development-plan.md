@@ -113,6 +113,7 @@ TargetResolutionStatus = Literal[
     "multiple",
     "ambiguous",
     "unresolved",
+    "absent",
 ]
 
 class TargetResolution(BaseModel):
@@ -128,7 +129,8 @@ class TargetResolution(BaseModel):
 | `resolved` | 唯一明确且经过 Registry 验证的 ticker；`company_id` 有值 |
 | `multiple` | 用户明确要求研究多个不同标的；所有已识别标的保留在 `candidates` |
 | `ambiguous` | 用户想研究一个实体，但该实体可能对应多个证券，例如 Google 对应 GOOG / GOOGL |
-| `unresolved` | 无法可靠判断用户指向的公司或证券 |
+| `unresolved` | 已确认存在证券指代，但无法可靠确定 ticker |
+| `absent` | 请求不包含证券标的，例如纯宏观问题 |
 
 Resolver 的固定执行顺序为：
 
@@ -171,9 +173,9 @@ ResearchRequest
 = 标的已经唯一归一化后的正式研究命令
 ```
 
-`ResearchRequest.company_id` 继续保持必填，不改成 Optional。第一阶段完成 Registry、显式 ticker、Alias、Coverage Check、LLM fallback 和四种状态；只有 `resolved` 进入现有单股票 `ResearchRequest`，`multiple / ambiguous / unresolved` 明确停止并保留全部候选，不能静默丢弃。
+`ResearchRequest.company_id` 允许为 `None`，以支持 `absent` 的纯宏观请求。证券相关 Tool 必须通过 `ResearchContext.company_id` 校验模型传入的 target；模型不得创建或替换 Resolver 已确认的 ticker。`multiple / ambiguous / unresolved` 明确停止并保留全部候选，不能静默丢弃。
 
-第二阶段接入 LangGraph：
+当前已接入 LangGraph：
 
 ```text
 START
@@ -181,13 +183,14 @@ START
 resolve_target
   ↓
 TargetResolution
-  ├─ resolved → build ResearchRequest → planner
-  ├─ multiple → 首阶段 terminal；后续进入 multi-target workflow
-  ├─ ambiguous → clarify_target → interrupt() → resume → planner
-  └─ unresolved → answer / terminal
+  ├─ resolved → normalize ResearchRequest → planner
+  ├─ absent → planner；计划需要证券时再澄清
+  └─ multiple / ambiguous / unresolved
+       → clarify_target → interrupt() → resume
+       → resolve_target 再验证 → planner
 ```
 
-Graph State 届时增加 `research_input`、`target_resolution` 和解析完成后的 `request`。Resolver 单测先独立通过，再接 Graph；多股票研究流程不与第一阶段标的解析同时实现。
+Graph State 已增加 `target_resolution` 和 `target_clarification`，原始 question 保留在 `ResearchRequest`。已归一化的内部请求可直接进入后续节点；自然语言 API 创建 `company_id=None` 的请求，由 Resolver 写回已验证 ticker。多股票研究流程仍未实现，当前多标的请求要求用户选择一个 ticker。
 
 固定验收样例至少包括：
 
@@ -408,8 +411,8 @@ FRED 只返回某次经济数据发布的日期，并不足以独立支持 T+5m 
 | 开发日 | 任务 | 完成标准 |
 | --- | --- | --- |
 | D36 | 建立 LangGraph 状态及取数、检索、校验、分析、解释节点 | 已完成：财报 RAG、行情、宏观和 MarketReaction 按问题组合执行；证据不足时最多补查一次，然后进入 `cannot_retry` 明确结束，见 `docs/day36.md` |
-| D37 | 实现 CompanyRegistry 与 TargetResolver | SEC Registry 成为 ticker / CIK 统一数据层；完整扫描显式 ticker 与 Alias；Coverage Check 只在必要时触发 LLM；LLM candidate 再经 Registry 验证；固定案例覆盖 `resolved / multiple / ambiguous / unresolved` |
-| D38 | 将 TargetResolver 接入 LangGraph，并加入 Checkpoint、澄清、取消及恢复 | `resolved` 才构造 ResearchRequest 并进入 Planner；`multiple` 首阶段明确停止；`ambiguous` 可通过 `interrupt()` 澄清并 resume；`unresolved` 进入终态回答；恢复时区分已完成节点和需要重跑节点，旧任务不能覆盖新任务 |
+| D37 | 实现 CompanyRegistry 与 TargetResolver | 已完成核心链路：SEC Registry 与 Longbridge fallback 统一验证证券；旧 SEC Documents / Financial 入口复用 Registry；完整扫描显式 ticker 与 Alias；Coverage Check 只在必要时触发 LLM；LLM candidate 再经 Registry 验证；固定案例覆盖 `resolved / multiple / ambiguous / unresolved / absent`，见 `docs/day37.md` |
+| D38 | 将 TargetResolver 接入 LangGraph，并加入 Checkpoint、澄清、取消及恢复 | 核心流程已完成：Resolver 已位于 Planner 之前；`multiple / ambiguous / unresolved` 会 `interrupt()` 并使用同一 thread resume；`absent` 可继续纯宏观计划；`/api/research` 与 `/api/research/resume` 已接入内存 Checkpoint，6 个真实 start / interrupt / resume / macro-only 场景已通过。持久化 Checkpoint、取消、thread 所有权和多用户隔离待完成，见 `docs/day38.md` |
 | D39 | 完善 React 对话界面、标的澄清与结构化研究可视化 | 展示标的解析状态与候选项，以及行情时间、技术指标、财报引用、宏观统计期、数据质量、均线、关键价位、失效条件和市场反应窗口 |
 | D40 | 完成端到端工作流验收 | 演示唯一标的正常研究、多标的停止、歧义标的澄清、无法解析、财报缺失、宏观数据缺失、分钟行情不可用、过期数据及任务取消场景 |
 
@@ -450,7 +453,7 @@ FRED 只返回某次经济数据发布的日期，并不足以独立支持 T+5m 
 
 | 方法与路径 | 用途 | 关键检查 |
 | --- | --- | --- |
-| POST /api/chat/runs | 从自然语言创建对话式研究 | 原始 `ResearchInput` 先经过 TargetResolver；保留 `resolved / multiple / ambiguous / unresolved`，只有唯一标的才构造 ResearchRequest；服务端控制 as_of/data_mode |
+| POST /api/chat/runs | 从自然语言创建对话式研究 | 原始 `ResearchInput` 先经过 TargetResolver；保留 `resolved / multiple / ambiguous / unresolved / absent`；`absent` 可构造 `company_id=None` 的宏观 ResearchRequest；服务端控制 as_of/data_mode |
 | POST /api/runs | 创建已归一化的研究任务 | 问题、标的、资料截止时间、身份和预算；保留现有教学与评估契约 |
 | GET /api/runs/{run_id} | 读取结果快照 | 任务身份、最新状态和版本 |
 | GET /api/runs/{run_id}/events | 可选事件订阅 | run_id、seq、断线后快照重建 |
@@ -577,7 +580,7 @@ HTTP 客户端在合适生命周期内复用；异步数据库 session 按请求
 - [x] Manual Agent 与 LangChain Agent 共用只读工具契约，并有固定案例对照（D08 轻量 runner 与报告已完成）。
 - [x] D11 本地 RAG 基础链路跑通，已记录中文检索失败；不代表真实按需索引已完成。
 - [x] Day12 通用 Knowledge Tool 接入统一注册表与 Agent，本次引用归属及无资料路径通过验证（见 docs/day12.md）。
-- [ ] CompanyRegistry、Alias、Coverage Check 和 LLM fallback 可把自然语言标的归一化为 `resolved / multiple / ambiguous / unresolved`；LLM candidate 必须再次经过 Registry 验证。
+- [x] CompanyRegistry、Alias、Coverage Check 和 LLM fallback 可把自然语言标的归一化为 `resolved / multiple / ambiguous / unresolved / absent`；LLM candidate 必须再次经过 Registry 验证（D37 核心链路，见 `docs/day37.md`）。
 - [ ] 未预置 ticker 可动态解析并按需获取资料，无需增加公司白名单；只有唯一 `resolved` 标的进入现有 ResearchRequest。
 - [x] 原文、索引状态和向量持久化；重复查询及重启后复用，新增 filing / 修订增量更新可验证（D16 / D17 核心验收完成，生产并发与完整 SEC 历史范围仍按对应文档边界处理）。
 - [ ] RAG 有小型资料集、关键词基线、向量 / 混合对照、证据定位与评估报告。
@@ -587,7 +590,7 @@ HTTP 客户端在合适生命周期内复用；异步数据库 session 按请求
 - [ ] 决策规则和 Decision Trace 可复算；技术面、宏观与市场反应分别可追溯。
 - [ ] 信息不足、过期数据、宏观时间不足、分钟行情不可用、虚构引用和 Guard 拒绝能进入明确终态。
 - [ ] React 页面可显示市场观点、引用、数据时间、宏观 Actual/Consensus/Estimated Surprise 及其非 PIT 标记、Market Reaction 和失效条件。
-- [ ] 小范围 LangGraph 分支与 checkpoint 演示经过验证，不夸大恢复能力。
+- [x] 小范围 LangGraph 分支与进程内存 checkpoint 演示经过验证；持久化和跨重启恢复仍明确标记为未完成（D38，见 `docs/day38.md`）。
 - [ ] README、启动环境、固定评估、故障记录和 5–8 分钟演示可供面试复现。
 - [ ] 首版无订单提交与自动交易路径；后续阶段以独立计划推进。
 

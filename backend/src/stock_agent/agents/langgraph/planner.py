@@ -1,5 +1,5 @@
 import re
-from typing import Any
+from typing import Any, Literal
 
 from stock_agent.agents.langgraph.state import (
     ResearchPlan,
@@ -301,7 +301,6 @@ def detect_macro_release_type(
         return "weekly_claims"
 
     return None
-
 
 def build_deterministic_plan(
     request: ResearchRequest,
@@ -675,7 +674,6 @@ def build_deterministic_plan(
         ),
     )
 
-
 async def plan_with_model(
     request: ResearchRequest,
     *,
@@ -707,7 +705,6 @@ async def plan_with_model(
 
     return plan
 
-
 async def plan_node(
     state: ResearchState,
     *,
@@ -735,3 +732,39 @@ async def plan_node(
     return {
         "plan": plan,
     }
+
+def plan_requires_security_target(
+    plan: ResearchPlan,
+) -> bool:
+    """
+    当前 Plan 中只要有一项能力依赖具体证券，
+    本次研究就必须已经解析出 company_id。
+    """
+    return any(
+        (
+            plan.needs_company_profile,
+            plan.needs_quote,
+            plan.needs_technical,
+            plan.needs_decision,
+            plan.knowledge_question is not None,
+            bool(plan.financial_requests),
+            plan.needs_macro_reaction,
+            plan.needs_macro_reaction_history,
+            plan.needs_earnings_reaction,
+            plan.needs_earnings_reaction_history,
+        )
+    )
+
+PlanRoute = Literal["research", "clarify_target"]
+
+
+def route_after_plan(state: ResearchState) -> PlanRoute:
+    plan = state["plan"]
+    if plan is None:
+        raise RuntimeError("research plan is missing")
+
+    company_id = state["request"].company_id
+
+    if company_id is None and plan_requires_security_target(plan):
+        return "clarify_target"
+    return "research"

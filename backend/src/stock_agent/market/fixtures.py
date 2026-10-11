@@ -4,6 +4,7 @@ from zoneinfo import ZoneInfo
 
 from stock_agent.market.schemas import (
     Bar,
+    BarTimeframe,
     Quote,
 )
 
@@ -45,7 +46,7 @@ FIXTURE_QUOTES = {
 }
 
 
-FIXTURE_BARS = {
+FIXTURE_BARS: dict[tuple[str, BarTimeframe], list[Bar]] = {
     (
         "NVDA",
         "1d",

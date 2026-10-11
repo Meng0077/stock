@@ -16,6 +16,7 @@ from stock_agent.retrieval.schemas import DEFAULT_INDEX_CONFIG, IndexConfig
 @dataclass(frozen=True)
 class ResearchContext:
     as_of: datetime
+    company_id: str | None = None
     engine: Engine | None = None
     index_config: IndexConfig = DEFAULT_INDEX_CONFIG
     sec_client: httpx.Client = SEC_CLIENT

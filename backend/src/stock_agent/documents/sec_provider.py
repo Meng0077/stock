@@ -5,11 +5,8 @@ from bs4 import BeautifulSoup
 
 from stock_agent.documents.schemas import FilingFile, FilingMetadata
 from stock_agent.documents.sec_http import SEC_HEADERS, get_sec
+from stock_agent.company.registry import find_sec_security
 
-
-SEC_TICKERS_URL = (
-    "https://www.sec.gov/files/company_tickers.json"
-)
 
 SEC_SUBMISSIONS_URL = (
     "https://data.sec.gov/submissions"
@@ -58,16 +55,12 @@ class UnknownTickerError(ValueError):
 def ticker_to_cik(
     company_id: str,
 ) -> str | None:
-    response = get_sec(SEC_TICKERS_URL)
-    companies = response.json()
-    ticker = company_id.upper()
-
-    for company in companies.values():
-        if company["ticker"].upper() == ticker:
-            return str(
-                company["cik_str"]
-            ).zfill(10)
-    return None
+    security = find_sec_security(
+        company_id
+    )
+    if security is None:
+        return None
+    return security.cik
 
 def get_company_submissions(
     cik: str,

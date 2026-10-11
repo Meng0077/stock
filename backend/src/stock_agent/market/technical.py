@@ -345,7 +345,7 @@ def build_market_technical_snapshot(
     return MarketTechnicalSnapshot(
         symbol=symbol.strip().upper(),
         calculation_version=TECHNICAL_CALCULATION_VERSION,
-        input_sources=input_sources,
+        input_sources=tuple(input_sources),
         current_price=current_price,
         price_source=price_source,
         price_at=price_at,

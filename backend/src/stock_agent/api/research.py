@@ -1,32 +1,33 @@
+import asyncio
 from datetime import datetime, timezone
-import re
+import uuid
 
+from fastapi import APIRouter, Depends, HTTPException
+from langgraph.types import Command
+
+from stock_agent.agents.context import ResearchContext
+from stock_agent.agents.langgraph.graph import build_initial_state
 from stock_agent.api.dependencies import (
-    get_langchain_agent,
     get_macro_builder_factory,
     get_market_provider_factory,
+    get_research_graph,
 )
-from stock_agent.agents.langchain.langchain_agent import run_research
-from stock_agent.schemas.research import ResearchInput, ResearchRequest, ResearchResponse
-from fastapi import APIRouter, Depends, HTTPException
-
-from typing import Annotated
+from stock_agent.schemas.errors import make_public_error, map_error
+from stock_agent.schemas.research import (
+    ResearchInput,
+    ResearchRequest,
+    ResearchResumeInput,
+    ResearchWorkflowResponse,
+)
 
 router = APIRouter()
 
-def extract_company_id(message: str) -> str:
-    match = re.search(r"(?<![A-Za-z0-9_])[A-Za-z]{1,5}(?![A-Za-z0-9_])", message)
 
-    if not match:
-        raise ValueError("没有识别到股票代码")
-
-    return match.group().upper()
-    
 def build_research_request(
     input: ResearchInput,
+    *,
+    company_id: str | None,
 ) -> ResearchRequest:
-    company_id = extract_company_id(input.message)
-
     return ResearchRequest(
         company_id=company_id,
         question=input.message,
@@ -34,35 +35,117 @@ def build_research_request(
         as_of=datetime.now(timezone.utc),
     )
 
-@router.post("/api/research", response_model=ResearchResponse)
+
+def build_graph_config(
+    thread_id: str,
+) -> dict:
+    return {
+        "configurable": {
+            "thread_id": thread_id,
+        }
+    }
+
+
+@router.post("/api/research", response_model=ResearchWorkflowResponse)
 async def research(
     body: ResearchInput,
-    agent: Annotated[object, Depends(get_langchain_agent)],
-    macro_builder_factory: Annotated[
-        object,
-        Depends(get_macro_builder_factory),
-    ],
-    market_provider_factory: Annotated[
-        object,
-        Depends(get_market_provider_factory),
-    ],
+    graph=Depends(get_research_graph),
+    macro_builder_factory=Depends(get_macro_builder_factory),
+    market_provider_factory=Depends(get_market_provider_factory),
 ):
-    try:
-        request = build_research_request(body)
-    except ValueError as error:
-        raise HTTPException(
-            status_code=400,
-            detail=str(error),
-        )
-    record = await run_research(
-        agent=agent,
-        request=request,
+    thread_id = str(uuid.uuid4())
+
+    request = build_research_request(
+        body,
+        company_id=None,
+    )
+    context = ResearchContext(
+        as_of=request.as_of,
         macro_builder_factory=macro_builder_factory,
         market_provider_factory=market_provider_factory,
+        market_state="unknown",
     )
-    return ResearchResponse(
-        run_id=str(record["run_id"]),
-        status=record["status"],
-        result=record["output"],
-        error=record["error"],
+
+    try:
+        result = await graph.ainvoke(
+            build_initial_state(request),
+            context=context,
+            config=build_graph_config(thread_id),
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception as error:
+        return ResearchWorkflowResponse(
+            thread_id=thread_id,
+            status="failed",
+            error=make_public_error(map_error(error)).model_dump(),
+        )
+
+    interrupts = result.get("__interrupt__")
+
+    if interrupts:
+        return ResearchWorkflowResponse(
+            thread_id=thread_id,
+            status="needs_input",
+            clarification=interrupts[0].value,
+        )
+
+    return ResearchWorkflowResponse(
+        thread_id=thread_id,
+        status="completed",
+        result=result.get("output"),
+    )
+
+
+@router.post("/api/research/resume", response_model=ResearchWorkflowResponse)
+async def resume_research(
+    body: ResearchResumeInput,
+    graph=Depends(get_research_graph),
+    macro_builder_factory=Depends(get_macro_builder_factory),
+    market_provider_factory=Depends(get_market_provider_factory),
+):
+    config = build_graph_config(body.thread_id)
+    snapshot = await graph.aget_state(config)
+
+    if not snapshot.values:
+        raise HTTPException(
+            status_code=404,
+            detail="Research workflow does not exist",
+        )
+    request = snapshot.values["request"]
+
+    context = ResearchContext(
+        as_of=request.as_of,
+        macro_builder_factory=macro_builder_factory,
+        market_provider_factory=market_provider_factory,
+        market_state="unknown",
+    )
+
+    try:
+        result = await graph.ainvoke(
+            Command(resume=body.answer),
+            config=config,
+            context=context,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception as error:
+        return ResearchWorkflowResponse(
+            thread_id=body.thread_id,
+            status="failed",
+            error=make_public_error(map_error(error)).model_dump(),
+        )
+
+    interrupts = result.get("__interrupt__")
+
+    if interrupts:
+        return ResearchWorkflowResponse(
+            thread_id=body.thread_id,
+            status="needs_input",
+            clarification=interrupts[0].value,
+        )
+    return ResearchWorkflowResponse(
+        thread_id=body.thread_id,
+        status="completed",
+        result=result.get("output"),
     )

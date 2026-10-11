@@ -18,6 +18,7 @@ from stock_agent.market.errors import (
 )
 from stock_agent.market.longbridge.longbridge_mapper import (
     map_longbridge_quote,
+    map_longbridge_security_info,
     to_longbridge_symbol,
 )
 from stock_agent.market.longbridge.longbridge_provider import (
@@ -57,11 +58,13 @@ def raw_bar(timestamp: datetime, price: int):
 
 
 class RecordingQuoteContext:
-    def __init__(self, *, quotes=None, bars=None, error=None):
+    def __init__(self, *, quotes=None, bars=None, infos=None, error=None):
         self.quotes = [] if quotes is None else quotes
         self.bars = [] if bars is None else bars
+        self.infos = [] if infos is None else infos
         self.error = error
         self.quote_symbols = None
+        self.static_info_symbols = None
         self.history_args = None
         self.candlestick_args = None
 
@@ -82,6 +85,12 @@ class RecordingQuoteContext:
         if self.error is not None:
             raise self.error
         return self.bars
+
+    def static_info(self, symbols):
+        self.static_info_symbols = symbols
+        if self.error is not None:
+            raise self.error
+        return self.infos
 
 
 def test_quote_uses_latest_session_and_normalizes_symbol():
@@ -279,3 +288,46 @@ def test_no_data_and_provider_errors_are_distinct():
 def test_symbol_mapping_rejects_empty_symbol():
     with pytest.raises(ValueError, match="symbol must not be empty"):
         to_longbridge_symbol("  ")
+
+
+def test_security_info_mapping_and_provider_lookup():
+    raw_info = SimpleNamespace(
+        symbol="NVDA.US",
+        name_en="NVIDIA Corp",
+        name_cn="英伟达",
+        name_hk="英偉達",
+    )
+
+    assert map_longbridge_security_info(raw_info).symbol == "NVDA"
+    assert map_longbridge_security_info(raw_info).name == "NVIDIA Corp"
+
+    context = RecordingQuoteContext(infos=[raw_info])
+    provider = LongbridgeMarketDataProvider(quote_context=context)
+
+    security = provider.get_security_info(" nvda ")
+
+    assert security is not None
+    assert security.symbol == "NVDA"
+    assert security.name == "NVIDIA Corp"
+    assert context.static_info_symbols == ["NVDA.US"]
+
+
+def test_security_info_provider_distinguishes_missing_and_failure():
+    empty_provider = LongbridgeMarketDataProvider(
+        quote_context=RecordingQuoteContext()
+    )
+    assert empty_provider.get_security_info("NVDA") is None
+
+    sdk_error = OpenApiException(
+        "http",
+        99999,
+        "fixture-trace",
+        "fixture provider failure",
+    )
+    failing_provider = LongbridgeMarketDataProvider(
+        quote_context=RecordingQuoteContext(error=sdk_error)
+    )
+
+    with pytest.raises(MarketDataProviderError) as error:
+        failing_provider.get_security_info("NVDA")
+    assert error.value.__cause__ is sdk_error

@@ -336,6 +336,16 @@ SYSTEM_PROMPT = """
     不应仅根据该结果说：
 
     “财报导致 NVDA 上涨 2.1%。”
+
+
+23. 请求中的 company_id 已由 Target Resolver 确认。
+
+    如果 company_id 为 null，说明本次请求没有证券标的，
+    不得自行猜测或创建股票代码，也不得调用需要 company_id 的工具。
+
+    如果 company_id 非 null，
+    所有证券相关工具必须使用该 company_id，
+    不得根据 question 自行替换成其他 ticker。
 """
 
 
@@ -419,6 +429,7 @@ async def invoke_langchain_agent(
             build_agent_input(request),
             context=ResearchContext(
                 as_of=request.as_of,
+                company_id=request.company_id,
                 engine=engine,
                 sec_client=SEC_CLIENT,
                 macro_builder_factory=macro_builder_factory,
@@ -448,6 +459,7 @@ async def run_research(
                 stream_mode="values",
                 context=ResearchContext(
                         as_of=request.as_of,
+                        company_id=request.company_id,
                         engine=engine,
                         sec_client=SEC_CLIENT,
                         macro_builder_factory=macro_builder_factory,

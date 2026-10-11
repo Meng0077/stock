@@ -14,6 +14,7 @@ from stock_agent.market.schemas import (
     PriceAdjustment,
     Quote,
     _QuoteCandidate,
+    SecurityInfo
 )
 from stock_agent.market.intraday import IntradayBar
 
@@ -60,6 +61,23 @@ def from_longbridge_symbol(longbridge_symbol: str) -> str:
         raise ValueError("invalid Longbridge symbol")
 
     return symbol
+
+
+def map_longbridge_security_info(
+    raw_info: Any,
+) -> SecurityInfo:
+    """把 Longbridge SecurityStaticInfo 转成统一证券身份。"""
+
+    return SecurityInfo(
+        symbol=from_longbridge_symbol(
+            raw_info.symbol
+        ),
+        name=str(
+            raw_info.name_en
+            or raw_info.name_cn
+            or raw_info.name_hk
+        ).strip(),
+    )
 
 
 def _build_quote_candidate(
@@ -140,7 +158,7 @@ def map_longbridge_quote(
     )
 
 
-def to_longbridge_period(timeframe: BarTimeframe) -> Period:
+def to_longbridge_period(timeframe: BarTimeframe) -> type[Period]:
     """把项目 K 线周期转换成 Longbridge Period。"""
 
     return {
@@ -149,7 +167,9 @@ def to_longbridge_period(timeframe: BarTimeframe) -> Period:
     }[timeframe]
 
 
-def to_longbridge_adjust_type(adjustment: PriceAdjustment) -> AdjustType:
+def to_longbridge_adjust_type(
+    adjustment: PriceAdjustment,
+) -> type[AdjustType]:
     """把项目价格调整口径转换成 Longbridge AdjustType。"""
 
     if adjustment == "raw":

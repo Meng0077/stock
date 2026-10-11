@@ -52,7 +52,7 @@ def build_index_config_id(
     payload = json.dumps(
         config.model_dump(),
         sort_keys=True,
-        separators=[",", ":"],
+        separators=(",", ":"),
     )
     return hashlib.sha256(payload.encode('utf-8')).hexdigest()
 
@@ -64,7 +64,7 @@ def build_chunk_config_id(config: IndexConfig,) -> str:
             "chunk_overlap": config.chunk_overlap
         },
         sort_keys=True,
-        separators=[",", ":"],
+        separators=(",", ":"),
     )
 
     return hashlib.sha256(payload.encode('utf-8')).hexdigest()

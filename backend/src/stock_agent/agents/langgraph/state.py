@@ -23,6 +23,10 @@ from stock_agent.schemas.research import (
     ResearchRequest,
 )
 
+from stock_agent.company.resolver import (
+    TargetResolution,
+)
+
 class FinancialResearchRequest(BaseModel):
     """
     Planner 对一次结构化财务查询的描述。
@@ -255,6 +259,7 @@ ResearchStatus = Literal[
     "cannot_retry",
 ]
 
+
 class ResearchState(TypedDict):
     """
     Day36 LangGraph 的共享运行状态。
@@ -273,3 +278,16 @@ class ResearchState(TypedDict):
     research_status: ResearchStatus | None
 
     output: str | None
+
+    # 最近一次 Target Resolver 的结果。
+    target_resolution: TargetResolution | None
+
+    # 用户在 clarification interrupt
+    # 中补充的证券表达。
+    #
+    # None：
+    #   resolve 原始 question。
+    #
+    # 非 None：
+    #   resolve 用户最新补充的 target。
+    target_clarification: str | None

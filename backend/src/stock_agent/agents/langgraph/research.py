@@ -3,6 +3,7 @@ import asyncio
 from stock_agent.agents.context import (
     ResearchContext,
 )
+from stock_agent.agents.langgraph.planner import plan_requires_security_target
 from stock_agent.agents.langgraph.state import (
     ResearchPlan,
     ResearchState,
@@ -78,7 +79,7 @@ async def _get_macro_provider(context: ResearchContext):
 async def research_earnings_results(
     *,
     plan: ResearchPlan,
-    request: ResearchRequest,
+    symbol: str,
     context: ResearchContext,
 ) -> dict[str, object]:
     """
@@ -117,7 +118,7 @@ async def research_earnings_results(
     # 2. Earnings
     earnings = await asyncio.to_thread(
         get_earnings_releases,
-        symbol=request.company_id,
+        symbol=symbol,
         as_of=context.as_of,
         limit=limit,
     )
@@ -152,7 +153,7 @@ async def research_earnings_results(
             reaction = await asyncio.to_thread(
                 research_earnings_reaction,
                 earnings=latest_earnings,
-                symbol=request.company_id,
+                symbol=symbol,
                 as_of=context.as_of,
                 provider=provider,
             )
@@ -166,7 +167,7 @@ async def research_earnings_results(
         historical_reactions = await asyncio.to_thread(
             research_earnings_reactions,
             earnings=history_earnings,
-            symbol=request.company_id,
+            symbol=symbol,
             as_of=context.as_of,
             provider=provider,
         )
@@ -178,7 +179,7 @@ async def research_macro_results(
     *,
     plan: ResearchPlan,
     context: ResearchContext,
-    symbol: str,
+    symbol: str | None,
 ) -> dict[str, object]:
     """
     执行 Macro 相关研究。
@@ -236,8 +237,11 @@ async def research_macro_results(
 
     needs_latest_reaction = plan.needs_macro_reaction
     needs_history_reaction = plan.needs_macro_reaction_history
-    if not needs_latest_reaction and not needs_history_reaction:
+    need_reaction = needs_latest_reaction or needs_history_reaction
+    if not need_reaction:
         return results
+    if symbol is None:
+        raise RuntimeError("macro reaction requires a security target")
 
     # 准备 latest reaction
     latest_release_for_reaction = None
@@ -651,22 +655,54 @@ async def research_node(
     # 不应该把已有成功结果全部丢掉。
     results = dict(state.get("results", {}))
 
-    company_id = request.company_id.strip().upper()
-
-    # Company Profile
-    company_results = await research_company_profile_results(
-        plan=plan,
-        company_id=company_id,
+    company_id = (
+        request.company_id.strip().upper()
+        if request.company_id is not None
+        else None
     )
-    results.update(company_results)
 
-    # Earnings
-    earnings = await research_earnings_results(
-        plan=plan,
-        request=request,
-        context=context,
-    )
-    results.update(earnings)
+    # 正常不会触发
+    if company_id is None and plan_requires_security_target(plan):
+        raise RuntimeError("research plan requires a security target")
+    if company_id is not None:
+        # Company Profile
+        company_results = await research_company_profile_results(
+            plan=plan,
+            company_id=company_id,
+        )
+        results.update(company_results)
+
+        # Earnings
+        earnings = await research_earnings_results(
+            plan=plan,
+            symbol=company_id,
+            context=context,
+        )
+        results.update(earnings)
+
+        # market
+        market = await research_market_results(
+            plan=plan,
+            symbol=company_id,
+            context=context,
+        )
+        results.update(market)
+
+        # Knowledge
+        knowledge = await research_knowledge_results(
+            plan=plan,
+            company_id=company_id,
+            context=context,
+        )
+        results.update(knowledge)
+
+        # Financial
+        financial = await research_financial_results(
+            plan=plan,
+            company_id=company_id,
+            context=context,
+        )
+        results.update(financial)
 
     # Macro
     macro = await research_macro_results(
@@ -675,30 +711,6 @@ async def research_node(
         context=context,
     )
     results.update(macro)
-
-    # market
-    market = await research_market_results(
-        plan=plan,
-        symbol=company_id,
-        context=context,
-    )
-    results.update(market)
-
-    # Knowledge
-    knowledge = await research_knowledge_results(
-        plan=plan,
-        company_id=company_id,
-        context=context,
-    )
-    results.update(knowledge)
-
-    # Financial
-    financial = await research_financial_results(
-        plan=plan,
-        company_id=company_id,
-        context=context,
-    )
-    results.update(financial)
 
 
     retry_count = state.get("retry_count", 0)

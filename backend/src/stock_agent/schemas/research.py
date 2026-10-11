@@ -1,6 +1,6 @@
 """D02：数据模型不是大语言模型，而是输入数据的规则。"""
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
@@ -13,24 +13,63 @@ class ResearchRequest(BaseModel):
         extra="forbid", str_strip_whitespace=True, validate_assignment=True
     )
 
-    company_id: str = Field(min_length=1, max_length=80)
+    company_id: str | None = Field(min_length=1, max_length=80, default=None)
     question: str = Field(min_length=1, max_length=2000)
     data_mode: RequestDataMode
     # 允许带时区的日期字符串转换为 datetime；没有时区则拒绝。
     as_of: AwareDatetime
 
+
 class ResearchInput(BaseModel):
     model_config = ConfigDict(
-            extra="forbid", validate_assignment=True
-        )
+        extra="forbid", validate_assignment=True
+    )
     message: str = Field(
         min_length=1,
         max_length=2000,
     )
+
 
 class ResearchResponse(BaseModel):
     run_id: str
     status: str
     result: ResearchOutput | None
     error: dict[str, Any] | None
+    clarification: dict[str, Any] | None = None
 
+
+class ResearchResumeInput(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        str_strip_whitespace=True,
+    )
+
+    thread_id: str = Field(
+        min_length=1,
+    )
+
+    answer: str = Field(
+        min_length=1,
+        max_length=2000,
+    )
+
+
+ResearchWorkflowStatus = Literal[
+    "needs_input",
+    "completed",
+    "failed",
+]
+
+
+class ResearchWorkflowResponse(BaseModel):
+    thread_id: str
+
+    status: ResearchWorkflowStatus
+
+    result: str | None = None
+
+    clarification: (
+        dict[str, Any] | None
+    ) = None
+
+    error: dict[str, Any] | None = None

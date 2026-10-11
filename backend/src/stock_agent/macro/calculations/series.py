@@ -4,8 +4,13 @@ from typing import Protocol
 
 
 class SeriesPoint(Protocol):
-    period: date
-    value: Decimal
+    @property
+    def period(self) -> date:
+        ...
+
+    @property
+    def value(self) -> Decimal:
+        ...
 
 
 def shift_month(period: date, months: int) -> date:

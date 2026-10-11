@@ -310,7 +310,7 @@ def test_earnings_research_splits_latest_and_requested_history(
                 needs_earnings_reaction_history=True,
                 earnings_reaction_history_limit=3,
             ),
-            request=make_request("这次和过去三次财报后的表现"),
+            symbol="NVDA",
             context=ResearchContext(as_of=AS_OF),
         )
     )

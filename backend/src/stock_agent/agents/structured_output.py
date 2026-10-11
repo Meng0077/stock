@@ -1,6 +1,6 @@
 """D04 Task 3：校验研究结果引用的证据是否来自本次提供的资料。"""
 
-from typing import Literal
+from typing import cast, Literal
 
 from stock_agent.schemas.research_output import (
     EvidenceDataMode,
@@ -66,7 +66,7 @@ def resolve_output_data_mode(
     if len(cited_modes) > 1:
         return "mixed"
     if cited_modes:
-        return next(iter(cited_modes))
+        return cast(OutputDataMode, next(iter(cited_modes)))
     return None
 
 def parse_final_output(state) -> ResearchOutput:

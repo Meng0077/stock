@@ -44,6 +44,7 @@ from stock_agent.schemas.tool_params import (
 )
 from stock_agent.storage.database import create_database_engine
 from stock_agent.tools.registry import execute_tool
+from stock_agent.tools.company import require_request_company_id
 from stock_agent.quality.quote import validate_quote
 from stock_agent.decision.engine import (
     evaluate_market as evaluate_market_decision,
@@ -85,7 +86,7 @@ class MacroToolRuntimeParams(MacroToolParams):
     ]
 
 
-class QuoteToolRuntimeParams(CompanyToolParams):
+class CompanyToolRuntimeParams(CompanyToolParams):
     model_config = ConfigDict(
         extra="forbid",
         str_strip_whitespace=True,
@@ -97,24 +98,26 @@ class QuoteToolRuntimeParams(CompanyToolParams):
         InjectedToolArg,
     ]
 
-
-@tool("get_quote", args_schema=QuoteToolRuntimeParams)
+@tool("get_quote", args_schema=CompanyToolRuntimeParams)
 async def get_quote_adapter(
     company_id: str,
     runtime: ToolRuntime[ResearchContext],
 ) -> dict[str, object]:
     """获取经过质量检查的股票报价。"""
 
+    symbol = require_request_company_id(
+        company_id,
+        runtime,
+    )
+
     factory = runtime.context.market_provider_factory
     if factory is None:
         raise RuntimeError("MarketDataProvider is not configured")
 
     as_of = runtime.context.as_of
-    symbol = company_id.strip().upper()
-
     quote = await asyncio.to_thread(
         factory().get_quote,
-        company_id,
+        symbol,
         as_of=runtime.context.as_of,
     )
 
@@ -159,9 +162,16 @@ async def get_quote_adapter(
     }
 
 
-@tool("get_company_profile", args_schema=CompanyToolParams)
-async def get_company_profile_adapter(company_id: str) -> dict[str, object]:
+@tool("get_company_profile", args_schema=CompanyToolRuntimeParams)
+async def get_company_profile_adapter(
+    company_id: str,
+    runtime: ToolRuntime[ResearchContext],
+) -> dict[str, object]:
     """只读；仅支持 NVDA，返回本地 fixture 公司资料，不是实时数据。"""
+    company_id = require_request_company_id(
+        company_id,
+        runtime,
+    )
     result = cast(
         dict[str, object],
         await execute_tool(
@@ -188,6 +198,10 @@ async def retrieve_knowledge_tool(
     Returns SEC filing evidence available by the request's as_of time.
     An empty list means no available evidence; report insufficient_information.
     """
+    company_id = require_request_company_id(
+        company_id,
+        runtime,
+    )
     result = retrieve_knowledge(
         engine=runtime.context.engine,
         company_id=company_id,
@@ -256,6 +270,10 @@ def get_financial_facts_tool(
         - 猜测用户真正想问哪个 concept。
     """
 
+    company_id = require_request_company_id(
+        company_id,
+        runtime,
+    )
     engine = runtime.context.engine or create_database_engine()
     facts = get_financial_facts(
         engine=engine,
@@ -396,7 +414,7 @@ def get_macro_snapshot_tool(
         "warnings": snapshot.warnings,
     }
 
-@tool("get_technical_analysis", args_schema=QuoteToolRuntimeParams)
+@tool("get_technical_analysis", args_schema=CompanyToolRuntimeParams)
 async def get_technical_analysis_tool(
     company_id: str,
     runtime: ToolRuntime[ResearchContext],
@@ -407,6 +425,11 @@ async def get_technical_analysis_tool(
     以及 Quote / Bars 各自的质量检查结果。
     """
 
+    symbol = require_request_company_id(
+        company_id,
+        runtime,
+    )
+
     factory = runtime.context.market_provider_factory
 
     if factory is None:
@@ -414,7 +437,6 @@ async def get_technical_analysis_tool(
             "MarketDataProvider is not configured"
         )
 
-    symbol = company_id.strip().upper()
     as_of = runtime.context.as_of
 
     provider = await asyncio.to_thread(factory)
@@ -531,7 +553,7 @@ async def get_technical_analysis_tool(
 
 @tool(
     "evaluate_market",
-    args_schema=QuoteToolRuntimeParams,
+    args_schema=CompanyToolRuntimeParams,
 )
 async def evaluate_market_tool(
     company_id: str,
@@ -557,12 +579,16 @@ async def evaluate_market_tool(
 
     quote + technical report(bar + quote => analysis => report) => decision + evidence => result
     """
+    symbol = require_request_company_id(
+        company_id,
+        runtime,
+    )
+
     factory = runtime.context.market_provider_factory
 
     if factory is None:
         raise RuntimeError("MarketDataProvider is not configured")
 
-    symbol = company_id.strip().upper()
     as_of = runtime.context.as_of
     provider = await asyncio.to_thread(factory)
 
@@ -672,7 +698,7 @@ EARNINGS_EVENT_ADAPTER = TypeAdapter(EarningsReleaseEvent)
 MARKET_REACTION_ADAPTER = TypeAdapter(MarketReactionResult)
 
 
-@tool("get_earnings_market_reaction", args_schema=QuoteToolRuntimeParams)
+@tool("get_earnings_market_reaction", args_schema=CompanyToolRuntimeParams)
 async def get_earnings_market_reaction_tool(
     company_id: str,
     runtime: ToolRuntime[ResearchContext],
@@ -691,11 +717,15 @@ async def get_earnings_market_reaction_tool(
     - 数据限制和 warnings。
     """
 
+    symbol = require_request_company_id(
+        company_id,
+        runtime,
+    )
+
     market_factory = runtime.context.market_provider_factory
     if market_factory is None:
         raise RuntimeError("MarketDataProvider is not configured")
 
-    symbol = company_id.strip().upper()
     earnings = await asyncio.to_thread(
         get_latest_earnings_release,
         symbol=symbol,
@@ -780,6 +810,11 @@ async def get_market_reaction_tool(
     本工具描述的是事件前后的实际市场变化，
     不能据此声称宏观事件与价格变化存在确定因果关系。
     """
+    symbol = require_request_company_id(
+        company_id,
+        runtime,
+    )
+
     macro_factory = runtime.context.macro_builder_factory
     if macro_factory is None:
         raise RuntimeError("MacroSnapshotBuilder is not configured")
@@ -788,7 +823,6 @@ async def get_market_reaction_tool(
     if market_factory is None:
         raise RuntimeError("MarketDataProvider is not configured")
 
-    symbol = company_id.strip().upper()
     normalized_release_id = release_id.strip()
     as_of = runtime.context.as_of
 

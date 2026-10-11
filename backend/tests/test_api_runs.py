@@ -133,8 +133,8 @@ def test_invalid_question_returns_422_without_calling_runner(value):
 
 @pytest.mark.parametrize(
     "value",
-    [MISSING, "", "   ", "x" * 81],
-    ids=["missing", "empty", "whitespace", "too-long"],
+    ["", "   ", "x" * 81],
+    ids=["empty", "whitespace", "too-long"],
 )
 def test_invalid_company_id_returns_422_without_calling_runner(value):
     calls = []
@@ -144,16 +144,30 @@ def test_invalid_company_id_returns_422_without_calling_runner(value):
         return completed_result(run_id)
 
     payload = valid_payload()
-    if value is MISSING:
-        payload.pop("company_id")
-    else:
-        payload["company_id"] = value
+    payload["company_id"] = value
 
     with client_for(runner) as client:
         response = client.post("/api/runs", json=payload)
 
     assert response.status_code == 422
     assert calls == []
+
+
+def test_missing_company_id_is_forwarded_as_none():
+    calls = []
+
+    async def runner(request, run_id):
+        calls.append((request, run_id))
+        return completed_result(run_id)
+
+    payload = valid_payload()
+    payload.pop("company_id")
+
+    with client_for(runner) as client:
+        response = client.post("/api/runs", json=payload)
+
+    assert response.status_code == 200
+    assert calls[0][0].company_id is None
 
 
 @pytest.mark.parametrize(

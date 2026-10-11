@@ -93,14 +93,14 @@ def inspect_intraday_coverage(
     counts = Counter(bar.session for bar in observed_bars)
 
 
-    required = sorted(required_sessions)
+    required: list[RequiredSession] = sorted(required_sessions)
 
-    observed_counts = {
+    observed_counts: dict[RequiredSession, int] = {
         session: counts[session]
         for session in required
     }
 
-    unobserved = [
+    unobserved: list[RequiredSession] = [
         session
         for session in required
         if observed_counts[session] == 0

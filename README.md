@@ -35,7 +35,8 @@
 | D35 Agent 多维市场研究 | 已完成 | `evaluate_market`、Macro 与 Market Reaction 按需编排；保留独立 Evidence、Decision Guard、pending 状态和非因果边界 |
 | Earnings Market Reaction 扩展 | 已完成 | 以 SEC 8-K Item 2.02 确认最近财报披露，以 SEC accepted_at 为受限事件时间，复用 5m/30m/1h/正式收盘 Reaction 引擎 |
 | D36 LangGraph 按需研究工作流 | 已完成 | Planner → Research → Checker → Answer；财报 RAG、行情、宏观和 Market Reaction 按问题组合执行，资料不足最多补查一次；已通过真实 DeepSeek + Longbridge + Macro Provider 三场景 Live Smoke |
-| D37–D38 Company 与恢复流程 | 计划中 | CompanyRegistry、Alias、TargetResolver、四种解析状态及 Workflow 接入；Checkpoint、澄清、取消和恢复尚未完成 |
+| D37 Company Registry 与 TargetResolver | 已完成核心链路 | SEC Registry、Longbridge fallback、Alias、Coverage Check、受限 LLM fallback，以及 `resolved / multiple / ambiguous / unresolved / absent` 五种状态；见 `docs/day37.md` |
+| D38 Company Workflow 与恢复流程 | 核心流程已完成 | Resolver 已放在 LangGraph Planner 之前；支持多标的、歧义和未解析标的的 `interrupt()` 澄清，以及基于内存 Checkpoint 的 `/api/research/resume`；6 个真实 Graph E2E 场景已通过，持久化 Checkpoint、取消和多用户隔离尚未完成 |
 | D39–D45 | 待开发 | React 联调、完整评估、故障演示、部署与面试材料 |
 
 各开发日的设计、验收记录和已知限制位于 [`docs/`](docs/)。当前状态以对应 day 文档和测试结果为准，不把 fixture、历史数据或尚未联调的能力描述为实时生产能力。
@@ -43,9 +44,19 @@
 ## 架构
 
 ```text
-当前公开 API
+POST /api/research
    ↓
-LangChain Agent → 白名单只读 Tools
+TargetResolver → CompanyRegistry Verify
+   ├─ multiple / ambiguous / unresolved → interrupt → resume
+   └─ resolved / absent → Planner
+                              ↓
+                           Research → Checker
+                              ↑          │
+                              └─ retry ──┘
+                                         ↓
+                                       Answer
+
+Research 复用白名单只读能力
    ├─ SEC Documents → RAG
    ├─ SEC Company Facts
    ├─ Quote / Bars → Technical Analysis → Decision
@@ -53,18 +64,6 @@ LangChain Agent → 白名单只读 Tools
                         + 分钟行情
                         ↓
                  MarketReactionEngine
-
-D36 独立 LangGraph 工作流（尚未替换公开 API）
-   ↓
-Planner → Research → Checker
-              ↑          │
-              └─ retry ──┘
-                         ↓
-                       Answer
-
-D37–D38 计划接入
-User Message → TargetResolver → CompanyRegistry Verify
-             → resolved / multiple / ambiguous / unresolved
 ```
 
 核心原则：
@@ -108,7 +107,7 @@ evals/            离线评估与真实 API 验证脚本
 frontend/         React 前端；当前使用本地 Mock，尚未完成真实后端联调
 ```
 
-`backend/src/stock_agent/company/` 是 D37 计划目录，目前尚未创建。CompanyRegistry 与 TargetResolver 的完整边界见 [开发计划](stock-agent-python-development-plan.md#12-company-registrytarget-resolver-与-workflow-接入)。
+`backend/src/stock_agent/company/` 已包含 SEC / Longbridge Security Registry、确定性 Alias、Coverage Check 和 TargetResolver。Resolver 已接入 LangGraph 起点和 `/api/research`；标的需要澄清时，工作流保存 thread 状态并通过 `/api/research/resume` 继续。完整边界见 [Day37 文档](docs/day37.md)、[Day38 文档](docs/day38.md) 和 [开发计划](stock-agent-python-development-plan.md#12-company-registrytarget-resolver-与-workflow-接入)。
 
 历史分钟行情、事件时间对齐、Market Reaction 计算、基准比较和历史查询已完成 D26–D29 的离线验收；D30 已使用 BLS CPI 与 Longbridge 的 NVDA、QQQ、SOXL 行情完成真实端到端验收，结果见 [`docs/day30.md`](docs/day30.md)。
 
@@ -148,9 +147,10 @@ PYTHONPATH=backend/src backend/.venv/bin/uvicorn stock_agent.api.app:app --reloa
 | 方法与路径 | 说明 |
 | --- | --- |
 | `POST /api/runs` | 接收已归一化的 `ResearchRequest`，运行现有 Manual Agent 路径 |
-| `POST /api/research` | 接收自然语言 `message`，使用当前 ticker 提取逻辑后运行 LangChain Agent；宏观问题可按需调用 Macro Tool |
+| `POST /api/research` | 接收自然语言 `message`，创建 LangGraph thread；返回 `completed`、`needs_input` 或安全的 `failed` 结果 |
+| `POST /api/research/resume` | 使用 `thread_id` 和用户的标的澄清答案恢复已中断的工作流 |
 
-目标公开接口为 `POST /api/chat/runs`，尚未完成。D36 LangGraph 当前是可独立调用和验收的后端能力，尚未替换 `/api/research`；Company TargetResolver 及其 `multiple / ambiguous / unresolved` 分流也尚未接入 API。
+目标公开接口 `POST /api/chat/runs` 尚未完成。当前 `/api/research` 已使用 LangGraph；`multiple / ambiguous / unresolved` 通过澄清中断停止研究，`absent` 可先进入 Planner，只有计划需要具体证券时才请求补充标的。Checkpoint 当前使用进程内存，服务重启后不能恢复。
 
 ### 3. 启动前端
 
@@ -172,11 +172,10 @@ pnpm dev
 backend/.venv/bin/python -m pytest -c backend/pyproject.toml
 ```
 
-当前已验证结果为 `601 passed`。运行 Day36 LangGraph 类型检查：
+当前已验证结果为 `634 passed`。运行全部后端生产代码类型检查：
 
 ```bash
-backend/.venv/bin/pyright backend/src/stock_agent/agents/langgraph \
-  backend/examples/verify_langgraph_workflow.py
+backend/.venv/bin/pyright backend/src
 ```
 
 当前结果为 `0 errors, 0 warnings, 0 informations`。
@@ -203,7 +202,7 @@ PYTHONPATH=backend/src backend/.venv/bin/python evals/verify_day36_longbridge_wo
 PYTHONPATH=backend/src backend/.venv/bin/python backend/examples/verify_langgraph_workflow.py
 ```
 
-这些脚本需要相应密钥和外部服务可用。`verify_day36_longbridge_workflow.py` 使用真实 Longbridge 与固定 Answer；`verify_langgraph_workflow.py` 使用真实 DeepSeek、LangGraph、Longbridge 和 Macro Provider。Estimated Surprise 直接使用长桥历史记录中的 Forecast，不具备严格 PIT 保证。合法的长桥供应商事件时间可用于普通研究的分钟对齐，但结果必须保留 `event_time_uses_vendor_timestamp` warning；严格 PIT 验证仍会拒绝未经独立核实的供应商时间。
+这些脚本需要相应密钥和外部服务可用。`verify_day36_longbridge_workflow.py` 使用真实 Longbridge 与固定 Answer；`verify_langgraph_workflow.py` 使用真实 DeepSeek、LangGraph、Longbridge 和 Macro Provider，并验收 start、interrupt、resume、macro-only 和无效澄清再中断。Estimated Surprise 直接使用长桥历史记录中的 Forecast，不具备严格 PIT 保证。合法的长桥供应商事件时间可用于普通研究的分钟对齐，但结果必须保留 `event_time_uses_vendor_timestamp` warning；严格 PIT 验证仍会拒绝未经独立核实的供应商时间。
 
 ## 文档入口
 
@@ -222,4 +221,6 @@ PYTHONPATH=backend/src backend/.venv/bin/python backend/examples/verify_langgrap
 - [D34：Decision Trace、反对理由与失效条件](docs/day34.md)
 - [D35：Agent 多维市场研究](docs/day35.md)
 - [D36：LangGraph 按需研究工作流](docs/day36.md)
+- [D37：Company Registry 与 TargetResolver](docs/day37.md)
+- [D38：Target Resolver 的 Graph 接入与恢复](docs/day38.md)
 - [前端开发计划](docs/frontend-development-plan.md)

@@ -1,7 +1,7 @@
 from sqlalchemy import select, tuple_
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.engine import Engine
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import DBAPIError, SQLAlchemyError
 from stock_agent.documents.schemas import DocumentChunk
 from stock_agent.retrieval.schemas import IndexConfig
 from stock_agent.storage.tables import (
@@ -71,9 +71,10 @@ def save_chunk_embeddings(
         print("SQLAlchemy error:")
         print(type(e).__name__)
 
-        print("\nDBAPI error:")
-        print(type(e.orig).__name__)
-        print(e.orig)
+        if isinstance(e, DBAPIError):
+            print("\nDBAPI error:")
+            print(type(e.orig).__name__)
+            print(e.orig)
 
         print("\nSQLAlchemy code:")
         print(e.code)

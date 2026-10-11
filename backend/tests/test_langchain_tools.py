@@ -138,6 +138,20 @@ def tools_by_name():
     return {tool.name: tool for tool in langchain_tools.build_langchain_tools()}
 
 
+def runtime_for_company(company_id: str | None):
+    return ToolRuntime(
+        state={},
+        context=ResearchContext(
+            as_of=datetime(2026, 9, 27, 12, tzinfo=timezone.utc),
+            company_id=company_id,
+        ),
+        config={},
+        stream_writer=lambda _: None,
+        tool_call_id="call-target-guard",
+        store=None,
+    )
+
+
 def test_build_langchain_tools_returns_exact_allowlist():
     tools = langchain_tools.build_langchain_tools()
 
@@ -157,7 +171,7 @@ def test_build_langchain_tools_returns_exact_allowlist():
 def test_company_profile_adapter_reuses_company_tool_params_schema():
     tool = tools_by_name()["get_company_profile"]
 
-    assert tool.args_schema is CompanyToolParams
+    assert issubclass(tool.args_schema, CompanyToolParams)
     assert tool.args_schema.model_json_schema()["additionalProperties"] is False
 
 
@@ -199,6 +213,80 @@ def test_earnings_market_reaction_tool_exposes_only_company_id():
 
 
 @pytest.mark.parametrize(
+    ("tool_name", "arguments"),
+    [
+        ("get_quote", {"company_id": "NVDA"}),
+        ("get_company_profile", {"company_id": "NVDA"}),
+        (
+            "retrieve_knowledge",
+            {"company_id": "NVDA", "question": "risks"},
+        ),
+        (
+            "get_financial_facts",
+            {
+                "company_id": "NVDA",
+                "concept": "Assets",
+                "unit": "USD",
+                "period_type": "instant",
+            },
+        ),
+        ("get_technical_analysis", {"company_id": "NVDA"}),
+        ("evaluate_market", {"company_id": "NVDA"}),
+        (
+            "get_market_reaction",
+            {
+                "company_id": "NVDA",
+                "release_id": "cpi:2026-09-11",
+            },
+        ),
+        (
+            "get_earnings_market_reaction",
+            {"company_id": "NVDA"},
+        ),
+    ],
+)
+def test_target_dependent_tools_reject_without_resolved_company(
+    tool_name,
+    arguments,
+):
+    tool = tools_by_name()[tool_name]
+    runtime = runtime_for_company(None)
+
+    async def invoke():
+        if tool.coroutine is not None:
+            return await tool.coroutine(
+                **arguments,
+                runtime=runtime,
+            )
+        return tool.func(
+            **arguments,
+            runtime=runtime,
+        )
+
+    with pytest.raises(
+        ValueError,
+        match="does not have a security target",
+    ):
+        asyncio.run(invoke())
+
+
+def test_quote_rejects_company_different_from_resolved_target():
+    tool = tools_by_name()["get_quote"]
+    runtime = runtime_for_company("NVDA")
+
+    with pytest.raises(
+        ValueError,
+        match="must match the resolved request target",
+    ):
+        asyncio.run(
+            tool.coroutine(
+                company_id="AMD",
+                runtime=runtime,
+            )
+        )
+
+
+@pytest.mark.parametrize(
     "payload,field,error_type",
     [
         ({"company_id": ""}, "company_id", "string_too_short"),
@@ -234,7 +322,10 @@ def test_adapter_result_matches_execute_tool(tool_name, company_id):
     payload = {"company_id": company_id}
 
     async def invoke_both():
-        adapter_result = await tools_by_name()[tool_name].ainvoke(payload)
+        adapter_result = await tools_by_name()[tool_name].coroutine(
+            company_id=company_id,
+            runtime=runtime_for_company("NVDA"),
+        )
         registry_result = await execute_tool(tool_name, payload)
         return adapter_result, registry_result
 
@@ -258,7 +349,10 @@ def test_adapter_only_delegates_to_execute_tool(monkeypatch, tool_name):
     monkeypatch.setattr(langchain_tools, "execute_tool", fake_execute_tool)
 
     result = asyncio.run(
-        tools_by_name()[tool_name].ainvoke({"company_id": "  NVDA  "})
+        tools_by_name()[tool_name].coroutine(
+            company_id="  NVDA  ",
+            runtime=runtime_for_company("NVDA"),
+        )
     )
 
     assert result.pop("evidence_id").startswith("E-")
@@ -273,7 +367,12 @@ def test_unsupported_company_is_rejected_by_existing_handler(tool_name):
     ).company_id == "AAPL"
 
     with pytest.raises(ValueError, match="不支持的公司标识"):
-        asyncio.run(tools_by_name()[tool_name].ainvoke({"company_id": "AAPL"}))
+        asyncio.run(
+            tools_by_name()[tool_name].coroutine(
+                company_id="AAPL",
+                runtime=runtime_for_company("AAPL"),
+            )
+        )
 
 
 def test_quote_adapter_uses_runtime_market_provider():
@@ -296,6 +395,7 @@ def test_quote_adapter_uses_runtime_market_provider():
         state={},
         context=ResearchContext(
             as_of=as_of,
+            company_id="NVDA",
             market_provider_factory=factory,
         ),
         config={},
@@ -343,6 +443,7 @@ def test_quote_adapter_does_not_create_evidence_for_stale_quote():
         state={},
         context=ResearchContext(
             as_of=as_of,
+            company_id="NVDA",
             market_provider_factory=lambda: provider,
         ),
         config={},
@@ -395,6 +496,7 @@ def test_knowledge_adapter_uses_runtime_as_of(monkeypatch):
         state={},
         context=ResearchContext(
             as_of=as_of,
+            company_id="NVDA",
             engine=engine,
             index_config=index_config,
         ),
@@ -444,6 +546,7 @@ def test_financial_adapter_uses_runtime_context(monkeypatch):
         state={},
         context=ResearchContext(
             as_of=as_of,
+            company_id="NVDA",
             engine=engine,
             sec_client=sec_client,
         ),
@@ -591,6 +694,7 @@ def test_macro_full_snapshot_filters_rejected_future_release():
         state={},
         context=ResearchContext(
             as_of=as_of,
+            company_id="NVDA",
             macro_builder_factory=lambda: builder,
         ),
         config={},
@@ -670,6 +774,7 @@ def test_macro_tool_removes_future_metric_from_degraded_release(
         state={},
         context=ResearchContext(
             as_of=as_of,
+            company_id="NVDA",
             macro_builder_factory=lambda: builder,
         ),
         config={},
@@ -707,6 +812,7 @@ def test_technical_tool_keeps_bars_when_quote_provider_fails():
         state={},
         context=ResearchContext(
             as_of=as_of,
+            company_id="NVDA",
             market_provider_factory=lambda: provider,
         ),
         config={},
@@ -756,6 +862,7 @@ def test_technical_tool_keeps_quote_when_bars_provider_fails():
         state={},
         context=ResearchContext(
             as_of=as_of,
+            company_id="NVDA",
             market_provider_factory=lambda: provider,
         ),
         config={},
@@ -789,6 +896,7 @@ def test_evaluate_market_tool_returns_complete_decision_trace():
         state={},
         context=ResearchContext(
             as_of=as_of,
+            company_id="NVDA",
             market_provider_factory=lambda: provider,
             market_state="trading",
         ),
@@ -843,6 +951,7 @@ def test_evaluate_market_tool_can_decide_without_quote():
         state={},
         context=ResearchContext(
             as_of=as_of,
+            company_id="NVDA",
             market_provider_factory=lambda: provider,
         ),
         config={},
@@ -884,6 +993,7 @@ def test_evaluate_market_tool_blocks_when_bars_are_unavailable():
         state={},
         context=ResearchContext(
             as_of=as_of,
+            company_id="NVDA",
             market_provider_factory=lambda: provider,
             market_state="trading",
         ),
@@ -961,6 +1071,7 @@ def test_market_reaction_tool_uses_release_and_runtime_provider(
         state={},
         context=ResearchContext(
             as_of=as_of,
+            company_id="NVDA",
             macro_builder_factory=lambda: builder,
             market_provider_factory=lambda: provider,
         ),
@@ -1019,6 +1130,7 @@ def test_market_reaction_tool_does_not_create_evidence_for_unknown_release(
         state={},
         context=ResearchContext(
             as_of=as_of,
+            company_id="NVDA",
             macro_builder_factory=lambda: builder,
             market_provider_factory=lambda: provider,
         ),
@@ -1075,6 +1187,7 @@ def test_market_reaction_tool_does_not_create_evidence_for_future_release(
         state={},
         context=ResearchContext(
             as_of=as_of,
+            company_id="NVDA",
             macro_builder_factory=lambda: builder,
             market_provider_factory=Mock,
         ),
@@ -1135,6 +1248,7 @@ def test_market_reaction_tool_preserves_structured_market_failure(
         state={},
         context=ResearchContext(
             as_of=as_of,
+            company_id="NVDA",
             macro_builder_factory=lambda: builder,
             market_provider_factory=lambda: provider,
         ),
@@ -1209,6 +1323,7 @@ def test_market_reaction_tool_preserves_pending_observation(
         state={},
         context=ResearchContext(
             as_of=as_of,
+            company_id="NVDA",
             macro_builder_factory=lambda: builder,
             market_provider_factory=lambda: provider,
         ),
@@ -1286,6 +1401,7 @@ def test_earnings_market_reaction_tool_returns_event_and_evidence(
         state={},
         context=ResearchContext(
             as_of=as_of,
+            company_id="NVDA",
             market_provider_factory=factory,
         ),
         config={},
@@ -1339,6 +1455,7 @@ def test_earnings_market_reaction_tool_omits_evidence_without_release(
         state={},
         context=ResearchContext(
             as_of=as_of,
+            company_id="NVDA",
             market_provider_factory=factory,
         ),
         config={},

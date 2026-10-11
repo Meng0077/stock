@@ -6,8 +6,12 @@
 
 from functools import lru_cache
 from collections.abc import Awaitable, Callable
+from typing import cast
 from uuid import UUID
 
+from pydantic import SecretStr
+
+from stock_agent.agents.langgraph.graph import build_research_graph
 from stock_agent.schemas.research_output import ResearchOutput
 from stock_agent.agents.manual.manual_runner import run_manual_agent
 from stock_agent.api.schemas import AgentRunResult
@@ -28,7 +32,7 @@ from stock_agent.market.longbridge.config_factory import (
 
 from langchain.agents.structured_output import ToolStrategy
 
-
+from langgraph.checkpoint.memory import InMemorySaver
 
 ROOT = Path(__file__).resolve().parents[4]
 MODEL_TIMEOUT_SECONDS = 30
@@ -42,20 +46,40 @@ def get_agent_runner() -> AgentRunner:
     return run_manual_agent
 
 @lru_cache
-def get_langchain_agent():
+def get_chat_model():
+    """
+    创建项目共享的 Chat Model。
+
+    Target Resolver 和 Agent
+    使用同一套模型配置，
+    避免各自重复创建客户端。
+    """
+
     config = get_llm_config(
         ROOT / "backend" / ".env"
     )
-    
-    model = ChatDeepSeek(
+    if config is None:
+        raise RuntimeError("LLM configuration is incomplete")
+
+    return ChatDeepSeek(
         model=config.model,
-        api_key=config.api_key,
+        api_key=cast(SecretStr, config.api_key),
         temperature=0,
         timeout=MODEL_TIMEOUT_SECONDS,
         max_retries=0,
-        extra_body={"thinking": {"type": "disabled"}},
+        extra_body={
+            "thinking": {
+                "type": "disabled",
+            }
+        },
     )
-    return build_langchain_agent(model=model, response_format=ToolStrategy(ResearchOutput))
+
+@lru_cache
+def get_langchain_agent():
+    return build_langchain_agent(
+        model=get_chat_model(),
+        response_format=ToolStrategy(ResearchOutput)
+    )
 
 
 @lru_cache
@@ -82,3 +106,11 @@ def get_market_provider_factory():
     """向请求上下文注入延迟创建行情 Provider 的函数。"""
 
     return get_market_data_provider
+
+@lru_cache
+def get_research_graph():
+    checkpointer = InMemorySaver()
+    return build_research_graph(
+        model=get_chat_model(),
+        checkpointer=checkpointer
+    )

@@ -17,6 +17,7 @@ from stock_agent.market.longbridge.longbridge_mapper import (
     map_longbridge_bar,
     map_longbridge_intraday_bar,
     map_longbridge_quote,
+    map_longbridge_security_info,
     to_longbridge_adjust_type,
     to_longbridge_period,
     to_longbridge_symbol,
@@ -26,6 +27,7 @@ from stock_agent.market.schemas import (
     BarTimeframe,
     PriceAdjustment,
     Quote,
+    SecurityInfo
 )
 
 
@@ -306,3 +308,39 @@ class LongbridgeMarketDataProvider:
                 "exceeded the configured page limit"
             )
         return [collected[key] for key in sorted(collected)]
+
+    def get_security_info(
+        self,
+        symbol: str,
+    ) -> SecurityInfo | None:
+        """
+        查询一只美股证券的静态身份信息。
+
+        找到证券时返回 SecurityInfo。
+
+        请求成功但没有该证券时返回 None。
+
+        Longbridge 请求失败时抛出
+        MarketDataProviderError，
+        不能把 Provider 故障伪装成证券不存在。
+        """
+        normalized_symbol = symbol.strip().upper()
+        if not normalized_symbol:
+            raise ValueError(
+                "symbol must not be empty"
+            )
+
+        longbridge_symbol: str = to_longbridge_symbol(normalized_symbol)
+        try:
+            raw_infos = self._quote_context.static_info([longbridge_symbol])
+        except OpenApiException as exc:
+            raise MarketDataProviderError(
+                    "Longbridge static info "
+                    "request failed: "
+                    f"code={exc.code}, "
+                    f"message={exc.message}"
+                ) from exc
+
+        if not raw_infos:
+            return None
+        return map_longbridge_security_info(raw_infos[0])

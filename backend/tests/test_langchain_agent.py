@@ -1021,7 +1021,10 @@ def test_invoke_returns_raw_state_without_d09_conversion(research_request):
     class FakeAgent:
         async def ainvoke(self, state, *, context):
             assert state == build_agent_input(research_request)
-            assert context == ResearchContext(as_of=research_request.as_of)
+            assert context == ResearchContext(
+                as_of=research_request.as_of,
+                company_id="NVDA",
+            )
             return raw_state
 
     result = asyncio.run(invoke_langchain_agent(FakeAgent(), research_request))
@@ -1082,7 +1085,10 @@ def test_run_research_returns_output_identity_and_events(
         async def astream(self, state, *, stream_mode, context):
             assert state == build_agent_input(research_request)
             assert stream_mode == "values"
-            assert context == ResearchContext(as_of=research_request.as_of)
+            assert context == ResearchContext(
+                as_of=research_request.as_of,
+                company_id="NVDA",
+            )
             yield research_state
 
     result = asyncio.run(run_research(FakeAgent(), research_request))

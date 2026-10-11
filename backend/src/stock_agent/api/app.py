@@ -48,7 +48,7 @@ async def create_run(
     # D06-Step-5.3：生成 run_id，并把同一 UUID 传给 runner。
     run_id = new_run_id()
     try:
-        agent_result = await runner(request=request, run_id=run_id)
+        agent_result = await runner(request, run_id)
         if agent_result.run_id != run_id:
             return RunResponse.from_agent_result(
                 failed_run(run_id, "model_error")
