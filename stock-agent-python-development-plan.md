@@ -204,6 +204,92 @@ Graph State 已增加 `target_resolution` 和 `target_clarification`，原始 qu
 | `帮我看看那个芯片公司` | 无可靠上下文时 `unresolved` |
 | `比较 NVDA 和一家我最近提到的芯片公司` | Coverage 不足时进入 LLM；无法确认时不得只研究 NVDA |
 
+#### Checkpoint、运行状态与分布式取消的分阶段计划
+
+当前 D38 已有 `thread_id`、`interrupt()`、resume 和进程内 `InMemorySaver`。后续工程化必须把三类状态分开：
+
+```text
+Graph Checkpoint
+= 节点 State 与 interrupt / resume 位置
+
+Run Metadata
+= running / completed / failed / cancelled 等任务状态
+
+Worker Ownership
+= 当前正在执行该任务的 worker 与 lease
+```
+
+不能用 Checkpoint 代替 Run Metadata，也不能把进程内 `asyncio.Task` 当作跨进程任务系统。
+
+**阶段 A：进程内 Task Registry 与取消，已完成**
+
+- 用 `thread_id` 记录当前进程的 `asyncio.Task`；
+- 提供 process-local cancel / resume 演示；
+- 任务终态后清理 Registry；
+- 明确只对单 FastAPI 进程有效，不声称支持多 worker。
+
+已实现自定义 `thread_id`、同 thread 单 active run、cancel API、`cancelled` 公开状态、Registry 终态清理和 Checkpoint continue。外部请求取消不伪装成 cancel API 取消；专项与完整回归见 `docs/day38.md`。
+
+**阶段 B：PostgreSQL 持久化 Checkpoint，预计 4～6 小时**
+
+```text
+InMemorySaver
+  ↓
+Postgres-backed checkpointer
+```
+
+验收要求：
+
+- 配置 Postgres saver 并持久化 thread checkpoint；
+- 服务重启后仍能通过 `aget_state` 读取状态；
+- interrupt 后重启服务，仍能使用同一 `thread_id` resume；
+- 原 `as_of`、`request`、`plan` 与已完成节点状态正确恢复；
+- 增加跨重启恢复测试。
+
+本项目已使用 PostgreSQL，Checkpoint 更偏持久状态，所以优先使用 Postgres，不为这一层单独引入 Redis。
+
+**阶段 C：持久 Run Metadata，预计 3～5 小时**
+
+增加类似下列记录：
+
+```text
+research_runs
+  run_id
+  thread_id
+  status
+  created_at
+  updated_at
+  cancel_requested
+```
+
+用于服务重启后区分 `running / cancelled / failed / completed`，并支持类似 `GET /research/{thread_id}` 的运行状态查询。Run Metadata 只记录执行生命周期，不复制 LangGraph State。
+
+**阶段 D：Worker Ownership 与分布式取消，预计 10～16 小时**
+
+多 worker / 多实例下，Cancel API 可能访问 Worker B，而任务实际运行在 Worker A。因此需要：
+
+- `thread_id → worker_id` ownership；
+- lease / heartbeat，用于识别失联 worker；
+- 可跨进程传递的 cancel signal；
+- 任务完成与 cancel 同时发生时的终态裁决；
+- cancel 后已经发生 resume 时，防止旧任务迟到结果覆盖新任务；
+- Worker 崩溃、过期 lease、重复 cancel 和终态 cancel 等竞态与故障测试。
+
+可选实现为 PostgreSQL + Redis Pub/Sub，或 PostgreSQL + 真正的 task queue。如果首次接入 Redis / task queue，额外保留 1～2 天缓冲。
+
+完整升级的工时估算：
+
+| 范围 | 预计工时 |
+| --- | ---: |
+| Persistent Checkpoint | 4～6h |
+| Run Metadata | 3～5h |
+| Worker Ownership | 4～6h |
+| Distributed Cancellation | 4～6h |
+| Race / Failure Tests | 4～6h |
+| **总计** | **19～29h，约 5～7 个 4 小时开发日** |
+
+面试版不一次实现全部分布式能力。建议先在 D38 完成阶段 A，再在 D42～D46 部署 / 工程化阶段完成阶段 B；阶段 C～D 作为生产化扩展，不阻塞股票研究 Agent 主路线。
+
 ### 1.3 任意 ticker 的按需索引
 
 ```text
@@ -287,7 +373,7 @@ VWAP 在提供方有合适分钟数据后再增加，必须声明交易时段、
 
 手写 Manual Agent 保留为教学对照；D06 之后的主应用使用 LangChain，不能复制两套各自维护的工具业务逻辑。LangGraph 只围绕确实需要条件分支和 checkpoint 的步骤使用；首版不承诺多 worker 可靠领取、复杂人工审批或任意进程故障恢复。
 
-API 可先同步返回完整结果，随后根据演示需要加有限的流式事件。若实现持久任务或 SSE，run_id、事件顺序、取消与重连语义必须一起验证；单靠 asyncio.create_task 不等于跨进程持久任务。
+API 在 D38 保留同步完整结果，D39 增加 SSE：结构化 workflow events、Answer token stream、heartbeat、短时 `Last-Event-ID` replay，并覆盖 clarification / resume 与 cancel。`run_id`、单调递增事件序号、取消终态与重连语义必须一起验证；单靠 `asyncio.create_task` 不等于跨进程持久任务。
 
 ## 3. 每周里程碑
 
@@ -300,8 +386,9 @@ API 可先同步返回完整结果，随后根据演示需要加有限的流式�
 | 第 5 周 | D21–D25 | 行情、TechnicalContext、MacroSnapshot 与时间校验 | 技术指标和宏观发布可复核，行情与宏观时间边界清楚可见 |
 | 第 6 周 | D26–D30 | 宏观事件与 Market Reaction | 宏观发布与分钟行情可靠对齐，观察窗口收益和基准差异可复算 |
 | 第 7 周 | D31–D35 | 可复现的多维市场分析引擎 | 技术面、宏观与市场反应分别可追溯，结构化研究结论可复现 |
-| 第 8 周 | D36–D40 | Company 标的解析、小范围 LangGraph 与 React 工作台 | 自然语言标的先完成 Registry 验证和解析分流；四条核心研究链路按需运行，网页展示与取消恢复路径可演示 |
-| 第 9 周 | D41–D45 | 集成评估、故障演示、部署与面试讲解 | 可从干净环境启动并完成 5–8 分钟面试演示 |
+| 第 8 周 | D36–D40 | Company 标的解析、小范围 LangGraph、SSE 与 React 工作台 | 自然语言标的先完成 Registry 验证和解析分流；四条核心研究链路按需运行；可流式展示工作流状态与答案 |
+| 第 9 周 | D41–D45 | 端到端验收、集成评估、故障演示与部署 | 工作流、SSE、取消和恢复可演示，并可从干净环境启动 |
+| 第 10 周 | D46 | 面试讲解与最终交付 | 完成 5–8 分钟面试演示 |
 
 前端任务已提取为独立并行开发线，详见 `docs/frontend-development-plan.md`。当前可在 D08/D09 期间基于公开 API 契约与 mock 完成 FE01/FE02；真实 API 联调在 D10 收口，后期引用、数据时间、Decision Trace、MacroSnapshot 与 Market Reaction 界面继续受对应后端契约约束。
 
@@ -412,23 +499,39 @@ FRED 只返回某次经济数据发布的日期，并不足以独立支持 T+5m 
 | --- | --- | --- |
 | D36 | 建立 LangGraph 状态及取数、检索、校验、分析、解释节点 | 已完成：财报 RAG、行情、宏观和 MarketReaction 按问题组合执行；证据不足时最多补查一次，然后进入 `cannot_retry` 明确结束，见 `docs/day36.md` |
 | D37 | 实现 CompanyRegistry 与 TargetResolver | 已完成核心链路：SEC Registry 与 Longbridge fallback 统一验证证券；旧 SEC Documents / Financial 入口复用 Registry；完整扫描显式 ticker 与 Alias；Coverage Check 只在必要时触发 LLM；LLM candidate 再经 Registry 验证；固定案例覆盖 `resolved / multiple / ambiguous / unresolved / absent`，见 `docs/day37.md` |
-| D38 | 将 TargetResolver 接入 LangGraph，并加入 Checkpoint、澄清、取消及恢复 | 核心流程已完成：Resolver 已位于 Planner 之前；`multiple / ambiguous / unresolved` 会 `interrupt()` 并使用同一 thread resume；`absent` 可继续纯宏观计划；`/api/research` 与 `/api/research/resume` 已接入内存 Checkpoint，6 个真实 start / interrupt / resume / macro-only 场景已通过。持久化 Checkpoint、取消、thread 所有权和多用户隔离待完成，见 `docs/day38.md` |
-| D39 | 完善 React 对话界面、标的澄清与结构化研究可视化 | 展示标的解析状态与候选项，以及行情时间、技术指标、财报引用、宏观统计期、数据质量、均线、关键价位、失效条件和市场反应窗口 |
-| D40 | 完成端到端工作流验收 | 演示唯一标的正常研究、多标的停止、歧义标的澄清、无法解析、财报缺失、宏观数据缺失、分钟行情不可用、过期数据及任务取消场景 |
+| D38 | 将 TargetResolver 接入 LangGraph，并加入 Checkpoint、澄清、取消及恢复 | 进程内核心流程已完成：Resolver 已位于 Planner 之前；`multiple / ambiguous / unresolved` 会 `interrupt()` 并使用同一 thread resume；`absent` 可继续纯宏观计划；已接入内存 Checkpoint、process-local Task Registry、cancel 与 continue，6 个真实 Graph E2E 场景已通过。持久化 Checkpoint、分布式取消、thread 所有权和多用户隔离按分阶段计划后置，见 `docs/day38.md` |
+| D39 | 实现研究工作流 SSE | 同一 `run_id` 下按序输出结构化 workflow events 与 Answer token stream；支持 heartbeat、基于 `Last-Event-ID` 的短时 replay、clarification / resume 和 cancel；重连或超出 replay 窗口后以最终快照收敛 |
+| D40 | 完善 React 对话界面、标的澄清与结构化研究可视化 | 展示标的解析状态与候选项，以及行情时间、技术指标、财报引用、宏观统计期、数据质量、均线、关键价位、失效条件和市场反应窗口 |
 
-界面中的市场反应先用简单表格和折线图，不开发复杂的专业交易终端。如果增加 SSE，持久事件与临时 token 分开处理；断线后读取快照，不把不完整文本当成最终对象。
+D39 使用有界的进程内 replay buffer，不在这一天提前实现分布式事件总线。验收至少覆盖：
 
-### 第 9 周：评估、部署与面试展示
+- workflow 节点开始、完成和终态事件使用结构化 payload，每个事件带 `run_id` 和单调递增 `seq`；
+- Answer token 只用于临时展示，完成后以结构化最终快照为准；
+- heartbeat 能保持空闲连接，但不改变业务状态；
+- 断线重连传入 `Last-Event-ID` 时，在窗口内只 replay 缺失事件，不重复应用旧事件；
+- `clarification_required` 暂停后保留原问题，resume 后同一 `run_id` 继续事件序列；
+- cancel 会输出确定的 `cancelled` 终态，终态后不得再输出 Answer token 或 completed；
+- 离线测试验证事件顺序、heartbeat、replay、clarification / resume、cancel 与最终快照一致性。
+
+界面中的市场反应先用简单表格和折线图，不开发复杂的专业交易终端。SSE 结构化 workflow events 与临时 token 分开处理；断线后以快照收敛，不把不完整文本当成最终对象。
+
+### 第 9 周：端到端验收、评估与部署
 
 | 开发日 | 任务 | 完成标准 |
 | --- | --- | --- |
-| D41 | 固定模型、提示词、资料、行情、宏观数据及规则版本 | 离线案例可复现；真实 API 测试与固定样例测试分开记录 |
-| D42 | 汇总 Agent、RAG 及市场分析评估结果 | 分别评价工具选择、引用支持、财务数值准确性、技术指标计算、宏观 Estimated Surprise 计算和市场反应计算 |
-| D43 | 验证关键故障和数据时间边界 | 覆盖无效 ticker、无财报、未来资料、过期报价、宏观发布前数据泄漏、时间错位、盘前行情缺失和未验证 Consensus |
-| D44 | 完成 README、部署配置及干净环境启动 | 能通过文档安装运行；密钥不写入代码；明确支持的数据源、交易时段、历史范围及尚未实现的功能 |
-| D45 | 完成 5–8 分钟项目演示、架构图与模拟面试问答 | 展示 Agent → 财报 RAG / 行情 / 宏观 → MarketReaction / 市场分析引擎 → 结构化解释的完整流程 |
+| D41 | 完成端到端工作流验收 | 演示唯一标的正常研究、多标的停止、歧义标的澄清、无法解析、财报缺失、宏观数据缺失、分钟行情不可用、过期数据及任务取消场景 |
+| D42 | 固定模型、提示词、资料、行情、宏观数据及规则版本 | 离线案例可复现；真实 API 测试与固定样例测试分开记录 |
+| D43 | 汇总 Agent、RAG 及市场分析评估结果 | 分别评价工具选择、引用支持、财务数值准确性、技术指标计算、宏观 Estimated Surprise 计算和市场反应计算 |
+| D44 | 验证关键故障和数据时间边界 | 覆盖无效 ticker、无财报、未来资料、过期报价、宏观发布前数据泄漏、时间错位、盘前行情缺失和未验证 Consensus |
+| D45 | 完成 README、部署配置及干净环境启动 | 能通过文档安装运行；密钥不写入代码；优先完成 Postgres 持久化 Checkpoint 与跨重启 resume 验收；明确支持的数据源、交易时段、历史范围及尚未实现的分布式能力 |
 
 第 9 周原则上不新增业务功能。
+
+### 第 10 周：面试展示
+
+| 开发日 | 任务 | 完成标准 |
+| --- | --- | --- |
+| D46 | 完成 5–8 分钟项目演示、架构图与模拟面试问答 | 展示 Agent → 财报 RAG / 行情 / 宏观 → MarketReaction / 市场分析引擎 → 结构化解释的完整流程 |
 
 ### 最终范围
 
@@ -440,12 +543,12 @@ FRED 只返回某次经济数据发布的日期，并不足以独立支持 T+5m 
 | 宏观数据与 Estimated Surprise | 保留；严格 PIT Surprise 不在首版范围 |
 | 宏观 Market Reaction | 新增 D26–D30 |
 | 可复现市场分析引擎 | 保留 |
-| LangGraph 与 React 界面 | 保留 |
+| LangGraph、SSE 与 React 界面 | 保留；D39 完成工作流事件、Answer token、heartbeat、短时 replay、clarification / resume 与 cancel |
 | 新闻检索、事件提取和影响路径分析 | 暂缓 |
 | 用户仓位、个人风险和假设加仓 | 暂缓 |
 | 券商下单与自动交易 | 不在首版范围 |
 
-调整后，D24 提供结构化宏观发布，D26–D30 计算发布后的真实市场表现，D31–D35 将其与技术面、财报证据组合，后两周完成工作流和验收。整个计划保留 Agent、RAG、真实数据集成、可复现计算和前后端交互的技术展示重点，同时避免把项目扩大成财经新闻平台或个人交易管理系统。
+调整后，D24 提供结构化宏观发布，D26–D30 计算发布后的真实市场表现，D31–D35 将其与技术面、财报证据组合，D36–D41 完成工作流、SSE、React 和端到端验收。整个计划保留 Agent、RAG、真实数据集成、可复现计算和前后端交互的技术展示重点，同时避免把项目扩大成财经新闻平台或个人交易管理系统。
 
 ## 5. 接口、领域模型与数据
 
@@ -456,7 +559,7 @@ FRED 只返回某次经济数据发布的日期，并不足以独立支持 T+5m 
 | POST /api/chat/runs | 从自然语言创建对话式研究 | 原始 `ResearchInput` 先经过 TargetResolver；保留 `resolved / multiple / ambiguous / unresolved / absent`；`absent` 可构造 `company_id=None` 的宏观 ResearchRequest；服务端控制 as_of/data_mode |
 | POST /api/runs | 创建已归一化的研究任务 | 问题、标的、资料截止时间、身份和预算；保留现有教学与评估契约 |
 | GET /api/runs/{run_id} | 读取结果快照 | 任务身份、最新状态和版本 |
-| GET /api/runs/{run_id}/events | 可选事件订阅 | run_id、seq、断线后快照重建 |
+| GET /api/runs/{run_id}/events | SSE 事件订阅 | `run_id`、`seq`、heartbeat、`Last-Event-ID` 短时 replay、断线后快照重建 |
 | GET /api/evidence/{evidence_id} | 查看引用原文 | 来源、公司、文档版本和访问范围 |
 | GET /api/evaluations/{evaluation_id} | 查看固定评估结果 | 数据集、模型和规则版本 |
 
@@ -590,7 +693,8 @@ HTTP 客户端在合适生命周期内复用；异步数据库 session 按请求
 - [ ] 决策规则和 Decision Trace 可复算；技术面、宏观与市场反应分别可追溯。
 - [ ] 信息不足、过期数据、宏观时间不足、分钟行情不可用、虚构引用和 Guard 拒绝能进入明确终态。
 - [ ] React 页面可显示市场观点、引用、数据时间、宏观 Actual/Consensus/Estimated Surprise 及其非 PIT 标记、Market Reaction 和失效条件。
-- [x] 小范围 LangGraph 分支与进程内存 checkpoint 演示经过验证；持久化和跨重启恢复仍明确标记为未完成（D38，见 `docs/day38.md`）。
+- [x] 小范围 LangGraph 分支、进程内存 checkpoint、process-local Task Registry、cancel 与 continue 经过验证；持久化、跨重启恢复和分布式取消仍明确标记为未完成（D38，见 `docs/day38.md`）。
+- [ ] SSE 区分结构化 workflow events 与临时 Answer token，并验收 heartbeat、`Last-Event-ID` 短时 replay、clarification / resume、cancel 和最终快照一致性（D39）。
 - [ ] README、启动环境、固定评估、故障记录和 5–8 分钟演示可供面试复现。
 - [ ] 首版无订单提交与自动交易路径；后续阶段以独立计划推进。
 

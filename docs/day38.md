@@ -2,7 +2,7 @@
 
 ## 完成结论
 
-Day38 的核心工作流已完成：Target Resolver 位于 Planner 之前，标的不唯一或无法确定时通过 LangGraph `interrupt()` 暂停，用户补充后使用同一 `thread_id` 恢复并重新验证标的。
+Day38 的核心工作流和进程内取消已完成：Target Resolver 位于 Planner 之前，标的不唯一或无法确定时通过 LangGraph `interrupt()` 暂停，用户补充后使用同一 `thread_id` 恢复并重新验证标的。正在运行的 Workflow 由 process-local Task Registry 跟踪，可通过取消接口中止，并从仍有后续节点的 Checkpoint 继续。
 
 ```text
 ResearchInput.message
@@ -35,15 +35,24 @@ resolve_target
 
 ## API 契约
 
-`POST /api/research` 为每次请求创建唯一 `thread_id`，并返回三种状态：
+`POST /api/research` 接收自然语言 `message`。客户端可预先提供 UUID 形式的 `thread_id`，以便在首次请求尚未返回时从另一请求取消；未提供时由服务端生成。已有 Checkpoint 的 `thread_id` 返回 `409`，不覆盖旧 Workflow。
+
+研究接口返回四种状态：
 
 | 状态 | 含义 |
 | --- | --- |
 | `completed` | Workflow 已返回最终文本 |
 | `needs_input` | Workflow 已中断，`clarification` 包含提示和候选 ticker |
 | `failed` | 运行失败，`error` 只包含公开错误字段，不返回 Provider 密钥、内部异常文本或 traceback |
+| `cancelled` | 当前进程通过 cancel API 主动取消了运行中的 Workflow |
 
 `POST /api/research/resume` 接收 `thread_id` 和 `answer`。它使用 Checkpoint 中的原始 `ResearchRequest.as_of` 重建运行上下文，不会在恢复时生成新的研究时间边界。未知 thread 返回 `404`。
+
+`POST /api/research/{thread_id}/cancel` 只取消当前进程 Task Registry 中正在运行的任务。接受取消时返回 `cancelling`，原研究请求最终返回 `cancelled`；thread 不在运行时返回 `404`。
+
+`POST /api/research/{thread_id}/continue` 用于继续被取消但 Checkpoint 仍有后续节点的 Workflow。等待用户澄清时必须使用 `/resume`；已完成或仍在等待输入的 Workflow 对 `/continue` 返回 `409`。
+
+同一 `thread_id` 同时只允许一个 active run。Task Registry 只管理执行中的 `asyncio.Task`，Graph State 和恢复位置仍由 LangGraph Checkpointer 管理。
 
 ## 测试覆盖
 
@@ -55,6 +64,11 @@ resolve_target
 - API 首次调用、独立 thread id、澄清响应和输入校验；
 - API 恢复使用原 thread id 和原 `as_of`；
 - 未知 thread 不执行 Graph；
+- 客户端预先提供 `thread_id`，已有 Checkpoint 的 thread 不被覆盖；
+- 同一 thread 并发执行被拒绝，不同任务终态后 Registry 正确清理；
+- cancel API 取消运行中的 Graph，原请求返回 `cancelled`；未运行 thread 返回 `404`；
+- 非 cancel API 引起的外部 `asyncio.CancelledError` 继续向上传播，不伪装成用户主动取消；
+- continue 只在 Checkpoint 存在且有后续节点时继续，拒绝未知、等待输入和已完成状态；
 - 模型调用次数、Tool 调用次数、超时和未知运行错误均映射为固定公开错误，不泄露私有细节。
 
 `backend/examples/verify_langgraph_workflow.py` 还使用真实 DeepSeek、Longbridge 和 Macro Provider 验收了 6 个 Graph E2E 场景：
@@ -70,8 +84,8 @@ resolve_target
 
 2026-10-11 验收结果：
 
-- D38 Graph / API 专项及关联回归：`49 passed`；
-- 完整后端：`634 passed`；
+- Task Registry + Research API 专项：`39 passed`；
+- 完整后端：`647 passed`；
 - 全部后端生产代码 Pyright：`0 errors, 0 warnings, 0 informations`；
 - D38 真实 Graph E2E：6 个场景全部通过；
 - `git diff --check HEAD`：通过。
@@ -79,7 +93,8 @@ resolve_target
 ## 当前边界
 
 - Checkpoint 使用 `InMemorySaver`，只能在当前进程存活期内恢复；服务重启、多进程或多实例部署不能保证恢复。
-- 本次没有实现取消 API、持久化 Checkpoint、thread 所有权或多用户隔离。
+- Task Registry 和 cancel / continue 都是 process-local；未实现持久 Run Metadata、worker ownership、分布式取消、thread 所有权或多用户隔离。
+- `asyncio.Task.cancel()` 使用协作式取消，不能强制终止正在执行的同步阻塞代码或已由远端服务接收的工作。
 - 多标的解析只用于保留候选并请用户选择一个，尚未实现多股同时研究。
 - 离线专项 Graph E2E 使用真实 Graph 和 Checkpoint，模型、Registry 与行情 Provider 为可复现替身；另外已完成上述 6 个真实 DeepSeek / Longbridge / Macro Provider 场景联调。
 - 真实联调时的周末报价超过新鲜度阈值，Quote 场景按质量规则进入 `cannot_retry / quote_unavailable`，但仍正确完成 Answer；这不代表实时报价可用。
