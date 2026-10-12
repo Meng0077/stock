@@ -244,7 +244,7 @@ async def research_macro_shared_results(
             before=history_before,
             as_of=context.as_of,
         )
-        results["macro_reaction_history"] = history_releases
+        results["macro_release_history"] = history_releases
         results["macro_history_warnings"] = history_warnings
 
     return results
@@ -293,10 +293,13 @@ async def research_macro_reaction_results(
     # History
     history_releases = cast(
         list[MacroReleaseEvent],
-        macro_results.get("macro_reaction_history", []),
+        macro_results.get("macro_release_history", []),
     )
     if not history_releases and need_history:
         results["macro_reaction_history"] = []
+
+    if latest_release_for_reaction is None and not history_releases:
+        return results
 
     market_provider = await _get_market_provider(context=context)
 
@@ -729,7 +732,7 @@ async def research_node(
 
     # 3. 每个证券独立研究
     for company_id in request.company_ids:
-        company_results = companies.get(company_id, {})
+        company_results = dict(companies.get(company_id, {}))
 
         # Company / Earnings / Market / Knowledge / Financial
         security_results = await research_security_results(

@@ -176,7 +176,7 @@ pnpm dev
 backend/.venv/bin/python -m pytest -c backend/pyproject.toml
 ```
 
-当前完整后端回归为 `681 passed, 1 failed`；唯一失败是 Day36 空历史语义差异，与 D39 SSE 无关。D39 的 Event Store、SSE 与 stream runner 专项为 `27 passed`。运行全部后端生产代码类型检查：
+当前完整后端回归为 `692 passed`。运行全部后端生产代码类型检查：
 
 ```bash
 backend/.venv/bin/pyright backend/src

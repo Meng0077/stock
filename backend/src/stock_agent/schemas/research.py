@@ -1,6 +1,6 @@
 """D02：数据模型不是大语言模型，而是输入数据的规则。"""
 
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
@@ -14,7 +14,7 @@ class ResearchRequest(BaseModel):
         extra="forbid", str_strip_whitespace=True, validate_assignment=True
     )
 
-    company_ids: list[str] = Field(
+    company_ids: list[Annotated[str, Field(min_length=1)]] = Field(
         default_factory=list,
         max_length=20,
     )

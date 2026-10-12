@@ -133,7 +133,7 @@ class ResearchEventStore:
         thread_id: str,
         *,
         last_event_id: int | None = None,
-    ) -> tuple[SubscriberQueue, list[ResearchEvent], bool]:
+    ) -> tuple[SubscriberQueue, list[ResearchEvent], bool, bool]:
         queue: SubscriberQueue = asyncio.Queue(maxsize=self._subscriber_queue_size)
         async with self._lock:
             self._drop_expired_threads_locked()
@@ -141,9 +141,10 @@ class ResearchEventStore:
             subscribes.add(queue)
 
             buffer = list(self._buffers.get(thread_id, ()))
+            latest_is_terminal = thread_id in self._terminal_expires_at
 
             if last_event_id is None:
-                return queue, buffer, True
+                return queue, buffer, True, latest_is_terminal
 
             replay_events = [event for event in buffer if event.event_id > last_event_id]
             last_published_id = self._last_event_ids.get(thread_id, 0)
@@ -158,7 +159,7 @@ class ResearchEventStore:
                 first_buffered_id = buffer[0].event_id
                 replay_complete = last_event_id >= first_buffered_id - 1
 
-        return queue, replay_events, replay_complete
+        return queue, replay_events, replay_complete, latest_is_terminal
 
     async def unsubscribe(self, thread_id: str, queue: SubscriberQueue) -> None:
         async with self._lock:

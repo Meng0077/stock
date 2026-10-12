@@ -119,6 +119,8 @@ def get_answer_delta(chunk: object) -> str | None:
 
     if not isinstance(content, str):
         return None
+    if content == "":
+        return None
 
     return content
 

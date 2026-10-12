@@ -25,7 +25,7 @@ Day39 当前范围已完成。旧 Agent 的 `company_ids` 迁移和真实 HTTP S
 `ResearchRequest` 现在使用：
 
 ```python
-company_ids: list[str] = Field(
+company_ids: list[Annotated[str, Field(min_length=1)]] = Field(
     default_factory=list,
     max_length=20,
 )
@@ -36,9 +36,12 @@ company_ids: list[str] = Field(
 - 多证券问题保留解析顺序，例如 `['NVDA', 'AAPL']`；
 - 旧字段 `company_id` 因 `extra='forbid'` 被拒绝；
 - Resolver 的 `resolved_targets` 可以包含多个 ticker，只有仍存在歧义或未解析 mention 时才中断；
+- clarification 只补全尚未解决的 target；`request.company_ids` 保留历次已确认证券，`target_resolution.resolved_targets` 同步反映这个累计集合；
 - Research 的证券级结果保存在 `results['companies'][company_id]`，Macro Snapshot 等共享结果保留在 `results` 顶层。
 
-当前模型只限制证券数量不超过 20，尚未对单个列表项声明非空、最大长度、唯一性或统一大写。这是待确定的请求契约，不在本次检查中补业务规则。
+当前模型限制证券数量不超过 20，并拒绝空白列表项；尚未限制单项最大长度、唯一性或统一大写。
+
+Macro 历史也遵守 shared / per-symbol 边界：顶层 `macro_release_history` 保存共享的 `MacroReleaseEvent`，`results['companies'][company_id]['macro_reaction_history']` 保存该证券的 `MarketReactionResult`。没有可计算 release 时不创建 Market Provider；用户明确要求历史记录但结果为空时，Checker 将其标记为 unavailable。
 
 ## SSE 事件与重放
 
@@ -77,19 +80,19 @@ terminal thread 的 SSE 状态保留 5 分钟，期间仍可 replay，也允许 
 
 新增：
 
-- `test_research_request_company_ids.py`：复数标的、空列表、旧字段拒绝和 20 个上限；
-- `test_research_event_store.py`：thread 内单调序号、跨 thread 隔离、实时广播、游标 replay、窗口截断、慢 subscriber 关闭、terminal TTL 清理和 continue 撤销过期；
-- `test_research_sse.py`：cursor 优先级与校验、SSE wire format、replay/live terminal 关闭、overflow sentinel 关闭和取消订阅，以及真实 FastAPI 路由的 terminal replay 与过期游标 `409`；
+- `test_research_request_company_ids.py`：复数标的、空列表、空白列表项拒绝、旧字段拒绝和 20 个上限；
+- `test_research_event_store.py`：thread 内单调序号、跨 thread 隔离、实时广播、游标 replay、窗口截断、精确 terminal 游标、慢 subscriber 关闭、terminal TTL 清理和 continue 撤销过期；
+- `test_research_sse.py`：cursor 优先级与校验、SSE wire format、replay/live terminal 关闭、精确 terminal 游标立即关闭、overflow sentinel 关闭和取消订阅，以及真实 FastAPI 路由的 terminal replay 与过期游标 `409`；
 - `test_research_sse_http.py`：HTTP 路由端到端验证 `needs_input` 保持连接与 heartbeat、resume 同序列、`Last-Event-ID` 缺失补发、cancel 终态、最终 checkpoint 一致性和 terminal TTL；
-- `test_research_stream_runner.py`：节点阶段、Answer delta、完成事件序列和中断事件序列；
+- `test_research_stream_runner.py`：节点阶段、Answer delta、空 delta 过滤、完成事件序列和中断事件序列；
 - `test_langgraph_multi_company.py`：按证券定位缺失信息、共享 Macro 只检查一次、Provider warning 不跨证券污染；
 - 更新 Graph、Planner、Target 和 `/api/runs` 测试，使用 `company_ids` 和 `results['companies']`。
 
 2026-10-12 当前本地结果：
 
-- Event Store、SSE 与 stream runner 专项：`27 passed`；
+- Event Store、SSE 与 stream runner 专项：`29 passed`；
 - Manual、LangChain Agent 和 LangChain Tool 回归：`126 passed`；
-- 完整后端回归：`681 passed, 1 failed`；唯一失败是已记录的 Day36 空历史语义差异，与本次迁移无关，本轮没有改动该业务逻辑；
+- 完整后端回归：`692 passed`；
 - Pyright 生产代码：`0 errors`；
 - `git diff --check HEAD`：通过。
 
@@ -102,11 +105,8 @@ terminal thread 的 SSE 状态保留 5 分钟，期间仍可 replay，也允许 
 ### 非阻塞后续项
 
 1. 订阅不存在的 thread 时，当前会建立空订阅并持续 heartbeat。需要定义返回 `404`，还是允许客户端先订阅后启动 Workflow。
-2. 确认 Checker 的空结果语义：Earnings / Macro Reaction history 与 Knowledge 当前只有 `None` 才视为不可用，空列表会被视为研究充分；现有 Day36 测试仍认为空历史应为缺失。
-3. 决定 `company_ids` 列表项是否在请求模型层强制非空、长度限制、去重和统一大写；当前只限制最多 20 项。
+2. `company_ids` 列表项已强制非空，尚未在请求模型层限制单项最大长度、去重或统一大写。
 
 - 前端研究页面接入真实 SSE、工作流状态展示和 token 渲染属于 D40；
 - PostgreSQL Checkpoint、持久 Run Metadata、worker ownership 和分布式取消属于后续工程化；
 - Event Store 仍可保持单进程、5 分钟短线 replay，不需要在 Day39 引入 Redis 或分布式事件总线。
-
-Day36 空历史语义需要独立确认，不应混入 Day39 SSE 逻辑。

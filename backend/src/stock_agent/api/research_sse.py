@@ -54,14 +54,15 @@ async def stream_research_events(
     thread_id: str,
     queue: SubscriberQueue,
     replay_events: list[ResearchEvent],
+    latest_is_terminal: bool,
     event_store: ResearchEventStore,
 ):
     try:
         for event in replay_events:
             yield encode_sse_event(event)
 
-        # replay 全部发完，再判断 replay 的最后一条是不是 terminal
-        if replay_events and replay_events[-1].type in TERMINAL_EVENT_TYPES:
+        # replay 全部发完，再判断 thread 的最新事件是不是 terminal。
+        if latest_is_terminal:
             return
 
         while True:
@@ -97,7 +98,7 @@ async def research_events(
     )
 
     # subscribe to the event store
-    queue, replay_events, replay_complete = await event_store.subscribe(
+    queue, replay_events, replay_complete, latest_is_terminal = await event_store.subscribe(
         thread_id=thread_id,
         last_event_id=cursor,
     )
@@ -115,6 +116,7 @@ async def research_events(
             thread_id=thread_id,
             queue=queue,
             replay_events=replay_events,
+            latest_is_terminal=latest_is_terminal,
             event_store=event_store,
         ),
         media_type="text/event-stream",

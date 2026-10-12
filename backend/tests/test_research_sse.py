@@ -75,7 +75,7 @@ def test_replayed_terminal_event_closes_stream_and_unsubscribes() -> None:
             "completed",
             {"result": "done"},
         )
-        queue, replay, _ = await store.subscribe("thread-a")
+        queue, replay, _, latest_is_terminal = await store.subscribe("thread-a")
 
         frames = [
             frame
@@ -84,6 +84,7 @@ def test_replayed_terminal_event_closes_stream_and_unsubscribes() -> None:
                 thread_id="thread-a",
                 queue=queue,
                 replay_events=replay,
+                latest_is_terminal=latest_is_terminal,
                 event_store=store,
             )
         ]
@@ -97,7 +98,7 @@ def test_replayed_terminal_event_closes_stream_and_unsubscribes() -> None:
 def test_live_terminal_event_closes_stream() -> None:
     async def scenario() -> None:
         store = ResearchEventStore()
-        queue, replay, _ = await store.subscribe("thread-a")
+        queue, replay, _, latest_is_terminal = await store.subscribe("thread-a")
         completed = await store.publish(
             "thread-a",
             "completed",
@@ -111,6 +112,7 @@ def test_live_terminal_event_closes_stream() -> None:
                 thread_id="thread-a",
                 queue=queue,
                 replay_events=replay,
+                latest_is_terminal=latest_is_terminal,
                 event_store=store,
             )
         ]
@@ -123,7 +125,7 @@ def test_live_terminal_event_closes_stream() -> None:
 def test_closed_subscriber_sentinel_ends_stream() -> None:
     async def scenario() -> None:
         store = ResearchEventStore()
-        queue, replay, _ = await store.subscribe("thread-a")
+        queue, replay, _, latest_is_terminal = await store.subscribe("thread-a")
         queue.put_nowait(None)
 
         frames = [
@@ -133,6 +135,7 @@ def test_closed_subscriber_sentinel_ends_stream() -> None:
                 thread_id="thread-a",
                 queue=queue,
                 replay_events=replay,
+                latest_is_terminal=latest_is_terminal,
                 event_store=store,
             )
         ]
@@ -180,3 +183,21 @@ def test_events_endpoint_rejects_cursor_older_than_replay_window() -> None:
     assert response.json() == {
         "detail": "Research event history is no longer available"
     }
+
+
+def test_events_endpoint_closes_when_cursor_is_latest_terminal() -> None:
+    store = ResearchEventStore()
+    completed = asyncio.run(
+        store.publish("thread-a", "completed", {"result": "done"})
+    )
+    application = create_app()
+    application.dependency_overrides[get_research_event_store] = lambda: store
+
+    with TestClient(application) as client:
+        response = client.get(
+            "/api/research/thread-a/events",
+            headers={"Last-Event-ID": str(completed.event_id)},
+        )
+
+    assert response.status_code == 200
+    assert response.text == ""

@@ -75,6 +75,7 @@ def test_answer_delta_only_uses_answer_node_text() -> None:
         (Message("N"), {"langgraph_node": "planner"})
     ) is None
     assert get_answer_delta((Message({}), {"langgraph_node": "answer"})) is None
+    assert get_answer_delta((Message(""), {"langgraph_node": "answer"})) is None
     assert get_answer_delta((Message("N"),)) is None
     assert get_answer_delta((Message("N"), {}, "extra")) is None
 
@@ -107,8 +108,9 @@ def test_completed_graph_emits_structured_events_in_order() -> None:
             event_store=store,
         )
 
-        queue, events, complete = await store.subscribe("thread-a")
+        queue, events, complete, latest_is_terminal = await store.subscribe("thread-a")
         assert complete is True
+        assert latest_is_terminal is True
         assert [event.type for event in events] == [
             "workflow_started",
             "stage_changed",
@@ -141,7 +143,8 @@ def test_interrupted_graph_emits_needs_input_without_completed() -> None:
             event_store=store,
         )
 
-        queue, events, _ = await store.subscribe("thread-a")
+        queue, events, _, latest_is_terminal = await store.subscribe("thread-a")
+        assert latest_is_terminal is False
         assert [event.type for event in events] == [
             "workflow_started",
             "needs_input",

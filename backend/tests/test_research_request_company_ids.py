@@ -43,3 +43,11 @@ def test_request_rejects_more_than_twenty_company_ids() -> None:
         make_request(company_ids=[f"TICKER-{index}" for index in range(21)])
 
     assert error.value.errors()[0]["type"] == "too_long"
+
+
+@pytest.mark.parametrize("company_id", ["", "   "])
+def test_request_rejects_empty_company_id(company_id: str) -> None:
+    with pytest.raises(ValidationError) as error:
+        make_request(company_ids=[company_id])
+
+    assert error.value.errors()[0]["type"] == "string_too_short"

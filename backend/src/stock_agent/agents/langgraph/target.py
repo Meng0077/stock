@@ -75,6 +75,9 @@ async def resolve_target_node(
     )
 
     company_ids = merge_company_ids(request_company_ids, resolution.resolved_targets)
+    resolution = resolution.model_copy(
+        update={"resolved_targets": company_ids}
+    )
 
     update: dict[str, object] = {
         "target_resolution": resolution,
@@ -103,11 +106,10 @@ def route_after_target(
     if resolution is None:
         raise RuntimeError("target resolution is missing")
 
+    # Resolver 负责分类；
+    # Router 只消费 status。
     # 只要还有证券没有确定，
     # 就不能进入 Planner。
-    if resolution.ambiguous_targets or resolution.unresolved_mentions:
-        return "clarify_target"
-
     if resolution.status == "resolved":
         return "planner"
 

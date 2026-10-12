@@ -70,7 +70,7 @@ def collect_security_missing_information(
     if plan.needs_earnings_reaction_history:
         if "earnings_reaction_history" not in results:
             add("earnings_reaction_history_not_executed")
-        elif results["earnings_reaction_history"] is None:
+        elif not results["earnings_reaction_history"]:
             add("earnings_reaction_history_unavailable")
 
     # Macro latest reaction
@@ -84,14 +84,14 @@ def collect_security_missing_information(
     if plan.needs_macro_reaction_history:
         if "macro_reaction_history" not in results:
             add("macro_reaction_history_not_executed")
-        elif results["macro_reaction_history"] is None:
+        elif not results["macro_reaction_history"]:
             add("macro_reaction_history_unavailable")
 
     # Knowledge
     if plan.knowledge_question is not None:
         if "knowledge" not in results:
             add("knowledge_not_executed")
-        elif results["knowledge"] is None:
+        elif not results["knowledge"]:
             add("knowledge_unavailable")
 
     # Financial

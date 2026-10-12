@@ -121,6 +121,35 @@ def test_pre_resolved_request_skips_target_model(monkeypatch) -> None:
     assert resolution.status == "resolved"
 
 
+def test_clarification_resolution_accumulates_company_ids(monkeypatch) -> None:
+    async def resolve_targets(*args, **kwargs):
+        return TargetResolution(resolved_targets=["AAPL"])
+
+    monkeypatch.setattr(target, "resolve_targets", resolve_targets)
+    state = build_initial_state(
+        make_request("Google 怎么看", company_ids=["NVDA"])
+    )
+    state["target_clarification"] = "AAPL"
+    runtime = cast(
+        Runtime[ResearchContext],
+        SimpleNamespace(context=ResearchContext(as_of=AS_OF)),
+    )
+
+    update = asyncio.run(
+        target.resolve_target_node(
+            state,
+            runtime,
+            model=cast(BaseChatModel, AnswerOnlyModel()),
+        )
+    )
+
+    request = cast(ResearchRequest, update["request"])
+    resolution = cast(TargetResolution, update["target_resolution"])
+    assert request.question == "Google 怎么看"
+    assert request.company_ids == ["NVDA", "AAPL"]
+    assert resolution.resolved_targets == ["NVDA", "AAPL"]
+
+
 def test_plan_routes_macro_only_without_target_and_security_to_clarify() -> None:
     macro_state = build_initial_state(make_request("最新 CPI 是多少"))
     macro_state["plan"] = make_plan(

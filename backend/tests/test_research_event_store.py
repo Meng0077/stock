@@ -26,11 +26,12 @@ def test_subscribe_replays_events_after_cursor_and_receives_live_events() -> Non
         await store.publish("thread-a", "workflow_started")
         await store.publish("thread-a", "stage_changed", {"stage": "planning"})
 
-        queue, replay, replay_complete = await store.subscribe(
+        queue, replay, replay_complete, latest_is_terminal = await store.subscribe(
             "thread-a",
             last_event_id=1,
         )
         assert replay_complete is True
+        assert latest_is_terminal is False
         assert [event.event_id for event in replay] == [2]
 
         published = await store.publish(
@@ -51,12 +52,13 @@ def test_subscribe_reports_cursor_older_than_retained_buffer() -> None:
         for _ in range(3):
             await store.publish("thread-a", "stage_changed")
 
-        queue, replay, replay_complete = await store.subscribe(
+        queue, replay, replay_complete, latest_is_terminal = await store.subscribe(
             "thread-a",
             last_event_id=0,
         )
 
         assert replay_complete is False
+        assert latest_is_terminal is False
         assert [event.event_id for event in replay] == [2, 3]
         await store.unsubscribe("thread-a", queue)
 
@@ -69,9 +71,10 @@ def test_subscribe_without_cursor_replays_current_buffer() -> None:
         await store.publish("thread-a", "workflow_started")
         await store.publish("thread-a", "completed", {"result": "done"})
 
-        queue, replay, replay_complete = await store.subscribe("thread-a")
+        queue, replay, replay_complete, latest_is_terminal = await store.subscribe("thread-a")
 
         assert replay_complete is True
+        assert latest_is_terminal is True
         assert [event.type for event in replay] == [
             "workflow_started",
             "completed",
@@ -84,7 +87,7 @@ def test_subscribe_without_cursor_replays_current_buffer() -> None:
 def test_slow_subscriber_is_closed_without_blocking_publisher() -> None:
     async def scenario() -> None:
         store = ResearchEventStore(subscriber_queue_size=1)
-        queue, _, _ = await store.subscribe("thread-a")
+        queue, _, _, _ = await store.subscribe("thread-a")
 
         await store.publish("thread-a", "workflow_started")
         second = await asyncio.wait_for(
@@ -102,7 +105,7 @@ def test_slow_subscriber_is_closed_without_blocking_publisher() -> None:
 def test_publish_continues_after_subscriber_overflow() -> None:
     async def scenario() -> None:
         store = ResearchEventStore(subscriber_queue_size=1)
-        queue, _, _ = await store.subscribe("thread-a")
+        queue, _, _, _ = await store.subscribe("thread-a")
 
         await store.publish("thread-a", "workflow_started")
         await store.publish("thread-a", "answer_delta", {"text": "N"})
@@ -111,11 +114,12 @@ def test_publish_continues_after_subscriber_overflow() -> None:
         assert await queue.get() is None
         assert third.event_id == 3
 
-        replay_queue, replay, replay_complete = await store.subscribe(
+        replay_queue, replay, replay_complete, latest_is_terminal = await store.subscribe(
             "thread-a",
             last_event_id=0,
         )
         assert replay_complete is True
+        assert latest_is_terminal is True
         assert [event.event_id for event in replay] == [1, 2, 3]
         await store.unsubscribe("thread-a", replay_queue)
 
@@ -128,9 +132,12 @@ def test_terminal_thread_remains_replayable_before_ttl() -> None:
         completed = await store.publish("thread-a", "completed", {"result": "done"})
 
         await store.cleanup_expired()
-        queue, replay, replay_complete = await store.subscribe("thread-a", last_event_id=0)
+        queue, replay, replay_complete, latest_is_terminal = await store.subscribe(
+            "thread-a", last_event_id=0
+        )
 
         assert replay_complete is True
+        assert latest_is_terminal is True
         assert replay == [completed]
         await store.unsubscribe("thread-a", queue)
 
@@ -148,9 +155,12 @@ def test_cleanup_removes_expired_terminal_thread() -> None:
         assert "thread-a" not in store._last_event_ids
         assert "thread-a" not in store._terminal_expires_at
 
-        queue, replay, replay_complete = await store.subscribe("thread-a", last_event_id=1)
+        queue, replay, replay_complete, latest_is_terminal = await store.subscribe(
+            "thread-a", last_event_id=1
+        )
         assert replay == []
         assert replay_complete is False
+        assert latest_is_terminal is False
         await store.unsubscribe("thread-a", queue)
 
     asyncio.run(scenario())
@@ -166,9 +176,29 @@ def test_non_terminal_event_cancels_terminal_expiration() -> None:
         assert "thread-a" not in store._terminal_expires_at
 
         await store.cleanup_expired()
-        queue, replay, replay_complete = await store.subscribe("thread-a", last_event_id=0)
+        queue, replay, replay_complete, latest_is_terminal = await store.subscribe(
+            "thread-a", last_event_id=0
+        )
         assert replay_complete is True
+        assert latest_is_terminal is False
         assert [event.event_id for event in replay] == [1, 2]
+        await store.unsubscribe("thread-a", queue)
+
+    asyncio.run(scenario())
+
+
+def test_terminal_cursor_at_latest_event_marks_subscription_terminal() -> None:
+    async def scenario() -> None:
+        store = ResearchEventStore()
+        completed = await store.publish("thread-a", "completed", {"result": "done"})
+
+        queue, replay, replay_complete, latest_is_terminal = await store.subscribe(
+            "thread-a", last_event_id=completed.event_id
+        )
+
+        assert replay == []
+        assert replay_complete is True
+        assert latest_is_terminal is True
         await store.unsubscribe("thread-a", queue)
 
     asyncio.run(scenario())

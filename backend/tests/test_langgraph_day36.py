@@ -173,23 +173,135 @@ def test_checker_retries_provider_failure_only_once() -> None:
     assert route_after_check({**state, **second}) == "answer"
 
 
-def test_checker_treats_empty_requested_history_as_terminal_missing() -> None:
-    plan = make_plan(
-        needs_earnings_reaction_history=True,
-        earnings_reaction_history_limit=3,
-    )
+@pytest.mark.parametrize(
+    ("plan_updates", "result_key", "reason"),
+    [
+        (
+            {
+                "needs_earnings_reaction_history": True,
+                "earnings_reaction_history_limit": 3,
+            },
+            "earnings_reaction_history",
+            "earnings_reaction_history_unavailable:NVDA",
+        ),
+        (
+            {
+                "needs_macro": True,
+                "macro_release_type": "cpi",
+                "needs_macro_reaction_history": True,
+                "macro_reaction_history_limit": 3,
+            },
+            "macro_reaction_history",
+            "macro_reaction_history_unavailable:NVDA",
+        ),
+        (
+            {"knowledge_question": "数据中心业务如何？"},
+            "knowledge",
+            "knowledge_unavailable:NVDA",
+        ),
+    ],
+)
+def test_checker_treats_empty_requested_results_as_terminal_missing(
+    plan_updates: dict[str, object],
+    result_key: str,
+    reason: str,
+) -> None:
+    plan = make_plan(**plan_updates)
 
     missing = collect_missing_information(
         plan=plan,
         results={
+            "macro_snapshot": object(),
             "companies": {
-                "NVDA": {"earnings_reaction_history": []},
+                "NVDA": {result_key: []},
             }
         },
         company_ids=["NVDA"],
     )
 
-    assert missing == ["earnings_reaction_history_unavailable:NVDA"]
+    assert missing == [reason]
+
+
+def test_macro_history_uses_shared_release_key(monkeypatch) -> None:
+    release = MacroReleaseEvent(
+        release_id="cpi:2026-08-12",
+        release_type="cpi",
+        release_date=date(2026, 8, 12),
+        released_at=datetime(2026, 8, 12, 12, 30, tzinfo=timezone.utc),
+        released_at_source="bls",
+        release_date_source="bls",
+        period_binding="verified",
+        metrics=[],
+    )
+    macro_provider = Mock()
+    macro_provider.build_latest.return_value = SimpleNamespace(warnings=[])
+    macro_provider.build_release_history.return_value = ([release], [])
+    monkeypatch.setattr(
+        research,
+        "_get_macro_provider",
+        AsyncMock(return_value=macro_provider),
+    )
+    monkeypatch.setattr(research, "validate_macro_snapshot", Mock(return_value=[]))
+    monkeypatch.setattr(research, "check_required_macro_releases", Mock(return_value=[]))
+    monkeypatch.setattr(research, "get_latest_release", Mock(return_value=None))
+
+    plan = make_plan(
+        needs_macro=True,
+        macro_release_type="cpi",
+        needs_macro_reaction_history=True,
+        macro_reaction_history_limit=3,
+    )
+    results = asyncio.run(
+        research.research_macro_shared_results(
+            plan=plan,
+            context=ResearchContext(as_of=AS_OF),
+        )
+    )
+
+    assert results["macro_release_history"] == [release]
+    assert "macro_reaction_history" not in results
+
+    reaction = object()
+    monkeypatch.setattr(
+        research,
+        "_get_market_provider",
+        AsyncMock(return_value=Mock()),
+    )
+    calculate = Mock(return_value=reaction)
+    monkeypatch.setattr(research, "research_event_reaction", calculate)
+    company_results = asyncio.run(
+        research.research_macro_reaction_results(
+            plan=plan,
+            context=ResearchContext(as_of=AS_OF),
+            symbol="NVDA",
+            macro_results=results,
+        )
+    )
+
+    assert company_results["macro_reaction_history"] == [reaction]
+    assert calculate.call_args.kwargs["release"] is release
+
+
+def test_macro_reaction_skips_market_provider_without_release(monkeypatch) -> None:
+    get_market_provider = AsyncMock()
+    monkeypatch.setattr(research, "_get_market_provider", get_market_provider)
+
+    results = asyncio.run(
+        research.research_macro_reaction_results(
+            plan=make_plan(
+                needs_macro=True,
+                macro_release_type="cpi",
+                needs_macro_reaction_history=True,
+                macro_reaction_history_limit=3,
+            ),
+            context=ResearchContext(as_of=AS_OF),
+            symbol="NVDA",
+            macro_results={"macro_release_history": []},
+        )
+    )
+
+    assert results == {"macro_reaction_history": []}
+    get_market_provider.assert_not_awaited()
 
 
 def test_macro_latest_reaction_is_awaited(monkeypatch) -> None:
@@ -369,6 +481,45 @@ def test_knowledge_research_uses_exact_planned_question(monkeypatch) -> None:
         engine=engine,
         config=context.index_config,
     )
+
+
+def test_research_node_does_not_mutate_previous_company_results(monkeypatch) -> None:
+    previous_company_results = {"existing": "value"}
+    state = {
+        **build_initial_state(make_request("NVDA 怎么看")),
+        "plan": make_plan(),
+        "results": {"companies": {"NVDA": previous_company_results}},
+    }
+    monkeypatch.setattr(
+        research,
+        "research_macro_shared_results",
+        AsyncMock(return_value={}),
+    )
+    monkeypatch.setattr(
+        research,
+        "research_security_results",
+        AsyncMock(return_value={"new": "result"}),
+    )
+    monkeypatch.setattr(
+        research,
+        "research_macro_reaction_results",
+        AsyncMock(return_value={}),
+    )
+
+    update = asyncio.run(
+        research.research_node(
+            state,
+            SimpleNamespace(context=ResearchContext(as_of=AS_OF)),
+        )
+    )
+
+    updated_results = update["results"]
+    assert previous_company_results == {"existing": "value"}
+    assert updated_results["companies"]["NVDA"] == {
+        "existing": "value",
+        "new": "result",
+    }
+    assert updated_results["companies"]["NVDA"] is not previous_company_results
 
 
 def test_answer_payload_serializes_dataclass_results() -> None:
