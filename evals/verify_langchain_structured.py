@@ -29,7 +29,7 @@ MODEL_TIMEOUT_SECONDS = 300
 
 async def main():
     request = ResearchRequest(
-        company_id="NVDA",
+        company_ids=["NVDA"],
         question="管理层如何解释最近业绩变化？",
         data_mode="mixed",
         as_of="2026-09-22T16:00:00+08:00",

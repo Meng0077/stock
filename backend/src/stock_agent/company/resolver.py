@@ -1,5 +1,3 @@
-
-
 from dataclasses import dataclass
 from typing import Literal
 
@@ -141,7 +139,6 @@ candidates=["GOOGL"]
 
 TargetResolutionStatus = Literal[
     "resolved",
-    "multiple",
     "ambiguous",
     "unresolved",
     "absent",
@@ -197,29 +194,18 @@ class TargetResolution(BaseModel):
         """
         根据当前仍未解决的问题，
         推导整个 Target Resolution 的状态。
-
-        unresolved 的优先级最高，
-        因为只要仍存在完全无法确认的 target，
-        当前请求就不能认为已经完成解析。
-
-        ambiguous 次之；
-        所有 target 都明确后，
-        再根据 resolved target 数量区分
-        single / multiple / absent。
         """
-        if self.unresolved_mentions:
-            return "unresolved"
-
         if self.ambiguous_targets:
             return "ambiguous"
 
-        if len(self.resolved_targets) > 1:
-            return "multiple"
+        elif self.unresolved_mentions:
+            return "unresolved"
 
-        if len(self.resolved_targets) == 1:
+        elif self.resolved_targets:
             return "resolved"
 
-        return "absent"
+        else:
+            return "absent"
 
 TargetMentionSource = Literal[
     "explicit",

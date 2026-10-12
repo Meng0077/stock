@@ -14,7 +14,10 @@ class ResearchRequest(BaseModel):
         extra="forbid", str_strip_whitespace=True, validate_assignment=True
     )
 
-    company_id: str | None = Field(min_length=1, max_length=80, default=None)
+    company_ids: list[str] = Field(
+        default_factory=list,
+        max_length=20,
+    )
     question: str = Field(min_length=1, max_length=2000)
     data_mode: RequestDataMode
     # 允许带时区的日期字符串转换为 datetime；没有时区则拒绝。

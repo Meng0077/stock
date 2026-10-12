@@ -8,6 +8,8 @@ FastAPI 与 uvicorn 已在 Step 2 安装并锁定。本模块导入时只创建�
 """
 
 import asyncio
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Annotated
 from uuid import UUID, uuid4
 
@@ -15,11 +17,13 @@ from fastapi import Depends, FastAPI
 
 from stock_agent.agents.manual.manual_runner import failed_run
 from stock_agent.agents.run_errors import error_code_from_exception
-from stock_agent.api.dependencies import AgentRunner, get_agent_runner
+from stock_agent.api.dependencies import AgentRunner, get_agent_runner, get_research_event_store
+from stock_agent.api.research_event_store import run_event_store_cleanup
 from stock_agent.api.schemas import RunResponse
 from stock_agent.schemas.research import ResearchRequest
 
 from stock_agent.api.research import router as research_router
+from stock_agent.api.research_sse import router as research_sse_router
 
 
 def new_run_id() -> UUID:
@@ -67,17 +71,31 @@ async def create_run(
         return RunResponse.from_agent_result(failed_run(run_id, code))
 
 
+@asynccontextmanager
+async def lifespan(application: FastAPI) -> AsyncIterator[None]:
+    cleanup_task = asyncio.create_task(run_event_store_cleanup(get_research_event_store()))
+    try:
+        yield
+    finally:
+        cleanup_task.cancel()
+        try:
+            await cleanup_task
+        except asyncio.CancelledError:
+            pass
+
+
 def create_app() -> FastAPI:
     """无输入；创建并配置 FastAPI；输出可供测试和 uvicorn 使用的应用。"""
     # D06-Step-5.6～5.9：这里只组装应用、响应模型、路由和依赖声明。
-    application = FastAPI()
+    application = FastAPI(lifespan=lifespan)
     application.post(
         "/api/runs",
         response_model=RunResponse,
     )(create_run)
-    
+
     application.include_router(research_router)
-    
+    application.include_router(research_sse_router)
+
     return application
 
 

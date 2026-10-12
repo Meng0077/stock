@@ -112,7 +112,7 @@ def test_explicit_ticker_and_alias_preserve_multiple_targets(
 
     result = resolve("比较 NVDA 和苹果", UnexpectedModel())
 
-    assert result.status == "multiple"
+    assert result.status == "resolved"
     assert result.resolved_targets == ["NVDA", "AAPL"]
 
 

@@ -35,9 +35,10 @@
 | D35 Agent 多维市场研究 | 已完成 | `evaluate_market`、Macro 与 Market Reaction 按需编排；保留独立 Evidence、Decision Guard、pending 状态和非因果边界 |
 | Earnings Market Reaction 扩展 | 已完成 | 以 SEC 8-K Item 2.02 确认最近财报披露，以 SEC accepted_at 为受限事件时间，复用 5m/30m/1h/正式收盘 Reaction 引擎 |
 | D36 LangGraph 按需研究工作流 | 已完成 | Planner → Research → Checker → Answer；财报 RAG、行情、宏观和 Market Reaction 按问题组合执行，资料不足最多补查一次；已通过真实 DeepSeek + Longbridge + Macro Provider 三场景 Live Smoke |
-| D37 Company Registry 与 TargetResolver | 已完成核心链路 | SEC Registry、Longbridge fallback、Alias、Coverage Check、受限 LLM fallback，以及 `resolved / multiple / ambiguous / unresolved / absent` 五种状态；见 `docs/day37.md` |
-| D38 Company Workflow 与恢复流程 | 进程内核心流程已完成 | Resolver 已放在 LangGraph Planner 之前；支持 `interrupt()` / resume、process-local Task Registry、cancel 和 Checkpoint continue；6 个真实 Graph E2E 场景已通过，持久化 Checkpoint、分布式取消和多用户隔离尚未完成 |
-| D39–D46 | 待开发 | SSE 工作流事件与答案流、React 联调、完整评估、故障演示、部署与面试材料 |
+| D37 Company Registry 与 TargetResolver | 已完成核心链路 | SEC Registry、Longbridge fallback、Alias、Coverage Check、受限 LLM fallback，以及 `resolved / ambiguous / unresolved / absent` 四种状态；`resolved_targets` 可保留多个已验证 ticker，见 `docs/day37.md` |
+| D38 Company Workflow 与恢复流程 | 进程内核心流程已完成 | Resolver 已放在 LangGraph Planner 之前；支持 `interrupt()` / resume、process-local Task Registry、cancel 和 Checkpoint continue；请求已升级到复数 `company_ids`，持久化 Checkpoint、分布式取消和多用户隔离尚未完成 |
+| D39 Research SSE | 已完成 | 结构化 workflow events、Answer delta、heartbeat、短线 replay、clarification / resume 保持连接、cancel、有界 subscriber queue 和 terminal TTL 已通过 HTTP 路由验收；使用 `thread_id + event_id` 契约，见 `docs/day39.md` |
+| D40–D46 | 待开发 | React 联调、完整评估、故障演示、部署与面试材料 |
 
 各开发日的设计、验收记录和已知限制位于 [`docs/`](docs/)。当前状态以对应 day 文档和测试结果为准，不把 fixture、历史数据或尚未联调的能力描述为实时生产能力。
 
@@ -47,8 +48,8 @@
 POST /api/research
    ↓
 TargetResolver → CompanyRegistry Verify
-   ├─ multiple / ambiguous / unresolved → interrupt → resume
-   └─ resolved / absent → Planner
+   ├─ ambiguous / unresolved → interrupt → resume
+   └─ resolved（可含多个 ticker）/ absent → Planner
                               ↓
                            Research → Checker
                               ↑          │
@@ -151,8 +152,9 @@ PYTHONPATH=backend/src backend/.venv/bin/uvicorn stock_agent.api.app:app --reloa
 | `POST /api/research/resume` | 使用 `thread_id` 和用户的标的澄清答案恢复已中断的工作流 |
 | `POST /api/research/{thread_id}/cancel` | 取消当前进程中正在运行的研究任务 |
 | `POST /api/research/{thread_id}/continue` | 继续 Checkpoint 仍有后续节点的已取消 Workflow；等待澄清时仍使用 `/resume` |
+| `GET /api/research/{thread_id}/events` | 订阅进程内 SSE 事件；支持 heartbeat、`Last-Event-ID` 短线 replay、慢客户端断开重连和 terminal 后 5 分钟缓存，当前仍在联调 |
 
-目标公开接口 `POST /api/chat/runs` 尚未完成。当前 `/api/research` 已使用 LangGraph；`multiple / ambiguous / unresolved` 通过澄清中断停止研究，`absent` 可先进入 Planner，只有计划需要具体证券时才请求补充标的。Task Registry 和 Checkpoint 都只对当前进程有效，服务重启或请求落到其他 worker 时不能保证恢复或取消。
+目标公开接口 `POST /api/chat/runs` 尚未完成。当前 `/api/research` 已使用 LangGraph；`ambiguous / unresolved` 通过澄清中断停止研究，包含多个已验证 ticker 的 `resolved` 可进入多证券研究；`absent` 可先进入 Planner，只有计划需要具体证券时才请求补充标的。Task Registry、Checkpoint 和 SSE replay 都只对当前进程有效，服务重启或请求落到其他 worker 时不能保证恢复、取消或事件重放。
 
 ### 3. 启动前端
 
@@ -174,13 +176,13 @@ pnpm dev
 backend/.venv/bin/python -m pytest -c backend/pyproject.toml
 ```
 
-当前已验证结果为 `647 passed`。运行全部后端生产代码类型检查：
+当前完整后端回归为 `681 passed, 1 failed`；唯一失败是 Day36 空历史语义差异，与 D39 SSE 无关。D39 的 Event Store、SSE 与 stream runner 专项为 `27 passed`。运行全部后端生产代码类型检查：
 
 ```bash
 backend/.venv/bin/pyright backend/src
 ```
 
-当前结果为 `0 errors, 0 warnings, 0 informations`。
+当前生产代码 Pyright 结果为 `0 errors`。
 
 运行前端检查：
 
@@ -225,4 +227,5 @@ PYTHONPATH=backend/src backend/.venv/bin/python backend/examples/verify_langgrap
 - [D36：LangGraph 按需研究工作流](docs/day36.md)
 - [D37：Company Registry 与 TargetResolver](docs/day37.md)
 - [D38：Target Resolver 的 Graph 接入与恢复](docs/day38.md)
+- [D39：Research SSE 与多证券请求升级](docs/day39.md)
 - [前端开发计划](docs/frontend-development-plan.md)

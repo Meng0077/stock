@@ -99,7 +99,7 @@ async def verify_case(
 ):
 
     request = ResearchRequest(
-        company_id=case["company_id"],
+        company_ids=[case["company_id"]],
         question=case["question"],
         data_mode="mixed",
         as_of=datetime.now(timezone.utc),
@@ -178,7 +178,7 @@ async def main():
         raise SystemExit(1)
 
     # request = ResearchRequest(
-    #     company_id="NVDA",
+    #     company_ids=["NVDA"],
     #     question=(
     #         "NVDA 当前报价怎么样，同时它的数据中心业务主要靠什么？"
     #         # "NVDA 的数据中心业务主要受到什么需求推动？"

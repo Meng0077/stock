@@ -156,27 +156,16 @@ def require_request_company_id(
     但不能自行更换研究标的。
     """
 
-    request_company_id = (
-        runtime.context.company_id
-    )
+    resolved_targets = {
+        company_id.strip().upper()
+        for company_id in runtime.context.company_ids
+    }
 
-    if request_company_id is None:
-        raise ValueError(
-            "current research request "
-            "does not have a security target"
-        )
+    if not resolved_targets:
+        raise ValueError("current research request does not have a security target")
 
     requested = company_id.strip().upper()
-    resolved = (
-        request_company_id
-        .strip()
-        .upper()
-    )
+    if requested not in resolved_targets:
+        raise ValueError("tool company_id must match the resolved request target")
 
-    if requested != resolved:
-        raise ValueError(
-            "tool company_id must match "
-            "the resolved request target"
-        )
-
-    return resolved
+    return requested

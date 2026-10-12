@@ -1,4 +1,5 @@
 import asyncio
+from typing import cast
 
 from stock_agent.agents.context import (
     ResearchContext,
@@ -8,15 +9,13 @@ from stock_agent.agents.langgraph.state import (
     ResearchPlan,
     ResearchState,
 )
+from stock_agent.macro.models.release import MacroReleaseEvent
 from stock_agent.market.earnings import (
     get_earnings_releases,
     research_earnings_reaction,
     research_earnings_reactions,
 )
 from stock_agent.quality.quote import validate_quote
-from stock_agent.schemas.research import (
-    ResearchRequest,
-)
 
 from stock_agent.macro.release_builders import (
     get_latest_release,
@@ -175,34 +174,30 @@ async def research_earnings_results(
 
     return results
 
-async def research_macro_results(
+
+async def research_macro_shared_results(
     *,
     plan: ResearchPlan,
     context: ResearchContext,
-    symbol: str | None,
 ) -> dict[str, object]:
     """
-    执行 Macro 相关研究。
+    执行所有证券共享的 Macro 研究。
 
-    当前支持：
-    - 完整 MacroSnapshot；
-    - 指定类型的最近一次 MacroReleaseEvent；
-    - 指定最近一次 Release 的市场反应。
+    包括：
+    - MacroSnapshot；
+    - Macro Quality；
+    - 当前 Macro Release；
+    - 历史 Macro Releases。
 
-    Historical Macro Reaction 后续单独处理。
+    不计算任何具体证券的价格反应。
     """
-
     if not plan.needs_macro:
         return {}
-
 
     provider = await _get_macro_provider(context)
 
     # 1. 构建 Macro Snapshot
-    snapshot = await asyncio.to_thread(
-        provider.build_latest,
-        as_of=context.as_of,
-    )
+    snapshot = await asyncio.to_thread(provider.build_latest, as_of=context.as_of)
 
     # 2. Snapshot 数据质量
     quality_results = validate_macro_snapshot(snapshot=snapshot, strict_pit=False)
@@ -225,8 +220,6 @@ async def research_macro_results(
         "macro_snapshot": snapshot,
         "macro_quality": quality_report,
     }
-
-
     # 3. 没指定 release type，到完整 Snapshot 就结束。
     if release_type is None:
         return results
@@ -235,46 +228,15 @@ async def research_macro_results(
     release = get_latest_release(snapshot, release_type)
     results["macro_release"] = release
 
-    needs_latest_reaction = plan.needs_macro_reaction
-    needs_history_reaction = plan.needs_macro_reaction_history
-    need_reaction = needs_latest_reaction or needs_history_reaction
-    if not need_reaction:
-        return results
-    if symbol is None:
-        raise RuntimeError("macro reaction requires a security target")
-
-    # 准备 latest reaction
-    latest_release_for_reaction = None
-    if needs_latest_reaction:
-        if release is None:
-            results["macro_reaction"] = None
-        else:
-            release_quality = next(
-                    (
-                        quality
-                        for quality in quality_results
-                        if (
-                            quality.target_id
-                            == release.release_id
-                        )
-                    ),
-                    None,
-                )
-            if release_quality is not None and release_quality.status == 'rejected':
-                results["macro_reaction"] = None
-            else:
-                latest_release_for_reaction = release
-
-    # 准备 historical releases
-    history_releases = []
-    if needs_history_reaction:
+    # 5. 获取历史 Macro Reaction（如果需要）
+    if plan.needs_macro_reaction_history:
         history_limit = plan.macro_reaction_history_limit
         assert history_limit is not None
         history_before = None
-        # 同时请求“这次 + 过去 N 次”时，
-        # 历史部分排除 latest。
-        if needs_latest_reaction and release is not None:
+
+        if plan.needs_macro_reaction and release is not None:
             history_before = release.release_date
+
         history_releases, history_warnings = await asyncio.to_thread(
             provider.build_release_history,
             release_type=release_type,
@@ -282,18 +244,61 @@ async def research_macro_results(
             before=history_before,
             as_of=context.as_of,
         )
-
-        results["macro_release_history"] = history_releases
+        results["macro_reaction_history"] = history_releases
         results["macro_history_warnings"] = history_warnings
 
-    # 没有任何 Reaction 可以计算
-    if latest_release_for_reaction is None and not history_releases:
-        if needs_history_reaction:
-            results["macro_reaction_history"] = []
-        return results
+    return results
 
-    # Reaction 才需要 Market Provider
-    market_provider = await _get_market_provider(context)
+
+async def research_macro_reaction_results(
+    *,
+    plan: ResearchPlan,
+    context: ResearchContext,
+    symbol: str,
+    macro_results: dict[str, object],
+) -> dict[str, object]:
+    """
+    根据已经准备好的共享 Macro 数据，
+    计算一个证券对应的 Macro Reaction。
+
+    不重新请求 Macro Provider。
+    """
+    need_latest = plan.needs_macro_reaction
+    need_history = plan.needs_macro_reaction_history
+
+    if not need_latest and not need_history:
+        return {}
+    results: dict[str, object] = {}
+    release = cast(MacroReleaseEvent | None, macro_results.get("macro_release"))
+    quality_report = cast(DataQualityReport, macro_results.get("macro_quality"))
+
+    latest_release_for_reaction = None
+    if need_latest:
+        if release is None:
+            results["macro_reaction"] = None
+        else:
+            release_quality = next(
+                (
+                    quality
+                    for quality in quality_report.results
+                    if quality.target_id == release.release_id
+                ),
+                None,
+            )
+            if release_quality is not None and release_quality.status == "rejected":
+                results["macro_reaction"] = None
+            else:
+                latest_release_for_reaction = release
+
+    # History
+    history_releases = cast(
+        list[MacroReleaseEvent],
+        macro_results.get("macro_reaction_history", []),
+    )
+    if not history_releases and need_history:
+        results["macro_reaction_history"] = []
+
+    market_provider = await _get_market_provider(context=context)
 
     # Latest Reaction
     if latest_release_for_reaction is not None:
@@ -304,25 +309,23 @@ async def research_macro_results(
             provider=market_provider,
             as_of=context.as_of,
         )
-
         results["macro_reaction"] = latest_reaction
 
-    # Historical Reactions
-    if needs_history_reaction:
+    # history reaction
+    if history_releases and need_history:
         history_reactions = []
-        for history_release in history_releases:
-            history_reaction = await asyncio.to_thread(
+        for release in history_releases:
+            reaction = await asyncio.to_thread(
                 research_event_reaction,
-                release=history_release,
+                release=release,
                 symbol=symbol,
                 provider=market_provider,
                 as_of=context.as_of,
             )
-            history_reactions.append(history_reaction)
+            history_reactions.append(reaction)
         results["macro_reaction_history"] = history_reactions
-
-
     return results
+
 
 async def load_market_analysis(
     *,
@@ -594,9 +597,7 @@ async def research_financial_results(
         })
 
 
-    return {
-        "financial": financial_results
-    }
+    return {"financial": financial_results}
 
 
 async def research_company_profile_results(
@@ -622,24 +623,82 @@ async def research_company_profile_results(
         return {}
 
     normalized_company_id = company_id.strip().upper()
-    company_profile = await asyncio.to_thread(
-        get_sec_company_profile,
-        normalized_company_id
+    company_profile = await asyncio.to_thread(get_sec_company_profile, normalized_company_id)
+    return {"company_profile": company_profile}
+
+
+async def research_security_results(
+    *,
+    plan: ResearchPlan,
+    context: ResearchContext,
+    company_id: str,
+) -> dict[str, object]:
+    """
+    执行一个证券对应的全部研究能力。
+
+    这里只负责单证券研究编排，
+    不负责多证券循环和共享 Macro 数据。
+    """
+    results: dict[str, object] = {}
+
+    # Research Company Profile
+    company_profile = await research_company_profile_results(
+        plan=plan,
+        company_id=company_id,
     )
-    return {
-        "company_profile": company_profile
-    }
+    results.update(company_profile)
+
+    # Earnings
+    earnings = await research_earnings_results(
+        plan=plan,
+        symbol=company_id,
+        context=context,
+    )
+    results.update(earnings)
+
+    # Market
+    market = await research_market_results(
+        plan=plan,
+        symbol=company_id,
+        context=context,
+    )
+    results.update(market)
+
+    # Knowledge
+    knowledge = await research_knowledge_results(
+        plan=plan,
+        company_id=company_id,
+        context=context,
+    )
+    results.update(knowledge)
+
+    # Financial
+    financial = await research_financial_results(
+        plan=plan,
+        company_id=company_id,
+        context=context,
+    )
+    results.update(financial)
+
+    return results
+
 
 async def research_node(
     state: ResearchState,
     runtime: Runtime[ResearchContext],
 ) -> dict[str, object]:
     """
-    根据 ResearchPlan 执行研究能力，
-    并把新结果合并进 ResearchState.results。
+    根据 ResearchPlan 执行研究能力。
 
-    当前节点只负责编排；
-    不实现任何具体业务计算。
+    多证券结果保存在：
+        results["companies"][company_id]
+
+    所有证券共享的数据，
+    例如 MacroSnapshot，
+    保存在 results 顶层。
+
+    当前节点只负责编排，
+    不实现具体业务计算。
     """
     request = state["request"]
     plan = state["plan"]
@@ -655,64 +714,45 @@ async def research_node(
     # 不应该把已有成功结果全部丢掉。
     results = dict(state.get("results", {}))
 
-    company_id = (
-        request.company_id.strip().upper()
-        if request.company_id is not None
-        else None
-    )
-
-    # 正常不会触发
-    if company_id is None and plan_requires_security_target(plan):
+    company_ids = list(request.company_ids)
+    if not company_ids and plan_requires_security_target(plan):
         raise RuntimeError("research plan requires a security target")
-    if company_id is not None:
-        # Company Profile
-        company_results = await research_company_profile_results(
-            plan=plan,
-            company_id=company_id,
-        )
-        results.update(company_results)
 
-        # Earnings
-        earnings = await research_earnings_results(
-            plan=plan,
-            symbol=company_id,
-            context=context,
-        )
-        results.update(earnings)
+    # 1. Macro
+    macro_results = await research_macro_shared_results(plan=plan, context=context)
+    results.update(macro_results)
 
-        # market
-        market = await research_market_results(
-            plan=plan,
-            symbol=company_id,
-            context=context,
-        )
-        results.update(market)
-
-        # Knowledge
-        knowledge = await research_knowledge_results(
-            plan=plan,
-            company_id=company_id,
-            context=context,
-        )
-        results.update(knowledge)
-
-        # Financial
-        financial = await research_financial_results(
-            plan=plan,
-            company_id=company_id,
-            context=context,
-        )
-        results.update(financial)
-
-    # Macro
-    macro = await research_macro_results(
-        plan=plan,
-        symbol=company_id,
-        context=context,
+    # 2. 恢复已有证券研究结果
+    companies = dict(
+        cast(dict[str, dict[str, object]], results.get("companies", {}))
     )
-    results.update(macro)
 
+    # 3. 每个证券独立研究
+    for company_id in request.company_ids:
+        company_results = companies.get(company_id, {})
 
+        # Company / Earnings / Market / Knowledge / Financial
+        security_results = await research_security_results(
+            plan=plan,
+            company_id=company_id,
+            context=context,
+        )
+        company_results.update(security_results)
+
+        # Macro Release 后，证券自己的价格反应
+        macro_reaction_results = await research_macro_reaction_results(
+            plan=plan,
+            symbol=company_id,
+            context=context,
+            macro_results=macro_results,
+        )
+        company_results.update(macro_reaction_results)
+
+        companies[company_id] = company_results
+
+    results["companies"] = companies
+
+    # 4. Retry bookkeeping
     retry_count = state.get("retry_count", 0)
     if state.get("research_status") == "retry":
         retry_count += 1

@@ -22,7 +22,7 @@ MODEL_TIMEOUT_SECONDS = 300
 
 async def verify_financial_and_knowledge_case() -> None:
     request = ResearchRequest(
-        company_id="NVDA",
+        company_ids=["NVDA"],
         question=(
             "NVDA 最近季度净利润是多少？"
             "管理层如何解释最近的业绩变化？"

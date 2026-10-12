@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 import httpx
 
@@ -16,7 +16,7 @@ from stock_agent.retrieval.schemas import DEFAULT_INDEX_CONFIG, IndexConfig
 @dataclass(frozen=True)
 class ResearchContext:
     as_of: datetime
-    company_id: str | None = None
+    company_ids: list[str] = field(default_factory=list)
     engine: Engine | None = None
     index_config: IndexConfig = DEFAULT_INDEX_CONFIG
     sec_client: httpx.Client = SEC_CLIENT

@@ -81,7 +81,7 @@ SYSTEM_PROMPT = """
     quote 为 null，不得编造价格，也不得为该次查询
     生成报价事实。
 
-4. retrieve_knowledge 的 company_id 必须使用请求中的公司代码。
+4. retrieve_knowledge 的 company_id 必须使用请求 company_ids 中的公司代码。
    question 应描述需要检索的具体信息。
 
 5. 最终输出中的 facts 和 inferences 只能引用本轮工具实际返回的 evidence_id。
@@ -338,13 +338,13 @@ SYSTEM_PROMPT = """
     “财报导致 NVDA 上涨 2.1%。”
 
 
-23. 请求中的 company_id 已由 Target Resolver 确认。
+23. 请求中的 company_ids 已由 Target Resolver 确认。
 
-    如果 company_id 为 null，说明本次请求没有证券标的，
+    如果 company_ids 为空列表，说明本次请求没有证券标的，
     不得自行猜测或创建股票代码，也不得调用需要 company_id 的工具。
 
-    如果 company_id 非 null，
-    所有证券相关工具必须使用该 company_id，
+    如果 company_ids 非空，
+    所有证券相关工具必须使用其中的 company_id，
     不得根据 question 自行替换成其他 ticker。
 """
 
@@ -429,12 +429,12 @@ async def invoke_langchain_agent(
             build_agent_input(request),
             context=ResearchContext(
                 as_of=request.as_of,
-                company_id=request.company_id,
+                company_ids=request.company_ids,
                 engine=engine,
                 sec_client=SEC_CLIENT,
                 macro_builder_factory=macro_builder_factory,
                 market_provider_factory=market_provider_factory,
-                ),
+            ),
         )
 
 
@@ -458,13 +458,13 @@ async def run_research(
                 latest_state,
                 stream_mode="values",
                 context=ResearchContext(
-                        as_of=request.as_of,
-                        company_id=request.company_id,
-                        engine=engine,
-                        sec_client=SEC_CLIENT,
-                        macro_builder_factory=macro_builder_factory,
-                        market_provider_factory=market_provider_factory,
-                    ),
+                    as_of=request.as_of,
+                    company_ids=request.company_ids,
+                    engine=engine,
+                    sec_client=SEC_CLIENT,
+                    macro_builder_factory=macro_builder_factory,
+                    market_provider_factory=market_provider_factory,
+                ),
             ):
                 latest_state = state
     # 此运行边界负责把 runtime 异常转换成不含原始异常的公开失败。

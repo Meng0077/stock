@@ -1,10 +1,7 @@
 import asyncio
-from collections.abc import (
-    Callable,
-    Coroutine,
-)
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TypeVar
 
 
 class ResearchTaskAlreadyRunningError(
@@ -19,14 +16,12 @@ class ResearchTaskCancelledError(
     pass
 
 
-ResearchTaskResult = dict[str, Any]
+ResearchTaskResult = TypeVar("ResearchTaskResult")
 
 
 @dataclass
 class RunningResearchTask:
-    task: asyncio.Task[
-        ResearchTaskResult
-    ]
+    task: asyncio.Task[object]
 
     # 只有通过我们自己的 cancel API
     # 主动取消时才设置为 True。
@@ -43,10 +38,7 @@ def is_research_task_running(thread_id: str) -> bool:
 
 async def run_research_task(
     thread_id: str,
-    operation: Callable[
-        [],
-        Coroutine[Any, Any, ResearchTaskResult],
-    ],
+    operation: Callable[[], Coroutine[Any, Any, ResearchTaskResult]],
 ) -> ResearchTaskResult:
     """
     保证同一个 thread_id 同时只有一个 active run。

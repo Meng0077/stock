@@ -19,7 +19,7 @@ LLM Semantic Resolution
   ↓
 Security Registry Verify
   ↓
-resolved / multiple / ambiguous / unresolved / absent
+resolved / ambiguous / unresolved / absent
 ```
 
 Day37 的完成范围不包含 Graph 接入。Resolver 放到 Planner 之前、`interrupt()` 和 resume 澄清流程已在 D38 实现，见 [`docs/day38.md`](day38.md)。
@@ -73,12 +73,11 @@ Resolver 保留三类事实：
 | `ambiguous_targets` | 已确认是证券指代，但仍有多个候选 |
 | `unresolved_mentions` | 已知在指证券，但无法可靠确定 ticker 的原文表达 |
 
-最终状态包含五种：
+当前最终状态包含四种；多个已确认 ticker 也属于 `resolved`：
 
 | 状态 | 条件 |
 | --- | --- |
-| `resolved` | 只有一个已确定 ticker，且没有歧义或未解决表达 |
-| `multiple` | 有多个已确定 ticker，且没有歧义或未解决表达 |
+| `resolved` | 一个或多个 ticker 已确定，且没有歧义或未解决表达 |
 | `ambiguous` | 至少有一个多候选实体 |
 | `unresolved` | 已确认存在证券指代，但无法可靠确定 ticker |
 | `absent` | 整句话没有证券指代，例如纯宏观问题 |
@@ -142,6 +141,6 @@ backend/.venv/bin/pyright \
 
 ## 当前边界与后续状态
 
-Day37 没有实现多股票研究。D38 已将 Resolver 接入 LangGraph 起点和 `/api/research`：`multiple / ambiguous / unresolved` 会保留候选并请用户选择一个标的，不会静默开始单股研究。恢复当前使用进程内存 Checkpoint；持久化、取消、thread 所有权与多股研究仍属于后续范围。
+Day37 当时没有实现多股票研究。D38 已将 Resolver 接入 LangGraph 起点和 `/api/research`；D39 开始把正式请求升级为 `company_ids`，多个已验证 ticker 统一作为 `resolved` 进入按证券分组的研究流程，`ambiguous / unresolved` 仍保留候选并中断澄清。恢复当前使用进程内存 Checkpoint；完整迁移状态与已知问题见 [`docs/day39.md`](day39.md)。
 
 LLM fallback 当前由离线结构化模型测试覆盖，尚未记录真实模型专项联调。D38 的具体 Graph 和 API 验收见 [`docs/day38.md`](day38.md)。

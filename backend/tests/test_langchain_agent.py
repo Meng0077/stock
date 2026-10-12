@@ -61,7 +61,7 @@ class ToolCallingFakeModel(FakeMessagesListChatModel):
 @pytest.fixture
 def research_request() -> ResearchRequest:
     return ResearchRequest(
-        company_id="NVDA",
+        company_ids=["NVDA"],
         question="查询教学模拟报价",
         data_mode="fixture",
         as_of="2026-09-15T16:00:00+08:00",
@@ -119,7 +119,7 @@ def test_build_agent_input_serializes_all_request_fields(research_request):
     assert list(state) == ["messages"]
     assert [message["role"] for message in state["messages"]] == ["user"]
     assert json.loads(state["messages"][0]["content"]) == {
-        "company_id": "NVDA",
+        "company_ids": ["NVDA"],
         "question": "查询教学模拟报价",
         "data_mode": "fixture",
         "as_of": "2026-09-15T16:00:00+08:00",
@@ -167,6 +167,9 @@ def test_system_prompt_preserves_day35_routing_and_safety_contract():
         "模型不得自行猜测财报事件时间或 event_id",
         "以 SEC 8-K 的公开接收时间为基准",
         "下一个正式交易日收盘表现",
+        "请求中的 company_ids 已由 Target Resolver 确认",
+        "如果 company_ids 为空列表",
+        "必须使用其中的 company_id",
     ]
 
     assert all(rule in SYSTEM_PROMPT for rule in required_rules)
@@ -341,7 +344,7 @@ def test_macro_tool_completes_agent_flow_with_historical_evidence():
         }]),
     ])
     request = ResearchRequest(
-        company_id="NVDA",
+        company_ids=["NVDA"],
         question="最近一次 CPI 是多少？",
         data_mode="mixed",
         as_of=as_of,
@@ -556,7 +559,7 @@ def test_multidimensional_market_research_preserves_structured_results(
         ]
     )
     request = ResearchRequest(
-        company_id="NVDA",
+        company_ids=["NVDA"],
         question=(
             "NVDA 当前走势如何，"
             "最近一次 CPI 后又是怎么走的？"
@@ -665,7 +668,7 @@ def test_agent_preserves_blocked_market_decision(
         ]
     )
     request = ResearchRequest(
-        company_id="NVDA",
+        company_ids=["NVDA"],
         question="NVDA 当前走势如何？",
         data_mode="mixed",
         as_of=as_of,
@@ -742,7 +745,7 @@ def test_rag_tool_result_and_missing_documents_complete_agent_flow(monkeypatch, 
     ])
     agent = build_langchain_agent(model, response_format=ToolStrategy(ResearchOutput))
     request = ResearchRequest(
-        company_id=company_id,
+        company_ids=[company_id],
         question="What drives data center revenue?",
         data_mode="mixed",
         as_of="2026-09-17T00:00:00+08:00",
@@ -757,7 +760,7 @@ def test_rag_tool_result_and_missing_documents_complete_agent_flow(monkeypatch, 
 @pytest.mark.parametrize("tool_name", ["get_company_profile"])
 def test_unsupported_company_can_return_insufficient_information(tool_name):
     request = ResearchRequest(
-        company_id="TSLA",
+        company_ids=["TSLA"],
         question="查询教学模拟资料",
         data_mode="fixture",
         as_of="2026-09-15T16:00:00+08:00",
@@ -1023,7 +1026,7 @@ def test_invoke_returns_raw_state_without_d09_conversion(research_request):
             assert state == build_agent_input(research_request)
             assert context == ResearchContext(
                 as_of=research_request.as_of,
-                company_id="NVDA",
+                company_ids=["NVDA"],
             )
             return raw_state
 
@@ -1087,7 +1090,7 @@ def test_run_research_returns_output_identity_and_events(
             assert stream_mode == "values"
             assert context == ResearchContext(
                 as_of=research_request.as_of,
-                company_id="NVDA",
+                company_ids=["NVDA"],
             )
             yield research_state
 

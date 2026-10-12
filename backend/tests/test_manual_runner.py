@@ -27,7 +27,7 @@ RUN_ID = UUID("12345678-1234-5678-1234-567812345678")
 
 def make_request() -> ResearchRequest:
     return ResearchRequest(
-        company_id="NVDA",
+        company_ids=["NVDA"],
         question="查询教学模拟报价",
         data_mode="fixture",
         as_of="2026-09-15T16:00:00+08:00",
@@ -64,7 +64,7 @@ def test_build_initial_messages_serializes_request_as_json():
     assert [message["role"] for message in messages] == ["system", "user"]
     assert "ResearchOutput JSON Schema" in messages[0]["content"]
     assert json.loads(messages[1]["content"]) == {
-        "company_id": "NVDA",
+        "company_ids": ["NVDA"],
         "question": "查询教学模拟报价",
         "data_mode": "fixture",
         "as_of": "2026-09-15T16:00:00+08:00",

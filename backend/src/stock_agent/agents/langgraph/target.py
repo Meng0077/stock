@@ -1,21 +1,27 @@
 from typing import Literal
 
-from langchain_core.language_models import (
-    BaseChatModel,
-)
+from langchain_core.language_models import BaseChatModel
 from langgraph.runtime import Runtime
 from langgraph.types import interrupt
 
-from stock_agent.agents.context import (
-    ResearchContext,
-)
-from stock_agent.agents.langgraph.state import (
-    ResearchState,
-)
-from stock_agent.company.resolver import (
-    TargetResolution,
-    resolve_targets,
-)
+from stock_agent.agents.context import ResearchContext
+from stock_agent.agents.langgraph.state import ResearchState
+from stock_agent.company.resolver import TargetResolution, resolve_targets
+
+
+def merge_company_ids(
+    current: list[str],
+    resolved: list[str],
+) -> list[str]:
+    company_ids = list(current)
+
+    for company_id in resolved:
+        normalized = company_id.strip().upper()
+
+        if normalized not in company_ids:
+            company_ids.append(normalized)
+
+    return company_ids
 
 
 async def resolve_target_node(
@@ -25,39 +31,42 @@ async def resolve_target_node(
     model: BaseChatModel,
 ) -> dict[str, object]:
     """
-    解析本次研究请求的证券 target。
+    解析整个研究请求当前已经明确的证券 target。
 
     第一次进入：
         解析原始 question。
 
     clarification 后再次进入：
-        只解析用户补充的 target 表达。
+        将原始 question 与历次用户补充一起解析。
 
-    resolved 后，
-    把 canonical ticker 写回 ResearchRequest。
+    resolved_targets 可以包含一个或多个 ticker。
     """
     text = state["target_clarification"]
 
+    request = state["request"]
+
     # 已归一化的内部 ResearchRequest
     # 可以直接进入后续节点；
-    # 自然语言 API 创建的请求 company_id=None，
+    # 自然语言 API 创建的请求 company_ids=[]，
     # 仍会走完整 Target Resolver。
-    request_company_id = state["request"].company_id
-    if text is None and request_company_id is not None:
-        company_id = request_company_id.strip().upper()
+    request_company_ids = request.company_ids
+    if text is None and request_company_ids:
+        company_ids = merge_company_ids([], request_company_ids)
         return {
             "request": state["request"].model_copy(
-                update={"company_id": company_id}
+                update={"company_ids": company_ids}
             ),
-            "target_resolution": TargetResolution(
-                resolved_targets=[company_id]
-            ),
+            "target_resolution": TargetResolution(resolved_targets=company_ids),
         }
 
     if text is None:
         target_text = state["request"].question
     else:
-        target_text = text
+        target_text = (
+            f"{request.question}\n\n"
+            "用户后续补充的证券信息：\n"
+            f"{text}"
+        )
 
     resolution = await resolve_targets(
         target_text,
@@ -65,22 +74,15 @@ async def resolve_target_node(
         fallback_provider_factory=runtime.context.market_provider_factory,
     )
 
-    update: dict[str, object] = {"target_resolution": resolution}
+    company_ids = merge_company_ids(request_company_ids, resolution.resolved_targets)
+
+    update: dict[str, object] = {
+        "target_resolution": resolution,
+        "request": request.model_copy(update={"company_ids": company_ids}),
+    }
 
     if resolution.status == "resolved":
-        company_id = resolution.resolved_targets[0]
-
-        # Planner / Research 后面统一读取
-        # request.company_id，不需要再理解 target。
-        update["request"] = state["request"].model_copy(
-            update={"company_id": company_id}
-        )
-    elif resolution.status == "absent" and text is None:
-        # 原始问题确实没有证券 target，
-        update["request"] = state["request"].model_copy(
-            update={"company_id": None}
-        )
-
+        update["target_clarification"] = None
     return update
 
 
@@ -101,18 +103,22 @@ def route_after_target(
     if resolution is None:
         raise RuntimeError("target resolution is missing")
 
+    # 只要还有证券没有确定，
+    # 就不能进入 Planner。
+    if resolution.ambiguous_targets or resolution.unresolved_mentions:
+        return "clarify_target"
+
     if resolution.status == "resolved":
         return "planner"
+
+    if resolution.status in {"ambiguous", "unresolved"}:
+        return "clarify_target"
+
     if resolution.status == "absent":
-        # 原始 question 本身没有 target，
-        # 可以进入 macro-only Planner。
         if state["target_clarification"] is None:
             return "planner"
-
-        # clarification 内容仍然没能
-        # 确认一个证券，继续问。
         return "clarify_target"
-    return "clarify_target"
+    raise RuntimeError("unknown target resolution status")
 
 
 def clarify_target_node(
@@ -120,61 +126,54 @@ def clarify_target_node(
 ) -> dict[str, object]:
     """
     暂停 Workflow，
-    请求用户明确一个最终研究标的。
+    请求用户补充仍未确定的证券 target。
 
-    用户回答后，
-    交回 resolve_target_node 再验证。
+    clarification 会累计保存，
+    下一轮 resolve_target_node
+    会与原始 question 一起重新解析。
     """
     resolution = state["target_resolution"]
     if resolution is None:
         raise RuntimeError("target resolution is missing")
 
-    candidates: list[str] = []
+    ambiguous_targets = [
+        {
+            "mention": target.mention,
+            "candidates": target.candidates,
+        }
+        for target in resolution.ambiguous_targets
+    ]
 
-    for ticker in resolution.resolved_targets:
-        if ticker not in candidates:
-            candidates.append(ticker)
+    unresolved_mentions = list(resolution.unresolved_mentions)
 
-    for target in resolution.ambiguous_targets:
-        for ticker in target.candidates:
-            if ticker not in candidates:
-                candidates.append(ticker)
-
-    if resolution.status == "multiple":
-        message = (
-            "当前问题包含多个证券标的。"
-            "当前工作流一次研究一个证券，"
-            "请回复你要研究的一个 ticker。"
-        )
-
-    elif resolution.status == "ambiguous":
-        message = (
-            "当前证券标的存在歧义，"
-            "请回复你要研究的具体 ticker。"
-        )
+    if resolution.status == "ambiguous":
+        message = "当前证券标的存在歧义，请回复你要研究的具体 ticker。"
+    elif resolution.status == "unresolved":
+        message = "当前仍有证券标的无法确定，请补充更明确的公司名称或 ticker。"
     elif resolution.status == "absent":
-        message = (
-            "这个问题需要具体证券标的，"
-            "请回复公司名称或 ticker。"
-        )
+        message = "这个问题需要具体证券标的，请回复公司名称或 ticker。"
     else:
-        message = (
-            "目前无法确定你指的是哪只证券，"
-            "请回复更明确的公司名称或 ticker。"
-        )
+        # resolved 状态不应进入澄清流程
+        raise RuntimeError("resolved target should not enter clarification")
     answer = interrupt(
         {
-            "type": (
-                "target_clarification"
-            ),
+            "type": "target_clarification",
             "message": message,
-            "candidates": candidates,
+            "ambiguous_targets": ambiguous_targets,
+            "unresolved_mentions": unresolved_mentions,
         }
     )
 
     if not isinstance(answer, str) or not answer.strip():
         raise RuntimeError("target clarification must be a non-empty string")
 
-    return {
-        "target_clarification": answer.strip(),
-    }
+    answer = answer.strip()
+
+    previous = state["target_clarification"]
+
+    if previous is None:
+        clarification = answer
+    else:
+        clarification = f"{previous}\n{answer}"
+
+    return {"target_clarification": clarification}

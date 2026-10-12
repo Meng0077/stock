@@ -14,7 +14,7 @@ from stock_agent.schemas.research import ResearchRequest
 
 async def main() -> None:
     request = ResearchRequest(
-        company_id="NVDA",
+        company_ids=["NVDA"],
         question=(
             "请使用宏观工具查询最近一次 CPI 发布，说明 Actual、Previous、"
             "Consensus 和 Surprise 的可用情况，并且只引用工具返回的证据。"

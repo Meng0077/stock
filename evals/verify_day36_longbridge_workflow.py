@@ -82,7 +82,7 @@ async def verify_day36_longbridge_workflow() -> None:
     )
 
     quote_request = ResearchRequest(
-        company_id=SYMBOL,
+        company_ids=[SYMBOL],
         question="NVDA 现在多少钱？",
         data_mode="live",
         as_of=as_of,
@@ -103,7 +103,7 @@ async def verify_day36_longbridge_workflow() -> None:
     provider.reset_counts()
 
     technical_request = ResearchRequest(
-        company_id=SYMBOL,
+        company_ids=[SYMBOL],
         question="NVDA 当前走势怎么看，同时告诉我 RSI14",
         data_mode="live",
         as_of=as_of,

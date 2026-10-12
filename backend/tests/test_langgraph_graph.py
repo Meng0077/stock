@@ -29,7 +29,7 @@ AS_OF = datetime(2026, 10, 8, 15, 0, tzinfo=timezone.utc)
 
 def make_request(question: str) -> ResearchRequest:
     return ResearchRequest(
-        company_id="NVDA",
+        company_ids=["NVDA"],
         question=question,
         data_mode="live",
         as_of=AS_OF,
@@ -113,7 +113,7 @@ def test_graph_runs_planner_research_checker_answer(monkeypatch) -> None:
         model: Any,
     ) -> dict[str, ResearchPlan]:
         calls.append("planner")
-        assert state["request"].company_id == "NVDA"
+        assert state["request"].company_ids == ["NVDA"]
         return {"plan": make_plan(needs_quote=True)}
 
     async def fake_research_node(
@@ -204,21 +204,29 @@ def test_graph_retries_research_then_answers(monkeypatch) -> None:
         if research_count == 1:
             return {
                 "results": {
-                    "quote": None,
-                    "market_quality": SimpleNamespace(
-                        source_warnings=["quote_provider_unavailable"]
-                    ),
+                    "companies": {
+                        "NVDA": {
+                            "quote": None,
+                            "market_quality": SimpleNamespace(
+                                source_warnings=["quote_provider_unavailable"]
+                            ),
+                        }
+                    }
                 },
                 "retry_count": retry_count,
             }
 
         return {
             "results": {
-                "quote": {
-                    "symbol": "NVDA",
-                    "price": 200.0,
-                },
-                "market_quality": SimpleNamespace(source_warnings=[]),
+                "companies": {
+                    "NVDA": {
+                        "quote": {
+                            "symbol": "NVDA",
+                            "price": 200.0,
+                        },
+                        "market_quality": SimpleNamespace(source_warnings=[]),
+                    }
+                }
             },
             "retry_count": retry_count,
         }
@@ -270,7 +278,10 @@ def test_graph_retries_research_then_answers(monkeypatch) -> None:
     assert result["research_status"] == "enough"
     assert result["retry_count"] == 1
     assert result["missing_information"] == []
-    quote = cast(dict[str, object], result["results"]["quote"])
+    quote = cast(
+        dict[str, object],
+        result["results"]["companies"]["NVDA"]["quote"],
+    )
     assert quote["price"] == 200.0
     assert result["output"] == "NVDA 当前报价为 200 USD。"
 
@@ -323,7 +334,7 @@ def test_graph_runs_real_quote_workflow() -> None:
     assert result["plan"].needs_quote is True
     assert result["plan"].needs_technical is False
     assert result["plan"].needs_decision is False
-    assert result["results"]["quote"] == quote
+    assert result["results"]["companies"]["NVDA"]["quote"] == quote
     assert result["research_status"] == "enough"
     assert result["missing_information"] == []
     assert result["retry_count"] == 0
@@ -334,8 +345,8 @@ def test_graph_runs_real_quote_workflow() -> None:
 
     messages = model.ainvoke.await_args.args[0]
     payload = json.loads(messages[1].content)
-    assert payload["results"]["quote"]["symbol"] == "NVDA"
-    assert payload["results"]["quote"]["price"] == "200.00"
+    assert payload["results"]["companies"]["NVDA"]["quote"]["symbol"] == "NVDA"
+    assert payload["results"]["companies"]["NVDA"]["quote"]["price"] == "200.00"
     assert payload["research_status"] == "enough"
 
 
@@ -412,8 +423,8 @@ def test_graph_shares_market_load_for_technical_and_decision() -> None:
     assert plan.needs_technical is True
     assert plan.needs_decision is True
 
-    technical = result["results"]["technical"]
-    decision = result["results"]["decision"]
+    technical = result["results"]["companies"]["NVDA"]["technical"]
+    decision = result["results"]["companies"]["NVDA"]["decision"]
     assert technical is not None
     assert technical.rsi14 is not None
     assert decision is not None

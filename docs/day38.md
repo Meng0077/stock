@@ -10,7 +10,7 @@ ResearchInput.message
 resolve_target
   ├─ resolved → planner
   ├─ absent → planner
-  └─ multiple / ambiguous / unresolved
+  └─ ambiguous / unresolved
        ↓
     clarify_target → interrupt
        ↓ resume(answer)
@@ -23,13 +23,13 @@ resolve_target
 
 `resolve_target_node` 处理三类输入：
 
-- 自然语言 API 创建的 `company_id=None` 请求会解析原始问题；
+- 自然语言 API 创建的 `company_ids=[]` 请求会解析原始问题；
 - 已归一化的内部 `ResearchRequest` 保持向后兼容，直接规范化 ticker，不重复调用 Resolver 或模型；
 - 恢复时只解析用户最新补充的标的表达，不会绕过 Registry 验证。
 
 `absent` 不会立即失败。它先进入 Planner：
 
-- 纯宏观计划可以以 `company_id=None` 进入 Research；
+- 纯宏观计划可以以 `company_ids=[]` 进入 Research；
 - 报价、技术分析、决策、公司资料、财务数据和 Market Reaction 等需要证券的计划会转入澄清节点；
 - Research 节点仍保留检查，防止缺少 target 的证券计划误执行。
 
@@ -60,7 +60,7 @@ resolve_target
 
 - 已归一化 `ResearchRequest` 跳过 Resolver 模型并规范化 ticker；
 - 纯宏观计划无 target 可继续，报价计划无 target 必须澄清；
-- 真实编译的 LangGraph 使用 `InMemorySaver`，完整跑通“NVDA + AAPL 多标的中断 → 回复 NVDA → 重新解析 → 加载报价 → Checker → Answer”；
+- 真实编译的 LangGraph 使用 `InMemorySaver`，完整跑通 NVDA 与 AAPL 多标的直接研究，并分别加载报价；
 - API 首次调用、独立 thread id、澄清响应和输入校验；
 - API 恢复使用原 thread id 和原 `as_of`；
 - 未知 thread 不执行 Graph；
@@ -74,13 +74,13 @@ resolve_target
 `backend/examples/verify_langgraph_workflow.py` 还使用真实 DeepSeek、Longbridge 和 Macro Provider 验收了 6 个 Graph E2E 场景：
 
 1. `NVDA 当前走势怎么看` 直接解析 NVDA 并完成；
-2. `最新 CPI 是多少` 以 `absent / company_id=None` 完成纯 Macro 研究；
+2. `最新 CPI 是多少` 以 `absent / company_ids=[]` 完成纯 Macro 研究；
 3. `现在股价多少` 先中断，再用 NVDA 恢复；
 4. `Google 怎么看` 保留 GOOG / GOOGL 候选，再用 GOOGL 恢复；
-5. `比较 NVDA 和 AAPL` 不静默选择第一只，再用 AAPL 恢复；
+5. 历史验收中的 `比较 NVDA 和 AAPL` 曾要求选择单只；当前 `company_ids` 升级后改为保留两只并进入多证券研究；
 6. `Google 怎么看` 恢复为 `就那个` 后再次中断，未进入 Planner / Research。
 
-三个 resume 场景都保留了原始 `request.question`，只更新经 Resolver 验证的 `request.company_id`。
+resume 场景保留原始 `request.question`，只合并经 Resolver 验证的 `request.company_ids`。
 
 2026-10-11 验收结果：
 
@@ -95,7 +95,7 @@ resolve_target
 - Checkpoint 使用 `InMemorySaver`，只能在当前进程存活期内恢复；服务重启、多进程或多实例部署不能保证恢复。
 - Task Registry 和 cancel / continue 都是 process-local；未实现持久 Run Metadata、worker ownership、分布式取消、thread 所有权或多用户隔离。
 - `asyncio.Task.cancel()` 使用协作式取消，不能强制终止正在执行的同步阻塞代码或已由远端服务接收的工作。
-- 多标的解析只用于保留候选并请用户选择一个，尚未实现多股同时研究。
+- 多标的请求已开始升级为同时研究，证券级结果按 `results['companies'][company_id]` 保存；完整 API、旧 Agent 与真实联调尚未收口，见 Day39 文档。
 - 离线专项 Graph E2E 使用真实 Graph 和 Checkpoint，模型、Registry 与行情 Provider 为可复现替身；另外已完成上述 6 个真实 DeepSeek / Longbridge / Macro Provider 场景联调。
 - 真实联调时的周末报价超过新鲜度阈值，Quote 场景按质量规则进入 `cannot_retry / quote_unavailable`，但仍正确完成 Answer；这不代表实时报价可用。
 - `InMemorySaver` 运行时对自定义 Pydantic 类型输出未来 strict msgpack 兼容性 warning；允许模块配置与持久化序列化收口与持久化 Checkpoint 一并留到后续阶段。

@@ -49,7 +49,7 @@ async def run_case(
     thread_id: str,
 ) -> tuple[dict[str, Any], ResearchContext, RunnableConfig]:
     request = ResearchRequest(
-        company_id=None,
+        company_ids=[],
         question=question,
         data_mode=data_mode,
         as_of=as_of,
@@ -181,7 +181,7 @@ async def main() -> int:
 
     require("__interrupt__" not in trend_result, "NVDA 走势问题不应 interrupt")
     require(
-        trend_result["request"].company_id == "NVDA",
+        trend_result["request"].company_ids == ["NVDA"],
         "NVDA 没有写入 ResearchRequest",
     )
     require(
@@ -213,7 +213,7 @@ async def main() -> int:
         "Macro-only Target Resolution 不是 absent",
     )
     require(
-        macro_result["request"].company_id is None,
+        macro_result["request"].company_ids == [],
         "Macro-only 请求不应有 company_id",
     )
     require(macro_plan.needs_macro, "Macro-only Planner 没有要求 Macro")
@@ -286,7 +286,7 @@ async def main() -> int:
         "Quote resume 改写了原始 question",
     )
     require(
-        quote_completed["request"].company_id == "NVDA",
+        quote_completed["request"].company_ids == ["NVDA"],
         "Quote resume 没有写入 NVDA",
     )
     require(has_terminal_answer(quote_completed), "Quote resume 没有最终回答")
@@ -333,7 +333,7 @@ async def main() -> int:
         "Google resume 改写了原始 question",
     )
     require(
-        google_completed["request"].company_id == "GOOGL",
+        google_completed["request"].company_ids == ["GOOGL"],
         "Google resume 没有写入 GOOGL",
     )
     require(has_terminal_answer(google_completed), "Google resume 没有最终回答")
@@ -359,7 +359,7 @@ async def main() -> int:
         "NVDA + AAPL Target Resolution 不是 multiple",
     )
     require(
-        multiple_interrupted["request"].company_id is None,
+        multiple_interrupted["request"].company_ids == [],
         "多标的问题静默选择了第一只证券",
     )
 
@@ -379,7 +379,7 @@ async def main() -> int:
         "Multiple resume 改写了原始 question",
     )
     require(
-        multiple_completed["request"].company_id == "AAPL",
+        multiple_completed["request"].company_ids == ["AAPL"],
         "Multiple resume 没有写入 AAPL",
     )
     require(has_terminal_answer(multiple_completed), "Multiple resume 没有最终回答")
@@ -417,7 +417,7 @@ async def main() -> int:
         "无效 clarification 改写了原始 question",
     )
     require(
-        invalid_resumed["request"].company_id is None,
+        invalid_resumed["request"].company_ids == [],
         "无效 clarification 被当成了有效 ticker",
     )
     require(invalid_resumed["plan"] is None, "无效 clarification 后误进 Planner")

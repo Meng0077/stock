@@ -24,7 +24,7 @@ MISSING = object()
 def valid_payload() -> dict[str, object]:
     """返回每个测试独享的合法 fixture 请求，避免测试之间共享可变字典。"""
     return {
-        "company_id": "NVDA",
+        "company_ids": ["NVDA"],
         "question": "查询教学模拟报价和公司介绍",
         "data_mode": "fixture",
         "as_of": "2026-09-15T16:00:00+08:00",
@@ -87,7 +87,7 @@ def test_normal_request_returns_structured_success():
     assert body["error"] is None
     assert body["result"]["status"] == "completed"
     assert len(calls) == 1
-    assert calls[0][0].company_id == "NVDA"
+    assert calls[0][0].company_ids == ["NVDA"]
 
 
 def test_two_requests_use_unique_matching_run_ids():
@@ -131,12 +131,7 @@ def test_invalid_question_returns_422_without_calling_runner(value):
     assert calls == []
 
 
-@pytest.mark.parametrize(
-    "value",
-    ["", "   ", "x" * 81],
-    ids=["empty", "whitespace", "too-long"],
-)
-def test_invalid_company_id_returns_422_without_calling_runner(value):
+def test_more_than_twenty_company_ids_returns_422_without_calling_runner():
     calls = []
 
     async def runner(request, run_id):
@@ -144,7 +139,7 @@ def test_invalid_company_id_returns_422_without_calling_runner(value):
         return completed_result(run_id)
 
     payload = valid_payload()
-    payload["company_id"] = value
+    payload["company_ids"] = [f"TICKER-{index}" for index in range(21)]
 
     with client_for(runner) as client:
         response = client.post("/api/runs", json=payload)
@@ -153,7 +148,7 @@ def test_invalid_company_id_returns_422_without_calling_runner(value):
     assert calls == []
 
 
-def test_missing_company_id_is_forwarded_as_none():
+def test_missing_company_ids_is_forwarded_as_empty_list():
     calls = []
 
     async def runner(request, run_id):
@@ -161,13 +156,13 @@ def test_missing_company_id_is_forwarded_as_none():
         return completed_result(run_id)
 
     payload = valid_payload()
-    payload.pop("company_id")
+    payload.pop("company_ids")
 
     with client_for(runner) as client:
         response = client.post("/api/runs", json=payload)
 
     assert response.status_code == 200
-    assert calls[0][0].company_id is None
+    assert calls[0][0].company_ids == []
 
 
 @pytest.mark.parametrize(

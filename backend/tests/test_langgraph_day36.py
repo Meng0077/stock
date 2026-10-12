@@ -43,7 +43,7 @@ AS_OF = datetime(2026, 10, 8, 8, 0, tzinfo=timezone.utc)
 
 def make_request(question: str) -> ResearchRequest:
     return ResearchRequest(
-        company_id="NVDA",
+        company_ids=["NVDA"],
         question=question,
         data_mode="mixed",
         as_of=AS_OF,
@@ -143,10 +143,14 @@ def test_deterministic_planner_combines_current_and_historical_earnings() -> Non
 def test_checker_retries_provider_failure_only_once() -> None:
     plan = make_plan(needs_quote=True)
     results = {
-        "quote": None,
-        "market_quality": SimpleNamespace(
-            source_warnings=["quote_provider_unavailable"]
-        ),
+        "companies": {
+            "NVDA": {
+                "quote": None,
+                "market_quality": SimpleNamespace(
+                    source_warnings=["quote_provider_unavailable"]
+                ),
+            }
+        }
     }
     state = {
         **build_initial_state(make_request("当前股价")),
@@ -156,14 +160,14 @@ def test_checker_retries_provider_failure_only_once() -> None:
 
     first = checker_node(state)
     assert first == {
-        "missing_information": ["quote_unavailable"],
+        "missing_information": ["quote_unavailable:NVDA"],
         "research_status": "retry",
     }
     assert route_after_check({**state, **first}) == "research"
 
     second = checker_node({**state, "retry_count": 1})
     assert second == {
-        "missing_information": ["quote_unavailable"],
+        "missing_information": ["quote_unavailable:NVDA"],
         "research_status": "cannot_retry",
     }
     assert route_after_check({**state, **second}) == "answer"
@@ -177,10 +181,15 @@ def test_checker_treats_empty_requested_history_as_terminal_missing() -> None:
 
     missing = collect_missing_information(
         plan=plan,
-        results={"earnings_reaction_history": []},
+        results={
+            "companies": {
+                "NVDA": {"earnings_reaction_history": []},
+            }
+        },
+        company_ids=["NVDA"],
     )
 
-    assert missing == ["earnings_reaction_history_unavailable"]
+    assert missing == ["earnings_reaction_history_unavailable:NVDA"]
 
 
 def test_macro_latest_reaction_is_awaited(monkeypatch) -> None:
@@ -247,11 +256,18 @@ def test_macro_latest_reaction_is_awaited(monkeypatch) -> None:
         calculate,
     )
 
+    macro_results = asyncio.run(
+        research.research_macro_shared_results(
+            plan=plan,
+            context=ResearchContext(as_of=AS_OF),
+        )
+    )
     result = asyncio.run(
-        research.research_macro_results(
+        research.research_macro_reaction_results(
             plan=plan,
             context=ResearchContext(as_of=AS_OF),
             symbol="NVDA",
+            macro_results=macro_results,
         )
     )
 
@@ -432,8 +448,9 @@ def test_graph_runs_only_planned_quote_path() -> None:
     assert result["research_status"] == "enough"
     assert result["retry_count"] == 0
     assert result["output"] == "NVDA 当前报价为 200 USD。"
-    assert result["results"]["quote"] == make_quote()
-    assert "technical" not in result["results"]
+    company_results = result["results"]["companies"]["NVDA"]
+    assert company_results["quote"] == make_quote()
+    assert "technical" not in company_results
     assert "macro_snapshot" not in result["results"]
     provider.get_quote.assert_called_once()
     provider.get_bars.assert_not_called()
@@ -461,6 +478,6 @@ def test_graph_stops_after_one_failed_quote_retry() -> None:
 
     assert result["research_status"] == "cannot_retry"
     assert result["retry_count"] == 1
-    assert result["missing_information"] == ["quote_unavailable"]
+    assert result["missing_information"] == ["quote_unavailable:NVDA"]
     assert result["output"] == "报价暂时不可用。"
     assert provider.get_quote.call_count == 2

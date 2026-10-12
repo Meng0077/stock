@@ -12,7 +12,6 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.runtime import Runtime
-from langgraph.types import Command
 
 from stock_agent.agents.context import ResearchContext
 from stock_agent.agents.langgraph.graph import (
@@ -46,10 +45,10 @@ class AnswerOnlyModel:
 def make_request(
     question: str,
     *,
-    company_id: str | None = None,
+    company_ids: list[str] | None = None,
 ) -> ResearchRequest:
     return ResearchRequest(
-        company_id=company_id,
+        company_ids=company_ids or [],
         question=question,
         data_mode="mixed",
         as_of=AS_OF,
@@ -101,7 +100,7 @@ def test_pre_resolved_request_skips_target_model(monkeypatch) -> None:
 
     monkeypatch.setattr(target, "resolve_targets", unexpected_resolver)
     state = build_initial_state(
-        make_request("查询报价", company_id="nvda")
+        make_request("查询报价", company_ids=["nvda"])
     )
     runtime = cast(
         Runtime[ResearchContext],
@@ -118,7 +117,7 @@ def test_pre_resolved_request_skips_target_model(monkeypatch) -> None:
 
     request = cast(ResearchRequest, update["request"])
     resolution = cast(TargetResolution, update["target_resolution"])
-    assert request.company_id == "NVDA"
+    assert request.company_ids == ["NVDA"]
     assert resolution.status == "resolved"
 
 
@@ -139,22 +138,25 @@ def test_plan_routes_macro_only_without_target_and_security_to_clarify() -> None
     assert route_after_plan(quote_state) == "clarify_target"
 
 
-def test_graph_interrupts_for_multiple_targets_and_resumes_with_one(
+def test_graph_researches_multiple_resolved_targets_without_interrupt(
     monkeypatch,
 ) -> None:
     install_security_registry(monkeypatch)
     provider = Mock()
-    provider.get_quote.return_value = Quote(
-        symbol="NVDA",
-        price=Decimal("195.25"),
-        currency="USD",
-        quoted_at=AS_OF - timedelta(seconds=30),
-        received_at=AS_OF - timedelta(seconds=29),
-        session="regular",
-        data_mode="live",
-        is_delayed=False,
-        source="longbridge",
-    )
+    def get_quote(*, symbol: str, as_of: datetime) -> Quote:
+        return Quote(
+            symbol=symbol,
+            price=Decimal("195.25"),
+            currency="USD",
+            quoted_at=AS_OF - timedelta(seconds=30),
+            received_at=AS_OF - timedelta(seconds=29),
+            session="regular",
+            data_mode="live",
+            is_delayed=False,
+            source="longbridge",
+        )
+
+    provider.get_quote.side_effect = get_quote
     context = ResearchContext(
         as_of=AS_OF,
         market_provider_factory=lambda: provider,
@@ -167,7 +169,7 @@ def test_graph_interrupts_for_multiple_targets_and_resumes_with_one(
         configurable={"thread_id": "target-resume-test"}
     )
 
-    interrupted = asyncio.run(
+    completed = asyncio.run(
         graph.ainvoke(
             build_initial_state(
                 make_request("比较 NVDA 和 AAPL 的当前报价")
@@ -177,29 +179,10 @@ def test_graph_interrupts_for_multiple_targets_and_resumes_with_one(
         )
     )
 
-    clarification = interrupted["__interrupt__"][0].value
-    assert clarification == {
-        "type": "target_clarification",
-        "message": (
-            "当前问题包含多个证券标的。"
-            "当前工作流一次研究一个证券，"
-            "请回复你要研究的一个 ticker。"
-        ),
-        "candidates": ["NVDA", "AAPL"],
-    }
-
-    completed = asyncio.run(
-        graph.ainvoke(
-            Command(resume="NVDA"),
-            context=context,
-            config=config,
-        )
-    )
-
-    assert completed["request"].company_id == "NVDA"
+    assert "__interrupt__" not in completed
+    assert completed["request"].company_ids == ["NVDA", "AAPL"]
     assert completed["target_resolution"].status == "resolved"
     assert completed["output"] == "NVDA 当前报价已返回。"
-    provider.get_quote.assert_called_once_with(
-        symbol="NVDA",
-        as_of=AS_OF,
-    )
+    assert provider.get_quote.call_count == 2
+    provider.get_quote.assert_any_call(symbol="NVDA", as_of=AS_OF)
+    provider.get_quote.assert_any_call(symbol="AAPL", as_of=AS_OF)

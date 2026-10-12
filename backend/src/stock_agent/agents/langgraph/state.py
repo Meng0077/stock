@@ -282,12 +282,14 @@ class ResearchState(TypedDict):
     # 最近一次 Target Resolver 的结果。
     target_resolution: TargetResolution | None
 
-    # 用户在 clarification interrupt
-    # 中补充的证券表达。
+    # 用户在 target clarification 中
+    # 已经补充的证券信息。
     #
     # None：
-    #   resolve 原始 question。
+    #   尚未发生 target clarification。
     #
     # 非 None：
-    #   resolve 用户最新补充的 target。
+    #   累积保存历次 clarification 回答，
+    #   resolve_target_node 会将它与
+    #   原始 question 一起重新解析。
     target_clarification: str | None

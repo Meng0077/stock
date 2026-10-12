@@ -72,7 +72,7 @@ async def main() -> int:
     )
     agent = build_langchain_agent(model)
     request = ResearchRequest(
-        company_id="NVDA",
+        company_ids=["NVDA"],
         question=(
             "请必须调用 get_quote 工具查询 NVDA 的教学模拟报价，"
             "然后明确说明数据性质。"

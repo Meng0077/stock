@@ -738,7 +738,7 @@ def plan_requires_security_target(
 ) -> bool:
     """
     当前 Plan 中只要有一项能力依赖具体证券，
-    本次研究就必须已经解析出 company_id。
+    本次研究就必须已经解析出至少一个 company_id。
     """
     return any(
         (
@@ -763,8 +763,8 @@ def route_after_plan(state: ResearchState) -> PlanRoute:
     if plan is None:
         raise RuntimeError("research plan is missing")
 
-    company_id = state["request"].company_id
+    company_ids = state["request"].company_ids
 
-    if company_id is None and plan_requires_security_target(plan):
+    if not company_ids and plan_requires_security_target(plan):
         return "clarify_target"
     return "research"

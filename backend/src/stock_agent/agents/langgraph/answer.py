@@ -4,18 +4,11 @@ from decimal import Decimal
 import json
 from typing import Any
 
-from langchain.messages import (
-    HumanMessage,
-    SystemMessage,
-)
-from langchain_core.language_models import (
-    BaseChatModel,
-)
+from langchain.messages import HumanMessage, SystemMessage
+from langchain_core.language_models import BaseChatModel
 from pydantic import BaseModel
 
-from stock_agent.agents.langgraph.state import (
-    ResearchState,
-)
+from stock_agent.agents.langgraph.state import ResearchState
 
 ANSWER_SYSTEM_PROMPT = """
 你是只读的股票研究结果解释器。
@@ -91,11 +84,46 @@ ANSWER_SYSTEM_PROMPT = """
     除非这些字段本身具有业务含义。
 
 12. 使用用户问题所使用的语言回答。
+
+13. results.companies 按证券 ticker 隔离研究结果。
+
+    如果 request.company_ids 包含多个证券：
+    - 必须分别读取每个 ticker 对应的结果；
+    - 不得把一个证券的 quote、technical、
+      decision、financial、knowledge、
+      earnings reaction 或 macro reaction
+      归属到另一个证券；
+    - 比较多个证券时，只比较 payload 中
+      对应证券实际存在的数据；
+    - 某个证券缺少某项数据时，
+      不得使用其他证券的数据代替。
+
+14. results 顶层的 Macro 数据是
+    本次研究共享的宏观背景。
+
+    例如：
+    - macro_snapshot；
+    - macro_release；
+    - macro_release_history。
+
+    results.companies[ticker] 下的
+    macro_reaction / macro_reaction_history
+    才是该证券自己的价格反应。
+
+    不得把共享 Macro Release
+    描述成某一家公司的专属数据。
+
+15. 当用户要求比较多个证券时，
+    回答应明确区分各 ticker，
+    并在有足够对应数据时再进行横向比较。
+
+    如果某个证券的数据缺失，
+    应明确指出该证券的数据限制，
+    不能因为其他证券数据完整
+    就认为整个比较完整。
 """
 
-def serialize_research_value(
-    value: object,
-) -> object:
+def serialize_research_value(value: object) -> object:
     """
     把 Research results 转成适合交给模型的
     JSON-compatible 数据。
@@ -107,9 +135,7 @@ def serialize_research_value(
 
     if is_dataclass(value) and not isinstance(value, type):
         return {
-            field.name: serialize_research_value(
-                getattr(value, field.name)
-            )
+            field.name: serialize_research_value(getattr(value, field.name))
             for field in fields(value)
         }
 
@@ -127,9 +153,8 @@ def serialize_research_value(
 
     return value
 
-def build_answer_input(
-    state: ResearchState,
-) -> dict[str, Any]:
+
+def build_answer_input(state: ResearchState) -> dict[str, Any]:
     """
     构造 Answer Model 能看到的完整研究输入。
 
@@ -137,7 +162,7 @@ def build_answer_input(
     不产生新的研究结论。
     """
     plan = state["plan"]
-    request = state['request']
+    request = state["request"]
 
     if plan is None:
         raise ValueError("research plan is missing")
@@ -149,14 +174,11 @@ def build_answer_input(
         "plan": plan.model_dump(mode="json"),
         "results": serialize_research_value(results),
         "research_status": state.get("research_status"),
-        "missing_information": list(state.get("missing_information", []))
+        "missing_information": list(state.get("missing_information", [])),
     }
 
-def build_answer_messages(
-    state: ResearchState,
-) -> list[
-    SystemMessage | HumanMessage
-]:
+
+def build_answer_messages(state: ResearchState) -> list[SystemMessage | HumanMessage]:
     """
     把已完成的 ResearchState
     转成 Answer Model 输入。

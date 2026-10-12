@@ -48,7 +48,7 @@ def build_initial_messages(request: ResearchRequest) -> list[dict[str, object]]:
     """把已校验的研究请求转换为 Manual Agent 的初始消息。
 
     输入：
-        request：包含 company_id、question、data_mode、带时区 as_of 的请求。
+        request：包含 company_ids、question、data_mode、带时区 as_of 的请求。
 
     输出：
         可传给 model_loop(initial_messages=...) 的消息列表；不得包含密钥。
@@ -71,7 +71,7 @@ def build_initial_messages(request: ResearchRequest) -> list[dict[str, object]]:
             "role": "user",
             "content": json.dumps(
                 {
-                    "company_id": request.company_id,
+                    "company_ids": request.company_ids,
                     "question": request.question,
                     "data_mode": request.data_mode,
                     "as_of": request.as_of.isoformat(),

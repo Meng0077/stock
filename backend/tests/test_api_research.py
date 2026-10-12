@@ -118,14 +118,34 @@ class FakeResearchGraph:
         self.state_next = state_next
         self.state_interrupts = state_interrupts
         self.calls = []
+        self.completed_threads = set()
 
-    async def ainvoke(self, graph_input, **kwargs):
+    async def astream(self, graph_input, **kwargs):
         self.calls.append((graph_input, kwargs))
         if self.error is not None:
             raise self.error
-        return self.result
+        thread_id = kwargs["config"]["configurable"]["thread_id"]
+        self.completed_threads.add(thread_id)
+        if False:
+            yield None
 
     async def aget_state(self, config):
+        thread_id = config["configurable"]["thread_id"]
+        if thread_id in self.completed_threads:
+            interrupts = tuple(self.result.get("__interrupt__", ()))
+            values = {
+                **self.state_values,
+                **{
+                    key: value
+                    for key, value in self.result.items()
+                    if key != "__interrupt__"
+                },
+            }
+            return SimpleNamespace(
+                values=values,
+                next=(),
+                interrupts=interrupts,
+            )
         return SimpleNamespace(
             values=self.state_values,
             next=self.state_next,
@@ -217,11 +237,10 @@ def test_natural_language_is_normalized_on_server(message):
     before = datetime.now(timezone.utc)
     request = build_research_request(
         ResearchInput(message=message),
-        company_id="NVDA",
     )
     after = datetime.now(timezone.utc)
 
-    assert request.company_id == "NVDA"
+    assert request.company_ids == []
     assert request.question == message
     assert request.data_mode == "mixed"
     assert before <= request.as_of <= after
@@ -257,7 +276,7 @@ def test_research_api_starts_workflow_and_returns_public_result(message):
     assert body["clarification"] is None
     assert body["error"] is None
     initial_state, kwargs = graph.calls[0]
-    assert initial_state["request"].company_id is None
+    assert initial_state["request"].company_ids == []
     assert initial_state["request"].question == message
     assert kwargs["config"]["configurable"]["thread_id"] == body["thread_id"]
 
@@ -355,13 +374,12 @@ def test_invalid_request_returns_422_without_invoking_graph(payload):
     assert graph.calls == []
 
 
-def test_request_without_security_target_keeps_company_id_none():
+def test_request_without_security_target_keeps_company_ids_empty():
     request = build_research_request(
         ResearchInput(message="最新 CPI 是多少"),
-        company_id=None,
     )
 
-    assert request.company_id is None
+    assert request.company_ids == []
 
 
 @pytest.mark.parametrize("error,code", [
@@ -406,7 +424,7 @@ def test_resume_returns_404_for_unknown_workflow():
 
 def test_resume_uses_saved_request_and_same_thread_id():
     request = ResearchRequest(
-        company_id=None,
+        company_ids=[],
         question="比较 NVDA 和 AAPL",
         data_mode="mixed",
         as_of=datetime(2026, 10, 10, 16, tzinfo=timezone.utc),
@@ -440,7 +458,7 @@ def test_resume_uses_saved_request_and_same_thread_id():
 
 def test_resume_runtime_failure_returns_safe_public_error():
     request = ResearchRequest(
-        company_id=None,
+        company_ids=[],
         question="Google 怎么看",
         data_mode="mixed",
         as_of=datetime(2026, 10, 10, 16, tzinfo=timezone.utc),
@@ -514,7 +532,7 @@ def test_continue_rejects_completed_workflow():
 
 def test_continue_uses_saved_request_and_same_thread_id():
     request = ResearchRequest(
-        company_id="NVDA",
+        company_ids=["NVDA"],
         question="NVDA 当前走势怎么看",
         data_mode="mixed",
         as_of=datetime(2026, 10, 11, 16, tzinfo=timezone.utc),
@@ -562,13 +580,15 @@ def test_cancel_stops_active_api_workflow_and_returns_cancelled_status():
                 self.started = asyncio.Event()
                 self.cancelled = asyncio.Event()
 
-            async def ainvoke(self, graph_input, **kwargs):
+            async def astream(self, graph_input, **kwargs):
                 self.calls.append((graph_input, kwargs))
                 self.started.set()
                 try:
                     await asyncio.Event().wait()
                 finally:
                     self.cancelled.set()
+                if False:
+                    yield None
 
         graph = BlockingResearchGraph()
         application = create_app()
