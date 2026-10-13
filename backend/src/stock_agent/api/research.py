@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import Callable, Coroutine
 from datetime import datetime, timezone
 from typing import Any
 import uuid
@@ -18,16 +19,16 @@ from stock_agent.api.research_event_store import ResearchEventStore
 from stock_agent.api.research_stream_runner import run_research_stream
 from stock_agent.api.research_tasks import (
     ResearchTaskAlreadyRunningError,
-    ResearchTaskCancelledError,
     cancel_research_task,
-    run_research_task,
+    is_research_cancel_requested,
+    start_research_task,
 )
 from stock_agent.schemas.errors import make_public_error, map_error
 from stock_agent.schemas.research import (
+    ResearchCommandResponse,
     ResearchInput,
     ResearchRequest,
     ResearchResumeInput,
-    ResearchWorkflowResponse,
 )
 from stock_agent.schemas.research_events import ResearchExecutionType
 
@@ -59,7 +60,7 @@ async def execute_research_workflow(
     context: ResearchContext,
     config: dict[str, Any],
     event_store: ResearchEventStore,
-) -> ResearchWorkflowResponse:
+) -> None:
     """
     执行一次 Research Workflow。
 
@@ -68,51 +69,48 @@ async def execute_research_workflow(
     在这里完成统一编排。
     """
     try:
-        snapshot = await run_research_task(
-            thread_id,
-            lambda: run_research_stream(
-                graph=graph,
-                graph_input=graph_input,
-                thread_id=thread_id,
-                execution=execution,
-                context=context,
-                config=config,
-                event_store=event_store,
-            ),
-        )
-    except ResearchTaskCancelledError:
-        await event_store.publish(thread_id, "cancelled")
-        return ResearchWorkflowResponse(
+        await run_research_stream(
+            graph=graph,
+            graph_input=graph_input,
             thread_id=thread_id,
-            status="cancelled",
+            execution=execution,
+            context=context,
+            config=config,
+            event_store=event_store,
         )
-    except ResearchTaskAlreadyRunningError as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
     except asyncio.CancelledError:
+        if is_research_cancel_requested(thread_id):
+            await event_store.publish(thread_id, "cancelled")
+            return
         raise
     except Exception as error:
         public_error = make_public_error(map_error(error))
         await event_store.publish(thread_id, "failed", {"error": public_error.model_dump()})
-        return ResearchWorkflowResponse(
-            thread_id=thread_id,
-            status="failed",
-            error=public_error.model_dump(),
-        )
-    if snapshot.interrupts:
-        return ResearchWorkflowResponse(
-            thread_id=thread_id,
-            status="needs_input",
-            clarification=snapshot.interrupts[0].value,
-        )
 
-    return ResearchWorkflowResponse(
+
+def start_research_command(
+    *,
+    thread_id: str,
+    operation: Callable[[], Coroutine[Any, Any, None]],
+) -> ResearchCommandResponse:
+    try:
+        start_research_task(
+            thread_id,
+            operation,
+        )
+    except ResearchTaskAlreadyRunningError as error:
+        raise HTTPException(
+            status_code=409,
+            detail=str(error),
+        ) from error
+
+    return ResearchCommandResponse(
         thread_id=thread_id,
-        status="completed",
-        result=snapshot.values["output"],
+        status="accepted",
     )
 
 
-@router.post("/api/research", response_model=ResearchWorkflowResponse)
+@router.post("/api/research", response_model=ResearchCommandResponse)
 async def research(
     body: ResearchInput,
     graph=Depends(get_research_graph),
@@ -120,7 +118,7 @@ async def research(
     market_provider_factory=Depends(get_market_provider_factory),
     event_store=Depends(get_research_event_store),
 ):
-    thread_id = str(body.thread_id) if body.thread_id is not None else str(uuid.uuid4())
+    thread_id = str(uuid.uuid4())
 
     request = build_research_request(body)
     context = ResearchContext(
@@ -130,25 +128,22 @@ async def research(
         market_state="unknown",
     )
     config = build_graph_config(thread_id)
-    snapshot = await graph.aget_state(config)
 
-    if snapshot.values:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Research workflow {thread_id} already exists",
-        )
-    return await execute_research_workflow(
+    return start_research_command(
         thread_id=thread_id,
-        graph=graph,
-        graph_input=build_initial_state(request),
-        execution="start",
-        context=context,
-        config=config,
-        event_store=event_store,
+        operation=lambda: execute_research_workflow(
+            thread_id=thread_id,
+            graph=graph,
+            graph_input=build_initial_state(request),
+            execution="start",
+            context=context,
+            config=config,
+            event_store=event_store,
+        ),
     )
 
 
-@router.post("/api/research/resume", response_model=ResearchWorkflowResponse)
+@router.post("/api/research/resume", response_model=ResearchCommandResponse)
 async def resume_research(
     body: ResearchResumeInput,
     graph=Depends(get_research_graph),
@@ -172,15 +167,17 @@ async def resume_research(
         market_provider_factory=market_provider_factory,
         market_state="unknown",
     )
-
-    return await execute_research_workflow(
+    return start_research_command(
         thread_id=body.thread_id,
-        graph=graph,
-        graph_input=Command(resume=body.answer),
-        execution="resume",
-        context=context,
-        config=config,
-        event_store=event_store,
+        operation=lambda: execute_research_workflow(
+            thread_id=body.thread_id,
+            graph=graph,
+            graph_input=Command(resume=body.answer),
+            execution="resume",
+            context=context,
+            config=config,
+            event_store=event_store,
+        ),
     )
 
 
@@ -201,7 +198,7 @@ async def cancel_research(thread_id: str):
 
 @router.post(
     "/api/research/{thread_id}/continue",
-    response_model=ResearchWorkflowResponse,
+    response_model=ResearchCommandResponse,
 )
 async def continue_research(
     thread_id: str,
@@ -238,13 +235,15 @@ async def continue_research(
         market_provider_factory=market_provider_factory,
         market_state="unknown",
     )
-
-    return await execute_research_workflow(
+    return start_research_command(
         thread_id=thread_id,
-        graph=graph,
-        graph_input=None,
-        execution="continue",
-        context=context,
-        config=config,
-        event_store=event_store,
+        operation=lambda: execute_research_workflow(
+            thread_id=thread_id,
+            graph=graph,
+            graph_input=None,
+            execution="continue",
+            context=context,
+            config=config,
+            event_store=event_store,
+        ),
     )

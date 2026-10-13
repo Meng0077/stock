@@ -3,6 +3,7 @@
 import asyncio
 import json
 from types import SimpleNamespace
+from uuid import UUID
 
 import httpx
 from langgraph.types import Command
@@ -41,6 +42,21 @@ async def wait_for_subscriber(store: ResearchEventStore, thread_id: str) -> None
             return
         await asyncio.sleep(0)
     raise AssertionError("SSE subscriber was not connected")
+
+
+async def wait_for_event(
+    store: ResearchEventStore,
+    thread_id: str,
+    event_type: str,
+) -> None:
+    for _ in range(100):
+        if any(
+            event.type == event_type
+            for event in store._buffers.get(thread_id, ())
+        ):
+            return
+        await asyncio.sleep(0)
+    raise AssertionError(f"event {event_type} was not published")
 
 
 def build_http_client(graph, store: ResearchEventStore) -> httpx.AsyncClient:
@@ -105,6 +121,55 @@ class BlockingGraph:
         return SimpleNamespace(values={}, next=(), interrupts=())
 
 
+class CompletedGraph:
+    output = "NVDA 研究完成"
+
+    async def astream(self, graph_input, **kwargs):
+        yield "messages", (
+            SimpleNamespace(content=self.output),
+            {"langgraph_node": "answer"},
+        )
+
+    async def aget_state(self, config):
+        return SimpleNamespace(
+            values={"output": self.output},
+            next=(),
+            interrupts=(),
+        )
+
+
+def test_http_start_returns_generated_thread_and_replays_completed_event() -> None:
+    async def scenario() -> None:
+        graph = CompletedGraph()
+        store = ResearchEventStore()
+
+        async with build_http_client(graph, store) as client:
+            start_response = await client.post(
+                "/api/research",
+                json={"message": "NVDA 怎么看"},
+            )
+            thread_id = start_response.json()["thread_id"]
+            await wait_for_event(store, thread_id, "completed")
+            stream_response = await client.get(
+                f"/api/research/{thread_id}/events"
+            )
+
+        assert start_response.json() == {
+            "thread_id": thread_id,
+            "status": "accepted",
+        }
+        UUID(thread_id)
+        events = parse_sse_events(stream_response.text)
+        assert [event["type"] for event in events] == [
+            "workflow_started",
+            "answer_delta",
+            "completed",
+        ]
+        assert events[-1]["data"]["data"] == {"result": graph.output}
+
+    asyncio.run(scenario())
+
+
 def test_http_sse_keeps_connection_through_needs_input_and_resume(monkeypatch) -> None:
     async def scenario() -> None:
         monkeypatch.setattr(research_sse, "HEARTBEAT_SECONDS", 0.01)
@@ -112,30 +177,31 @@ def test_http_sse_keeps_connection_through_needs_input_and_resume(monkeypatch) -
         store = ResearchEventStore()
 
         async with build_http_client(graph, store) as client:
-            stream_task = asyncio.create_task(client.get(f"/api/research/{THREAD_ID}/events"))
-            await wait_for_subscriber(store, THREAD_ID)
-
             start_response = await client.post(
                 "/api/research",
-                json={"message": QUESTION, "thread_id": THREAD_ID},
+                json={"message": QUESTION},
             )
-            assert start_response.json()["status"] == "needs_input"
+            thread_id = start_response.json()["thread_id"]
+            assert start_response.json()["status"] == "accepted"
+
+            stream_task = asyncio.create_task(
+                client.get(f"/api/research/{thread_id}/events")
+            )
+            await wait_for_subscriber(store, thread_id)
+            await wait_for_event(store, thread_id, "needs_input")
 
             await asyncio.sleep(0.03)
             assert not stream_task.done()
 
             resume_response = await client.post(
                 "/api/research/resume",
-                json={"thread_id": THREAD_ID, "answer": "NVDA"},
+                json={"thread_id": thread_id, "answer": "NVDA"},
             )
             stream_response = await asyncio.wait_for(stream_task, timeout=1)
 
         assert resume_response.json() == {
-            "thread_id": THREAD_ID,
-            "status": "completed",
-            "result": graph.output,
-            "clarification": None,
-            "error": None,
+            "thread_id": thread_id,
+            "status": "accepted",
         }
         assert graph.request.question == QUESTION
         assert graph.request.company_ids == ["NVDA"]
@@ -184,25 +250,25 @@ def test_http_cancel_publishes_only_cancelled_terminal_event() -> None:
         store = ResearchEventStore()
 
         async with build_http_client(graph, store) as client:
-            stream_task = asyncio.create_task(client.get(f"/api/research/{THREAD_ID}/events"))
-            await wait_for_subscriber(store, THREAD_ID)
-            research_task = asyncio.create_task(
-                client.post(
-                    "/api/research",
-                    json={"message": "NVDA 怎么看", "thread_id": THREAD_ID},
-                )
+            research_response = await client.post(
+                "/api/research",
+                json={"message": "NVDA 怎么看"},
             )
+            thread_id = research_response.json()["thread_id"]
             await asyncio.wait_for(graph.started.wait(), timeout=1)
 
-            cancel_response = await client.post(f"/api/research/{THREAD_ID}/cancel")
-            research_response = await asyncio.wait_for(research_task, timeout=1)
+            stream_task = asyncio.create_task(
+                client.get(f"/api/research/{thread_id}/events")
+            )
+            await wait_for_subscriber(store, thread_id)
+            cancel_response = await client.post(f"/api/research/{thread_id}/cancel")
             stream_response = await asyncio.wait_for(stream_task, timeout=1)
 
         assert cancel_response.json() == {
-            "thread_id": THREAD_ID,
+            "thread_id": thread_id,
             "status": "cancelling",
         }
-        assert research_response.json()["status"] == "cancelled"
+        assert research_response.json()["status"] == "accepted"
         events = parse_sse_events(stream_response.text)
         assert [event["type"] for event in events] == [
             "workflow_started",

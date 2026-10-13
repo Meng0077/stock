@@ -10,6 +10,8 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import importlib.util
 from pathlib import Path
+import threading
+import time
 from types import SimpleNamespace
 from unittest.mock import Mock
 from uuid import UUID
@@ -23,9 +25,14 @@ from langchain.agents.structured_output import ToolStrategy
 from langchain.messages import AIMessage
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 
+from stock_agent.agents.context import ResearchContext
 from stock_agent.api import dependencies
 from stock_agent.api.app import create_app
-from stock_agent.api.research import build_research_request
+from stock_agent.api.research import (
+    build_research_request,
+    execute_research_workflow,
+)
+from stock_agent.api.research_event_store import ResearchEventStore
 from stock_agent.schemas.errors import make_public_error
 from stock_agent.schemas.research import ResearchInput
 from stock_agent.schemas.research_output import ResearchOutput
@@ -119,9 +126,12 @@ class FakeResearchGraph:
         self.state_interrupts = state_interrupts
         self.calls = []
         self.completed_threads = set()
+        self.calls_changed = threading.Condition()
 
     async def astream(self, graph_input, **kwargs):
-        self.calls.append((graph_input, kwargs))
+        with self.calls_changed:
+            self.calls.append((graph_input, kwargs))
+            self.calls_changed.notify_all()
         if self.error is not None:
             raise self.error
         thread_id = kwargs["config"]["configurable"]["thread_id"]
@@ -152,11 +162,37 @@ class FakeResearchGraph:
             interrupts=self.state_interrupts,
         )
 
+    def wait_for_calls(self, count: int) -> None:
+        with self.calls_changed:
+            if not self.calls_changed.wait_for(
+                lambda: len(self.calls) >= count,
+                timeout=1,
+            ):
+                raise AssertionError(f"expected {count} graph calls")
 
-def client_for(graph):
+
+def client_for(graph, event_store: ResearchEventStore | None = None):
     application = create_app()
     application.dependency_overrides[dependencies.get_research_graph] = lambda: graph
+    if event_store is not None:
+        application.dependency_overrides[
+            dependencies.get_research_event_store
+        ] = lambda: event_store
     return TestClient(application)
+
+
+def wait_for_event(
+    event_store: ResearchEventStore,
+    thread_id: str,
+    event_type: str,
+):
+    deadline = time.monotonic() + 1
+    while time.monotonic() < deadline:
+        for event in event_store._buffers.get(thread_id, ()):
+            if event.type == event_type:
+                return event
+        time.sleep(0.001)
+    raise AssertionError(f"event {event_type} was not published")
 
 
 def test_macro_builder_dependency_is_lazy_and_cached(monkeypatch):
@@ -254,27 +290,19 @@ def test_natural_language_is_normalized_on_server(message):
     "NVDA今日行情如何",
     "nvda今日行情如何",
 ])
-def test_research_api_starts_workflow_and_returns_public_result(message):
+def test_research_api_accepts_workflow_with_server_thread_id(message):
     graph = FakeResearchGraph(result={"output": "NVDA 报价研究完成"})
 
     # 不替换路由实现；只用离线 Graph 隔离模型和 Provider。
     with client_for(graph) as client:
         response = client.post("/api/research", json={"message": message})
+        graph.wait_for_calls(1)
 
     assert response.status_code == 200
     body = response.json()
-    assert set(body) == {
-        "thread_id",
-        "status",
-        "result",
-        "clarification",
-        "error",
-    }
+    assert set(body) == {"thread_id", "status"}
     UUID(body["thread_id"])
-    assert body["status"] == "completed"
-    assert body["result"] == "NVDA 报价研究完成"
-    assert body["clarification"] is None
-    assert body["error"] is None
+    assert body["status"] == "accepted"
     initial_state, kwargs = graph.calls[0]
     assert initial_state["request"].company_ids == []
     assert initial_state["request"].question == message
@@ -287,54 +315,31 @@ def test_repeated_requests_use_distinct_workflow_thread_ids():
     with client_for(graph) as client:
         first = client.post("/api/research", json={"message": "查询 NVDA 教学报价"})
         second = client.post("/api/research", json={"message": "查询 NVDA 教学报价"})
+        graph.wait_for_calls(2)
 
     assert first.status_code == second.status_code == 200
-    assert first.json()["status"] == second.json()["status"] == "completed"
+    assert first.json()["status"] == second.json()["status"] == "accepted"
     assert UUID(first.json()["thread_id"]) != UUID(second.json()["thread_id"])
     assert len(graph.calls) == 2
 
 
-def test_research_api_uses_client_supplied_thread_id():
-    graph = FakeResearchGraph(result={"output": "研究完成"})
-    thread_id = "00000000-0000-0000-0000-000000000038"
+def test_research_api_rejects_client_supplied_thread_id():
+    graph = FakeResearchGraph()
 
     with client_for(graph) as client:
         response = client.post(
             "/api/research",
             json={
                 "message": "查询 NVDA 教学报价",
-                "thread_id": thread_id,
+                "thread_id": "00000000-0000-0000-0000-000000000038",
             },
         )
 
-    assert response.status_code == 200
-    assert response.json()["thread_id"] == thread_id
-    assert graph.calls[0][1]["config"] == {
-        "configurable": {"thread_id": thread_id}
-    }
-
-
-def test_research_api_rejects_existing_thread_id():
-    thread_id = "00000000-0000-0000-0000-000000000038"
-    graph = FakeResearchGraph(state_values={"request": object()})
-
-    with client_for(graph) as client:
-        response = client.post(
-            "/api/research",
-            json={
-                "message": "查询 NVDA 教学报价",
-                "thread_id": thread_id,
-            },
-        )
-
-    assert response.status_code == 409
-    assert response.json() == {
-        "detail": f"Research workflow {thread_id} already exists"
-    }
+    assert response.status_code == 422
     assert graph.calls == []
 
 
-def test_research_api_returns_target_clarification_interrupt():
+def test_research_api_accepts_workflow_that_needs_clarification():
     clarification = {
         "type": "target_clarification",
         "message": "请选择一个 ticker。",
@@ -348,13 +353,12 @@ def test_research_api_returns_target_clarification_interrupt():
 
     with client_for(graph) as client:
         response = client.post("/api/research", json={"message": "Google 怎么看"})
+        graph.wait_for_calls(1)
 
     assert response.status_code == 200
     body = response.json()
-    assert body["status"] == "needs_input"
-    assert body["clarification"] == clarification
-    assert body["result"] is None
-    assert body["error"] is None
+    assert body["status"] == "accepted"
+    UUID(body["thread_id"])
 
 
 @pytest.mark.parametrize("payload", [
@@ -389,24 +393,25 @@ def test_request_without_security_target_keeps_company_ids_empty():
     (TimeoutError("private deadline details"), "total_timeout"),
     (RuntimeError("PRIVATE_API_KEY Authorization traceback"), "model_error"),
 ])
-def test_runtime_failure_returns_only_safe_public_fields(error, code):
+def test_runtime_failure_publishes_only_safe_public_fields(error, code):
     graph = FakeResearchGraph(error=error)
-    with client_for(graph) as client:
+    event_store = ResearchEventStore()
+    with client_for(graph, event_store) as client:
         response = client.post("/api/research", json={"message": "查询 NVDA 教学报价"})
+        body = response.json()
+        failed = wait_for_event(event_store, body["thread_id"], "failed")
 
     assert response.status_code == 200
-    body = response.json()
     UUID(body["thread_id"])
     assert body == {
         "thread_id": body["thread_id"],
-        "status": "failed",
-        "result": None,
-        "clarification": None,
-        "error": make_public_error(code).model_dump(),
+        "status": "accepted",
     }
-    assert "private" not in response.text.casefold()
-    assert "authorization" not in response.text.casefold()
-    assert "traceback" not in response.text.casefold()
+    assert failed.data == {"error": make_public_error(code).model_dump()}
+    event_text = failed.model_dump_json()
+    assert "private" not in event_text.casefold()
+    assert "authorization" not in event_text.casefold()
+    assert "traceback" not in event_text.casefold()
 
 
 def test_resume_returns_404_for_unknown_workflow():
@@ -439,14 +444,12 @@ def test_resume_uses_saved_request_and_same_thread_id():
             "/api/research/resume",
             json={"thread_id": "thread-1", "answer": "NVDA"},
         )
+        graph.wait_for_calls(1)
 
     assert response.status_code == 200
     assert response.json() == {
         "thread_id": "thread-1",
-        "status": "completed",
-        "result": "NVDA 研究完成",
-        "clarification": None,
-        "error": None,
+        "status": "accepted",
     }
     command, kwargs = graph.calls[0]
     assert command.resume == "NVDA"
@@ -468,22 +471,25 @@ def test_resume_runtime_failure_returns_safe_public_error():
         state_values={"request": request},
     )
 
-    with client_for(graph) as client:
+    event_store = ResearchEventStore()
+    with client_for(graph, event_store) as client:
         response = client.post(
             "/api/research/resume",
             json={"thread_id": "thread-1", "answer": "GOOGL"},
         )
+        failed = wait_for_event(event_store, "thread-1", "failed")
 
     assert response.status_code == 200
     assert response.json() == {
         "thread_id": "thread-1",
-        "status": "failed",
-        "result": None,
-        "clarification": None,
-        "error": make_public_error("model_error").model_dump(),
+        "status": "accepted",
     }
-    assert "private" not in response.text.casefold()
-    assert "traceback" not in response.text.casefold()
+    assert failed.data == {
+        "error": make_public_error("model_error").model_dump()
+    }
+    event_text = failed.model_dump_json()
+    assert "private" not in event_text.casefold()
+    assert "traceback" not in event_text.casefold()
 
 
 def test_continue_returns_404_for_unknown_workflow():
@@ -545,14 +551,12 @@ def test_continue_uses_saved_request_and_same_thread_id():
 
     with client_for(graph) as client:
         response = client.post("/api/research/thread-1/continue")
+        graph.wait_for_calls(1)
 
     assert response.status_code == 200
     assert response.json() == {
         "thread_id": "thread-1",
-        "status": "completed",
-        "result": "NVDA 研究完成",
-        "clarification": None,
-        "error": None,
+        "status": "accepted",
     }
     graph_input, kwargs = graph.calls[0]
     assert graph_input is None
@@ -595,28 +599,23 @@ def test_cancel_stops_active_api_workflow_and_returns_cancelled_status():
         application.dependency_overrides[
             dependencies.get_research_graph
         ] = lambda: graph
-        thread_id = "00000000-0000-0000-0000-000000000038"
         transport = httpx.ASGITransport(app=application)
 
         async with httpx.AsyncClient(
             transport=transport,
             base_url="http://testserver",
         ) as client:
-            research_task = asyncio.create_task(
-                client.post(
-                    "/api/research",
-                    json={
-                        "message": "NVDA 当前走势怎么看",
-                        "thread_id": thread_id,
-                    },
-                )
+            research_response = await client.post(
+                "/api/research",
+                json={"message": "NVDA 当前走势怎么看"},
             )
+            thread_id = research_response.json()["thread_id"]
             await graph.started.wait()
 
             cancel_response = await client.post(
                 f"/api/research/{thread_id}/cancel"
             )
-            research_response = await research_task
+            await graph.cancelled.wait()
 
         assert cancel_response.status_code == 200
         assert cancel_response.json() == {
@@ -626,12 +625,39 @@ def test_cancel_stops_active_api_workflow_and_returns_cancelled_status():
         assert research_response.status_code == 200
         assert research_response.json() == {
             "thread_id": thread_id,
-            "status": "cancelled",
-            "result": None,
-            "clarification": None,
-            "error": None,
+            "status": "accepted",
         }
         assert graph.cancelled.is_set()
+
+    asyncio.run(scenario())
+
+
+def test_external_cancellation_is_not_published_as_user_cancellation() -> None:
+    async def scenario() -> None:
+        class CancelledGraph:
+            async def astream(self, graph_input, **kwargs):
+                raise asyncio.CancelledError
+                if False:
+                    yield None
+
+        event_store = ResearchEventStore()
+        with pytest.raises(asyncio.CancelledError):
+            await execute_research_workflow(
+                thread_id="thread-external-cancel",
+                graph=CancelledGraph(),
+                graph_input={},
+                execution="start",
+                context=ResearchContext(as_of=datetime.now(timezone.utc)),
+                config={
+                    "configurable": {
+                        "thread_id": "thread-external-cancel",
+                    }
+                },
+                event_store=event_store,
+            )
+
+        events = event_store._buffers["thread-external-cancel"]
+        assert [event.type for event in events] == ["workflow_started"]
 
     asyncio.run(scenario())
 

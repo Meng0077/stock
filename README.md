@@ -148,10 +148,10 @@ PYTHONPATH=backend/src backend/.venv/bin/uvicorn stock_agent.api.app:app --reloa
 | 方法与路径 | 说明 |
 | --- | --- |
 | `POST /api/runs` | 接收已归一化的 `ResearchRequest`，运行现有 Manual Agent 路径 |
-| `POST /api/research` | 接收自然语言 `message` 和可选 UUID `thread_id`，创建 LangGraph thread；返回 `completed`、`needs_input`、`cancelled` 或安全的 `failed` 结果 |
-| `POST /api/research/resume` | 使用 `thread_id` 和用户的标的澄清答案恢复已中断的工作流 |
+| `POST /api/research` | 接收自然语言 `message`，由服务端生成 `thread_id` 并返回 `accepted`；运行结果通过 SSE 事件读取 |
+| `POST /api/research/resume` | 使用 `thread_id` 和用户的标的澄清答案恢复已中断的工作流，返回 `accepted` |
 | `POST /api/research/{thread_id}/cancel` | 取消当前进程中正在运行的研究任务 |
-| `POST /api/research/{thread_id}/continue` | 继续 Checkpoint 仍有后续节点的已取消 Workflow；等待澄清时仍使用 `/resume` |
+| `POST /api/research/{thread_id}/continue` | 继续 Checkpoint 仍有后续节点的已取消 Workflow，返回 `accepted`；等待澄清时仍使用 `/resume` |
 | `GET /api/research/{thread_id}/events` | 订阅进程内 SSE 事件；支持 heartbeat、`Last-Event-ID` 短线 replay、慢客户端断开重连和 terminal 后 5 分钟缓存，当前仍在联调 |
 
 目标公开接口 `POST /api/chat/runs` 尚未完成。当前 `/api/research` 已使用 LangGraph；`ambiguous / unresolved` 通过澄清中断停止研究，包含多个已验证 ticker 的 `resolved` 可进入多证券研究；`absent` 可先进入 Planner，只有计划需要具体证券时才请求补充标的。Task Registry、Checkpoint 和 SSE replay 都只对当前进程有效，服务重启或请求落到其他 worker 时不能保证恢复、取消或事件重放。
@@ -176,7 +176,7 @@ pnpm dev
 backend/.venv/bin/python -m pytest -c backend/pyproject.toml
 ```
 
-当前完整后端回归为 `692 passed`。运行全部后端生产代码类型检查：
+当前完整后端回归为 `693 passed`。运行全部后端生产代码类型检查：
 
 ```bash
 backend/.venv/bin/pyright backend/src

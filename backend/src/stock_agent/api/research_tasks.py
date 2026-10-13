@@ -1,27 +1,16 @@
 import asyncio
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
-from typing import Any, TypeVar
+from typing import Any
 
 
-class ResearchTaskAlreadyRunningError(
-    RuntimeError
-):
+class ResearchTaskAlreadyRunningError(RuntimeError):
     pass
-
-
-class ResearchTaskCancelledError(
-    RuntimeError
-):
-    pass
-
-
-ResearchTaskResult = TypeVar("ResearchTaskResult")
 
 
 @dataclass
 class RunningResearchTask:
-    task: asyncio.Task[object]
+    task: asyncio.Task[None]
 
     # 只有通过我们自己的 cancel API
     # 主动取消时才设置为 True。
@@ -36,17 +25,25 @@ def is_research_task_running(thread_id: str) -> bool:
     return running_task is not None and not running_task.task.done()
 
 
-async def run_research_task(
+def _cleanup_research_task(
     thread_id: str,
-    operation: Callable[[], Coroutine[Any, Any, ResearchTaskResult]],
-) -> ResearchTaskResult:
-    """
-    保证同一个 thread_id 同时只有一个 active run。
+    completed_task: asyncio.Task[None],
+) -> None:
+    current_running_task = _RUNNING_RESEARCH_TASKS.get(thread_id)
+    if current_running_task is not None and current_running_task.task is completed_task:
+        _RUNNING_RESEARCH_TASKS.pop(thread_id, None)
 
-    Task Registry 只跟踪当前进程中的运行状态；
-    Graph State 和恢复点仍由 LangGraph Checkpointer 管理。
-    """
 
+def start_research_task(
+    thread_id: str,
+    operation: Callable[[], Coroutine[Any, Any, None]],
+) -> None:
+    """
+    启动一个后台 Research Workflow。
+
+    调用后立即返回，不等待 Workflow 完成；
+    Task Registry 持有 Task，供重复执行检查和取消使用。
+    """
     if is_research_task_running(thread_id):
         raise ResearchTaskAlreadyRunningError(
             f"research workflow {thread_id} is already running"
@@ -54,24 +51,9 @@ async def run_research_task(
 
     task = asyncio.create_task(operation())
     _RUNNING_RESEARCH_TASKS[thread_id] = RunningResearchTask(task=task)
-
-    try:
-        return await task
-    except asyncio.CancelledError as error:
-        running_task = _RUNNING_RESEARCH_TASKS.get(thread_id)
-        if (
-            running_task is not None
-            and running_task.task is task
-            and running_task.cancel_requested
-        ):
-            raise ResearchTaskCancelledError(
-                f"research workflow {thread_id} was cancelled"
-            ) from error
-        raise
-    finally:
-        current_running_task = _RUNNING_RESEARCH_TASKS.get(thread_id)
-        if current_running_task is not None and current_running_task.task is task:
-            _RUNNING_RESEARCH_TASKS.pop(thread_id, None)
+    task.add_done_callback(
+        lambda completed_task: _cleanup_research_task(thread_id, completed_task)
+    )
 
 
 def cancel_research_task(thread_id: str) -> bool:
@@ -88,3 +70,8 @@ def cancel_research_task(thread_id: str) -> bool:
         return True
 
     return False
+
+
+def is_research_cancel_requested(thread_id: str) -> bool:
+    running_task = _RUNNING_RESEARCH_TASKS.get(thread_id)
+    return running_task is not None and running_task.cancel_requested

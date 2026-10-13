@@ -1,7 +1,6 @@
 """D02：数据模型不是大语言模型，而是输入数据的规则。"""
 
 from typing import Annotated, Any, Literal
-from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
@@ -33,9 +32,6 @@ class ResearchInput(BaseModel):
         max_length=2000,
     )
 
-    thread_id: UUID | None = None
-
-
 class ResearchResponse(BaseModel):
     run_id: str
     status: str
@@ -60,23 +56,10 @@ class ResearchResumeInput(BaseModel):
     )
 
 
-ResearchWorkflowStatus = Literal[
-    "needs_input",
-    "completed",
-    "failed",
-    "cancelled",
-]
+ResearchCommandStatus = Literal["accepted"]
 
 
-class ResearchWorkflowResponse(BaseModel):
+class ResearchCommandResponse(BaseModel):
     thread_id: str
 
-    status: ResearchWorkflowStatus
-
-    result: str | None = None
-
-    clarification: (
-        dict[str, Any] | None
-    ) = None
-
-    error: dict[str, Any] | None = None
+    status: ResearchCommandStatus

@@ -35,9 +35,9 @@ resolve_target
 
 ## API 契约
 
-`POST /api/research` 接收自然语言 `message`。客户端可预先提供 UUID 形式的 `thread_id`，以便在首次请求尚未返回时从另一请求取消；未提供时由服务端生成。已有 Checkpoint 的 `thread_id` 返回 `409`，不覆盖旧 Workflow。
+`POST /api/research` 只接收自然语言 `message`。服务端为每次请求生成 UUID 形式的 `thread_id`，启动后台 Workflow，并立即返回 `status="accepted"`。客户端随后使用该 `thread_id` 订阅 SSE；replay buffer 会补发订阅前已产生的事件。
 
-研究接口返回四种状态：
+研究命令接口返回 `accepted`，Workflow 终态由 SSE 表达：
 
 | 状态 | 含义 |
 | --- | --- |
@@ -46,11 +46,11 @@ resolve_target
 | `failed` | 运行失败，`error` 只包含公开错误字段，不返回 Provider 密钥、内部异常文本或 traceback |
 | `cancelled` | 当前进程通过 cancel API 主动取消了运行中的 Workflow |
 
-`POST /api/research/resume` 接收 `thread_id` 和 `answer`。它使用 Checkpoint 中的原始 `ResearchRequest.as_of` 重建运行上下文，不会在恢复时生成新的研究时间边界。未知 thread 返回 `404`。
+`POST /api/research/resume` 接收 `thread_id` 和 `answer`。它使用 Checkpoint 中的原始 `ResearchRequest.as_of` 重建运行上下文，不会在恢复时生成新的研究时间边界。接受执行时返回 `accepted`，未知 thread 返回 `404`。
 
-`POST /api/research/{thread_id}/cancel` 只取消当前进程 Task Registry 中正在运行的任务。接受取消时返回 `cancelling`，原研究请求最终返回 `cancelled`；thread 不在运行时返回 `404`。
+`POST /api/research/{thread_id}/cancel` 只取消当前进程 Task Registry 中正在运行的任务。接受取消时返回 `cancelling`，并通过 SSE 发布 `cancelled`；thread 不在运行时返回 `404`。
 
-`POST /api/research/{thread_id}/continue` 用于继续被取消但 Checkpoint 仍有后续节点的 Workflow。等待用户澄清时必须使用 `/resume`；已完成或仍在等待输入的 Workflow 对 `/continue` 返回 `409`。
+`POST /api/research/{thread_id}/continue` 用于继续被取消但 Checkpoint 仍有后续节点的 Workflow。接受执行时返回 `accepted`；等待用户澄清时必须使用 `/resume`；已完成或仍在等待输入的 Workflow 对 `/continue` 返回 `409`。
 
 同一 `thread_id` 同时只允许一个 active run。Task Registry 只管理执行中的 `asyncio.Task`，Graph State 和恢复位置仍由 LangGraph Checkpointer 管理。
 
@@ -61,12 +61,12 @@ resolve_target
 - 已归一化 `ResearchRequest` 跳过 Resolver 模型并规范化 ticker；
 - 纯宏观计划无 target 可继续，报价计划无 target 必须澄清；
 - 真实编译的 LangGraph 使用 `InMemorySaver`，完整跑通 NVDA 与 AAPL 多标的直接研究，并分别加载报价；
-- API 首次调用、独立 thread id、澄清响应和输入校验；
+- API 首次调用返回 `accepted`、服务端生成独立 thread id、澄清事件和输入校验；
 - API 恢复使用原 thread id 和原 `as_of`；
 - 未知 thread 不执行 Graph；
-- 客户端预先提供 `thread_id`，已有 Checkpoint 的 thread 不被覆盖；
+- 初始请求拒绝客户端提供 `thread_id`，避免覆盖旧 Workflow；
 - 同一 thread 并发执行被拒绝，不同任务终态后 Registry 正确清理；
-- cancel API 取消运行中的 Graph，原请求返回 `cancelled`；未运行 thread 返回 `404`；
+- cancel API 取消运行中的 Graph 并发布 `cancelled` 事件；未运行 thread 返回 `404`；
 - 非 cancel API 引起的外部 `asyncio.CancelledError` 继续向上传播，不伪装成用户主动取消；
 - continue 只在 Checkpoint 存在且有后续节点时继续，拒绝未知、等待输入和已完成状态；
 - 模型调用次数、Tool 调用次数、超时和未知运行错误均映射为固定公开错误，不泄露私有细节。
