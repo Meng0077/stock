@@ -4,6 +4,23 @@
 
 当前仓库已完成 `frontend/` 工程初始化；研究请求、结果和后期领域功能仍按本文步骤逐项实现，不把尚未实现的功能标记为完成，也不提前虚构后端尚未提供的字段。
 
+## 当前实现状态（2026-10-14）
+
+前端已经从本地 Fake Transport 进入真实研究工作流联调：
+
+```text
+自然语言 message
+  -> POST /api/research
+  -> 后端返回 accepted + thread_id
+  -> GET /api/research/{thread_id}/events
+  -> 阶段状态 + Answer 增量 + terminal event
+  -> ResearchRound
+```
+
+当前已完成 `thread_id` 绑定、SSE 订阅、顺序文本展示、终态排队、旧请求中止以及请求/SSE/Hook/组件专项测试。`needs_input` 会保持连接并显示等待状态，但 clarification/resume 输入交互尚未接入；`target_resolution` 卡片、后端 cancel/continue 操作、结构化研究结果和页面恢复也仍属于后续任务。
+
+下文 FE01/FE02 中的 Fake Transport 内容是早期开发记录。当前运行边界以本节和 `frontend/README.md` 为准。
+
 ## 1. 前端目标与边界
 
 技术栈：React + TypeScript。
@@ -56,13 +73,13 @@
 | --- | --- | --- | --- |
 | FE01 工程与契约 | D08 Manual/LangChain 对照 | React 工程、公开对话请求类型、结构化响应类型、mock | 否 |
 | FE02 最小对话页面 | D08–D09 Agent 收口 | Page 内最小请求与展示，跑通后抽 Hook/组件，功能完成后统一测试 | 否，先使用 mock |
-| FE03 真实 API 联调 | D10 完整链路 | 对话 API 客户端和浏览器端到端测试 | 是，等待后端对话请求归一化入口 |
+| FE03 真实 API 联调 | D10 完整链路 | `/api/research` 命令、服务端 `thread_id` 和 SSE 订阅 | 主链路已接入 |
 | FE04 证据与数据时间 | D11–D30 RAG/数据工具 | 引用、行情、宏观和新闻时间展示 | 是，等待证据和时间契约 |
 | FE05 决策与风险 | D31–D41 决策/组合/风险 | Decision Trace、仓位前后对比 | 是，等待领域模型和 API |
-| FE06 工作流状态 | D38 cancel / continue、D39 SSE、D42–D46 工程化 | 取消、恢复、竞态保护与 SSE | 部分；D38 后端已有进程内 cancel / continue，通用 SSE 客户端已有，真实 SSE 联调等待 D39 事件契约 |
+| FE06 工作流状态 | D38 cancel / continue、D39 SSE、D42–D46 工程化 | 取消、恢复、竞态保护与 SSE | 部分；真实 SSE 展示已接入，clarification/resume、cancel/continue 和恢复 UI 待完成 |
 | FE07 交付与演示 | D47–D51 集成评估 | 可访问性、响应式、部署说明和演示路径 | 是，等待全链路稳定 |
 
-当前应立即开始 FE01 和 FE02；D09 完成后收口 FE03。FE04–FE06 不阻塞前端基础开发。
+FE01、FE02 和真实 SSE 主链路已经完成。后续按现有契约补 clarification/resume、取消/继续和结构化研究结果，不提前扩展事件协议。
 
 ## 4. 对话 API 与内部研究契约
 
@@ -399,6 +416,15 @@ FE02.1～FE02.9 完成后再补测试，覆盖 Composer、Hook 调用时机与�
 
 ## 7. FE03：接入真实 API
 
+当前实际接入采用后端已有的命令与事件分离接口，而不是本节早期规划的同步 `/api/chat/runs`：
+
+```text
+POST /api/research
+GET /api/research/{thread_id}/events
+```
+
+`POST` 只提交自然语言 `message`，后端返回 `accepted + thread_id`；最终结果由 SSE 终态事件交付。该主链路已完成，原同步 `RunResponse` 方案保留为历史设计记录，不代表当前页面仍在等待接口。
+
 目标：在 D09 完成后跑通 D10 的浏览器完整链路。
 
 文件：`frontend/src/api/createRun.ts`
@@ -464,18 +490,21 @@ async function createRun(
 
 ## 10. FE06：工作流状态、取消与 SSE
 
-按最新要求，已提前建立通用 SSE 客户端（stream + 增量解析），仅验证传输机制，未接入页面或后端。D38 后端已提供 process-local cancel / continue，但前端尚未接入；以下 SSE 业务契约与恢复验收闸门仍保留，不表示 FE06 已完成。
+通用 SSE 客户端和研究页面的真实订阅已经接通。页面按 `thread_id + event_id` 接收阶段、Answer 增量、等待输入和终态事件，并通过展示队列保证剩余文本先于终态显示。D38 后端已有 process-local cancel / continue，但前端操作入口尚未接入，因此 FE06 仍是部分完成。
 
 这部分跟随 D39 的 SSE 后端契约和 D42–D46 的工程化收尾。
 
 - [ ] 接入后端正式取消接口，而不是只中止浏览器等待。
+- [ ] 接入 clarification/resume 输入交互，并保留原研究问题。
+- [x] 接入真实研究 SSE，展示阶段、Answer 增量和终态。
+- [x] `needs_input` 保持连接并继续等待同一 thread 的后续事件。
 - [ ] 演示正常、资料不足、风险否决和取消四条路径。
 - [ ] 页面状态必须与最终结果快照一致。
 - [ ] 若加入恢复，显示恢复自哪个 checkpoint，并说明哪些节点会重跑。
 
-D39 后端必须先定义以下契约，前端再完成真实 SSE 联调：
+D39 后端和当前前端已经采用以下契约：
 
-- `run_id` 与单调递增事件序号；
+- `thread_id` 与单调递增的 `event_id`；
 - 结构化 workflow events 与临时 Answer token 的区别；
 - 取消后的确定终态；
 - 重连起点、重复事件处理和最终结果快照；

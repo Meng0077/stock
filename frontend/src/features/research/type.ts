@@ -1,4 +1,4 @@
-import type { RunResponse } from '../../api/contracts'
+import type { ResearchStage, RunResponse } from '../../api/contracts'
 
 export type ResearchViewState =
   | {
@@ -26,3 +26,38 @@ export type ResearchHistoryEntry = Exclude<
   ResearchViewState,
   { readonly kind: 'idle' | 'submitting' }
 >
+
+export type ResearchRoundStatus =
+    | 'submitting'
+    | 'researching'
+    | 'needs_input'
+    | 'completed'
+    | 'failed'
+    | 'cancelled'
+    | 'request_failed'
+    | 'stream_failed'
+    | 'display_failed'
+
+export interface ResearchTextContent {
+    readonly type: 'text'
+    readonly text: string
+}
+
+export interface ResearchCardContent{
+    readonly type: 'card'
+    readonly description: string
+}
+
+export type ResearchContent =
+    | ResearchTextContent
+    | ResearchCardContent
+
+export interface ResearchRound {
+    readonly id: number;
+    readonly threadId: string | null
+    readonly question: string,
+    readonly status: ResearchRoundStatus,
+    readonly stage?: ResearchStage | null,
+    readonly contents: ResearchContent[]
+    readonly errorMessage: string | null,
+}

@@ -88,121 +88,201 @@ function subscribeToRequest(
   })
 }
 
+
 /**
- * GET/HEAD 在 1 或 2 秒内共享第一次请求；其他方法永远不共享。
- * 匹配 URL、方法、请求头及其他 fetch 选项，不跨权限/参数复用。
- * 请求层会完整读取正文，不适用于 SSE/大文件流式接口。
+ * HTTP 底层入口。
+ *
+ * 负责：
+ * - timeout
+ * - retry
+ * - abort
+ * - GET / HEAD dedupe
+ * - HTTP error
+ *
+ * 返回原始 Response，
+ * 不处理业务 JSON。
  */
-export async function request(
+export async function requestResponse(
   url: string | URL,
   options: RequestOptions = {},
 ): Promise<Response> {
-  if (options.signal?.aborted) {
-    throw abortedError()
-  }
-
-  const {
-    dedupe = true,
-    dedupeTtlMs = 2000,
-    timeout = 10_000,
-    retries = 2,
-    retryDelay = 500,
-    signal,
-    method = 'GET',
-    headers,
-    ...rest
-  } = options
-  const normalizedMethod = method.toUpperCase()
-  const fetchOptions = { ...rest, signal, method: normalizedMethod, headers }
-  const policy = { timeout, retries, retryDelay }
-
-  if (
-    !dedupe ||
-    (normalizedMethod !== 'GET' && normalizedMethod !== 'HEAD') ||
-    rest.body != null ||
-    rest.cache === 'no-store' ||
-    rest.cache === 'no-cache'
-  ) {
-    return performRequest(url, fetchOptions, policy)
-  }
-
-  const requestHeaders: [string, string][] = []
-  new Headers(headers).forEach((value, name) => requestHeaders.push([name, value]))
-  const key = JSON.stringify([
-    String(url),
-    normalizedMethod,
-    requestHeaders.sort(([a], [b]) => a.localeCompare(b)),
-    Object.entries(rest).sort(([a], [b]) => a.localeCompare(b)),
-    dedupeTtlMs,
-    policy,
-  ])
-
-  let entry = sharedRequests.get(key)
-  if (!entry || entry.expiresAt <= Date.now()) {
-    const controller = new AbortController()
-    const newEntry: SharedRequest = {
-      controller,
-      expiresAt: Date.now() + dedupeTtlMs,
-      subscribers: 0,
-      settled: false,
-      promise: performRequest(url, { ...fetchOptions, signal: controller.signal }, policy)
-        .then((response) => {
-          newEntry.settled = true
-          if (/\bno-(?:store|cache)\b/i.test(response.headers.get('Cache-Control') ?? '')) {
-            forgetSharedRequest(key, newEntry)
-          }
-          return response
-        })
-        .catch((error: unknown) => {
-          newEntry.settled = true
-          forgetSharedRequest(key, newEntry)
-          throw error
-        }),
+    if (options.signal?.aborted) {
+        throw abortedError()
     }
-    entry = newEntry
-    sharedRequests.set(key, newEntry)
-    setTimeout(() => forgetSharedRequest(key, newEntry), dedupeTtlMs)
-  }
 
-  return subscribeToRequest(key, entry, signal)
+    const {
+        dedupe = true,
+        dedupeTtlMs = 2000,
+        timeout = 10_000,
+        retries = 2,
+        retryDelay = 500,
+        signal,
+        method = 'GET',
+        headers,
+        ...rest
+    } = options
+
+    const normalizedMethod = method.toUpperCase()
+    const fetchOptions: RequestInit = {
+        ...rest,
+        signal,
+        method: normalizedMethod,
+        headers,
+    }
+
+    const policy: RequestPolicy = {
+        timeout,
+        retries,
+        retryDelay,
+    }
+
+    /**
+     * 以下情况不共享请求：
+     *
+     * - 显式关闭 dedupe
+     * - 非 GET / HEAD
+     * - 带 body
+     * - no-store / no-cache
+     */
+    if (!dedupe || (normalizedMethod !== 'GET' && normalizedMethod !== 'HEAD') || rest.body || rest.cache === 'no-store' || rest.cache === 'no-cache') {
+        return performRequest(url, fetchOptions, policy)
+    }
+
+    const requestHeader: [string, string][] = []
+
+    new Headers(headers).forEach((val, key) => {
+        requestHeader.push([key, val])
+    })
+    const key = JSON.stringify([
+        String(url),
+        normalizedMethod,
+        requestHeader.sort((pre, next) => pre[0].localeCompare(next[0])),
+        Object.entries(rest).sort((pre, next) => pre[0].localeCompare(next[0])),
+        dedupeTtlMs,
+        policy,
+    ])
+
+    let entry = sharedRequests.get(key)
+    if (!entry || entry.expiresAt <= Date.now()) {
+        const controller = new AbortController()
+        const newEntry: SharedRequest = {
+            controller,
+            expiresAt: Date.now() + dedupeTtlMs,
+            subscribers: 0,
+            settled: false,
+            promise: performRequest(
+                url,
+                { ...fetchOptions, signal: controller.signal },
+                policy,
+            )
+            .then((response) => {
+                newEntry.settled = true
+                if (/\bno-(?:store|cache)\b/i.test(response.headers.get('Cache-Control',) ?? '')){
+                    forgetSharedRequest(key, newEntry)
+                }
+                return response
+            }).catch(( error: unknown) => {
+                newEntry.settled = true
+                forgetSharedRequest(key, newEntry)
+                throw error
+            })
+        }
+        entry = newEntry
+        sharedRequests.set(key, newEntry)
+
+        setTimeout(() => {
+            forgetSharedRequest(key, newEntry)
+        }, dedupeTtlMs)
+    }
+
+    return subscribeToRequest(key, entry, signal)
 }
 
 /**
- * JSON 入口：成功返回 unknown，由具体 API 校验和处理业务结果。
- * 204/205 返回 null；错误 JSON、读取中断及取消统一归类。
- * JSON 请求体仍由调用方序列化，并声明 Content-Type。
+ * 普通 API 的统一入口。
+ *
+ * 默认约定服务端返回 JSON。
+ *
+ * 负责：
+ * - 调用底层 HTTP request
+ * - Accept: application/json
+ * - 204 / 205
+ * - JSON response 解析
+ * - JSON 解析异常
+ *
+ * SSE 不走这里，继续使用 stream()。
  */
-export async function requestJson(
+export async function request<T = unknown>(
+    url: string | URL,
+    options: RequestOptions = {}
+): Promise<T> {
+    const headers = new Headers(options.headers)
+    headers.set("Accept", "application/json")
+
+    const response = await requestResponse(
+        url,
+        {
+            ...options,
+            headers
+        }
+    )
+
+    if (options?.signal?.aborted) {
+        throw abortedError()
+    }
+
+    if (response.status === 204 || response.status === 205) {
+        return null as T
+    }
+    try {
+        const data = await response.json() as T
+        if(options?.signal?.aborted){
+            throw abortedError()
+        }
+        return data
+
+    } catch (error) {
+        if (options.signal?.aborted || isRequestAborted(error)) {
+            throw abortedError()
+        }
+        if (error instanceof SyntaxError) {
+            throw new RequestError('invalid_response', '服务返回了无法解析的响应。')
+        }
+        throw networkError()
+    }
+}
+
+// get
+export function get<T>(
   url: string | URL,
-  options: RequestOptions = {},
-): Promise<unknown> {
-  const headers = new Headers(options.headers)
-  if (!headers.has('Accept')) {
-    headers.set('Accept', 'application/json')
-  }
+  options: Omit<RequestOptions,'method' | 'body'> = {},
+): Promise<T> {
+    return request(
+        url,
+        {
+            ...options,
+            method: 'GET',
+        },
+    )
+}
 
-  const response = await request(url, { ...options, headers })
+// post
+export function post<TResponse,TBody = unknown>(
+    url: string | URL,
+    body: TBody,
+    options: Omit<RequestOptions,'method' | 'body'> = {},
+): Promise<TResponse> {
+    const headers = new Headers(options.headers)
+    headers.set("Content-Type", "application/json")
+    headers.set("Accept", "application/json")
 
-  if (options.signal?.aborted) {
-    throw abortedError()
-  }
-  if (response.status === 204 || response.status === 205) {
-    return null
-  }
-
-  try {
-    const body: unknown = await response.json()
-    if (options.signal?.aborted) {
-      throw abortedError()
-    }
-    return body
-  } catch (error) {
-    if (options.signal?.aborted || isRequestAborted(error)) {
-      throw abortedError()
-    }
-    if (error instanceof SyntaxError) {
-      throw new RequestError('invalid_response', '服务返回了无法解析的响应。')
-    }
-    throw networkError()
-  }
+    return request<TResponse>(
+        url,
+        {
+            ...options,
+            method: 'POST',
+            headers,
+            body: JSON.stringify(body),
+        },
+    )
 }

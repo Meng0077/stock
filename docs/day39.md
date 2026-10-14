@@ -18,7 +18,7 @@ Day39 当前范围已完成。旧 Agent 的 `company_ids` 迁移和真实 HTTP S
 | 慢客户端与内存生命周期 | 已完成 | queue 上限 256；overflow 断开 subscriber；terminal 到期后完整清理 thread 状态 |
 | clarification / resume SSE | 已完成 | 同一 HTTP 连接经过 `needs_input`、heartbeat、resume 和 completed，并保留原问题 |
 | cancel SSE | 已完成 | HTTP 验收确认 `cancelled` 是唯一终态，后面没有 token 或 `completed` |
-| 前端真实 SSE 接入 | 未开始 | 属于 D40；当前前端只有通用 SSE transport/parser，未接入研究页面 |
+| 前端真实 SSE 接入 | 已完成主链路 | 研究页通过 `/api/research` 获取 `thread_id`，再订阅 `/events` 展示阶段、Answer 增量和终态；clarification/resume、cancel/continue 与结构化卡片仍待后续 |
 
 ## `company_ids` 契约
 
@@ -107,6 +107,6 @@ terminal thread 的 SSE 状态保留 5 分钟，期间仍可 replay，也允许 
 1. 订阅不存在的 thread 时，当前会建立空订阅并持续 heartbeat。需要定义返回 `404`，还是允许客户端先订阅后启动 Workflow。
 2. `company_ids` 列表项已强制非空，尚未在请求模型层限制单项最大长度、去重或统一大写。
 
-- 前端研究页面接入真实 SSE、工作流状态展示和 token 渲染属于 D40；
+- 前端研究页面的真实 SSE、工作流阶段和 token 渲染已经接入；clarification/resume、cancel/continue、结构化卡片和页面恢复属于后续前端工作；
 - PostgreSQL Checkpoint、持久 Run Metadata、worker ownership 和分布式取消属于后续工程化；
 - Event Store 仍可保持单进程、5 分钟短线 replay，不需要在 Day39 引入 Redis 或分布式事件总线。

@@ -1,9 +1,11 @@
 import { ResearchComposer } from '../features/research/ResearchComposer'
-import { ResearchConversation } from '../features/research/ResearchConversation'
+import { ResearchRound } from '../features/research/ResearchRound'
 import { useResearchRun } from '../features/research/useResearchRun'
 
 export function ResearchPage() {
-  const { state, history, submit, reset } = useResearchRun()
+  const { rounds, submit, reset } = useResearchRun()
+
+  const isSubmitting = rounds[rounds.length - 1]?.status === 'submitting'
 
   return (
     <main className="min-h-screen bg-slate-950 px-4 py-8 text-slate-100 sm:px-6 sm:py-10">
@@ -19,12 +21,19 @@ export function ResearchPage() {
             输入自然语言问题。当前使用后端教学模拟数据，不代表实时行情或投资建议。
           </p>
         </header>
-        {history.map((entry) => (
-          <ResearchConversation key={entry.requestId} state={entry} />
-        ))}
-        <ResearchConversation state={state} />
+        {
+          rounds.length === 0 ? (
+            <p className="rounded-3xl border border-dashed border-white/10 p-8 text-center text-slate-400">
+              在下方输入问题，开始一轮研究。
+            </p>
+          ) : (
+            rounds.map((round) => (
+              <ResearchRound key={round.id} round={round} />
+            ))
+          )
+        }
 
-        {state.kind !== 'idle' && (
+        {rounds.length > 0 && (
           <button
             type="button"
             onClick={reset}
@@ -36,7 +45,7 @@ export function ResearchPage() {
 
         <section aria-label="提交研究问题" className="rounded-3xl border border-white/10 bg-white/5 p-4 shadow-2xl shadow-cyan-950/20 sm:p-6">
           <ResearchComposer
-            disabled={state.kind === 'submitting'}
+            disabled={isSubmitting}
             onSubmit={submit}
           />
         </section>

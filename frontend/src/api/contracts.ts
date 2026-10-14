@@ -128,3 +128,43 @@ export interface FastApiValidationIssue {
 export interface FastApiValidationError {
   readonly detail: readonly FastApiValidationIssue[]
 }
+
+
+export interface StartResearchRequest {
+  readonly message: string
+}
+
+export interface ResearchCommandResponse {
+    readonly thread_id: string
+    readonly status: 'accepted'
+}
+
+export type ResearchEventType =
+    | 'workflow_started'
+    | 'stage_changed'
+    | 'target_resolution'
+    | 'answer_delta'
+    | 'needs_input'
+    | 'completed'
+    | 'failed'
+    | 'cancelled'
+
+export type ResearchStage =
+    | 'target_resolution'
+    | 'planning'
+    | 'research'
+    | 'checking'
+    | 'answering'
+
+export type ResearchExecution =
+    | 'start'
+    | 'resume'
+    | 'continue'
+
+export interface ResearchEvent {
+    thread_id: string
+    event_id: number
+    type: ResearchEventType
+    data: Record<string, unknown>
+    created_at: string
+}

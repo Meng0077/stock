@@ -166,7 +166,7 @@ pnpm install
 pnpm dev
 ```
 
-前端当前使用本地 Fake Transport，不会调用真实后端或模型。更详细的命令、请求层和 SSE 边界见 [frontend/README.md](frontend/README.md)。
+前端研究页已接入 `POST /api/research` 和 `GET /api/research/{thread_id}/events`，能够展示研究阶段、Answer 增量与终态。标的澄清/resume、后端取消按钮和结构化结果卡片仍待后续实现。更详细的命令、请求层和 SSE 边界见 [frontend/README.md](frontend/README.md)。
 
 ## 测试与验收
 
