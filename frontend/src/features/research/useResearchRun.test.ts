@@ -88,6 +88,10 @@ describe('useResearchRun', () => {
       contents: [{ type: 'text', text: 'NVDA' }],
       stage: null,
       errorMessage: null,
+      clarification: null,
+      clarificationSubmitting: false,
+      clarificationErrorMessage: null,
+      pendingClarificationAnswer: null,
     }])
   })
 

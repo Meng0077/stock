@@ -168,3 +168,8 @@ export interface ResearchEvent {
     data: Record<string, unknown>
     created_at: string
 }
+
+export interface ResumeResearchRequest {
+    readonly thread_id: string
+    readonly answer: string[]
+}

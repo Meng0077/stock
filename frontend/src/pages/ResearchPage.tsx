@@ -3,7 +3,7 @@ import { ResearchRound } from '../features/research/ResearchRound'
 import { useResearchRun } from '../features/research/useResearchRun'
 
 export function ResearchPage() {
-  const { rounds, submit, reset } = useResearchRun()
+  const { rounds, submit, reset, submitAnswer } = useResearchRun()
 
   const isSubmitting = rounds[rounds.length - 1]?.status === 'submitting'
 
@@ -28,7 +28,7 @@ export function ResearchPage() {
             </p>
           ) : (
             rounds.map((round) => (
-              <ResearchRound key={round.id} round={round} />
+              <ResearchRound key={round.id} round={round} submitAnswer={submitAnswer} />
             ))
           )
         }

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ResearchEvent, ResearchStage, StartResearchRequest } from '../../api/contracts'
-import { startResearch } from '../../api/runTransport'
+import { resumeResearch, startResearch } from '../../api/runTransport'
 import type { ResearchRound } from './type'
 import { subscribeResearchEvents } from '../../api/researchStream'
 import { SSETaskQueue, TextBuffer, TextTask, type ResearchDisplayRuntime } from './sseTaskQueue'
@@ -9,6 +9,7 @@ export function useResearchRun(): {
     readonly rounds: ResearchRound[]
     readonly submit: (request: StartResearchRequest) => Promise<void>
     readonly reset: () => void
+    readonly submitAnswer: (roundId: number, answer: string[]) => void
 } {
     const [rounds, setRounds] = useState<ResearchRound[]>([])
 
@@ -84,7 +85,22 @@ export function useResearchRun(): {
         switch (event.type){
             case "workflow_started":
                 runtime.hasReceivedAnswerDelta = false
-                updateRound(roundId, (round) => ({ ...round, status: "researching", errorMessage: null }))
+                const execution = event.data.execution
+                updateRound(roundId, (round) => {
+                    const stage = execution !== 'start' ? round.stage : null
+                    const clarification = execution === 'resume' ? null : round.clarification
+                    const contents = [...round.contents]
+                    round.pendingClarificationAnswer && contents.push({ type: 'clarification_answer', text: round.pendingClarificationAnswer })
+                    return {
+                        ...round,
+                        status: "researching",
+                        errorMessage: null,
+                        stage,
+                        clarification,
+                        clarificationSubmitting: false,
+                        clarificationErrorMessage: null
+                    }
+                })
                 return
             case "stage_changed":
                 updateRound(roundId, (round) => ({ ...round, stage: event.data.stage as ResearchStage }))
@@ -95,6 +111,7 @@ export function useResearchRun(): {
                 appendAnswerDelta(roundId, runtime, text)
                 return
             case "needs_input":
+                // const data = parseTargetClarification(event.data)
                 sealTextSegment(runtime)
                 runtime.queue.enqueue({
                     run: () => {
@@ -102,7 +119,13 @@ export function useResearchRun(): {
                      * Workflow 即将进入暂停状态，
                      * 先展示已经收到的文字。
                      */
-                    updateRound(roundId, (round) => ({ ...round, status: "needs_input" }))
+                    updateRound(roundId, (round) => ({
+                        ...round,
+                        status: "needs_input",
+                        clarification: event.data as any,
+                        clarificationSubmitting: false,
+                        clarificationErrorMessage: null
+                    }))
                 }
                 })
                 return
@@ -167,7 +190,18 @@ export function useResearchRun(): {
 
         // 2. 创建本地 ResearchRound
         const roundId = ++roundSequence.current
-        const round: ResearchRound = { id: roundId, threadId: null, question, status: 'submitting', contents: [], errorMessage: null }
+        const round: ResearchRound = {
+            id: roundId,
+            threadId: null,
+            question,
+            status: 'submitting',
+            contents: [],
+            errorMessage: null,
+            clarification: null,
+            clarificationSubmitting: false,
+            clarificationErrorMessage: null,
+            pendingClarificationAnswer: null,
+        }
         setRounds(pre => [...pre, round])
 
         let thread_id = null
@@ -263,6 +297,32 @@ export function useResearchRun(): {
         }
     }
 
+    const submitAnswer = async (roundId: number, answer: string[]) => {
+        const round = rounds.find(r => r.id === roundId)
+        if (!round || !round.threadId) return
+        updateRound(roundId, (round) => ({
+            ...round,
+            clarificationSubmitting: true,
+            clarificationErrorMessage: null,
+            pendingClarificationAnswer: answer
+        }))
+
+        const signal = networkControllerRef.current.signal
+        try {
+            await resumeResearch({ answer: answer, thread_id: round.threadId }, signal)
+            if (signal.aborted) return
+            // 等 SSE workflow_started(resume) 再真正恢复 Round
+        } catch (error) {
+            if (signal.aborted) return
+            updateRound(roundId, (round) => ({
+                ...round,
+                clarificationSubmitting: false,
+                clarificationErrorMessage: '补充信息提交失败，请重试。',
+                pendingClarificationAnswer: null,
+            }))
+        }
+    }
+
     const reset = () => {
         networkControllerRef.current.abort()
         displayControllerRef.current?.abort()
@@ -272,5 +332,5 @@ export function useResearchRun(): {
         setRounds([])
     }
 
-    return {rounds, submit, reset}
+    return {rounds, submit, reset, submitAnswer}
 }

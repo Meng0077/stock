@@ -48,9 +48,25 @@ export interface ResearchCardContent{
     readonly description: string
 }
 
+export interface ResearchClarificationAnswerContent {
+    readonly type: 'clarification_answer'
+    readonly text: string[]
+}
+
 export type ResearchContent =
     | ResearchTextContent
     | ResearchCardContent
+    | ResearchClarificationAnswerContent
+
+export interface TargetClarification {
+    readonly type: 'target_clarification'
+    readonly message: string
+    readonly ambiguous_targets: readonly {
+        readonly mention: string
+        readonly candidates: readonly string[]
+    }[]
+    readonly unresolved_mentions: readonly string[]
+}
 
 export interface ResearchRound {
     readonly id: number;
@@ -60,4 +76,8 @@ export interface ResearchRound {
     readonly stage?: ResearchStage | null,
     readonly contents: ResearchContent[]
     readonly errorMessage: string | null,
+    readonly clarification: TargetClarification | null
+    readonly clarificationSubmitting: boolean
+    readonly clarificationErrorMessage: string | null
+    readonly pendingClarificationAnswer: string[] | null
 }

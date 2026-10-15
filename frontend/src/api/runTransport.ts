@@ -1,9 +1,16 @@
-import type { ResearchCommandResponse, StartResearchRequest } from './contracts'
+import type { ResearchCommandResponse, ResumeResearchRequest, StartResearchRequest } from './contracts'
 import { post } from './request'
 
 export async function startResearch(
-    request: StartResearchRequest,
+    data: StartResearchRequest,
     signal?: AbortSignal,
 ): Promise<ResearchCommandResponse> {
-    return post('/api/research', request, { signal })
+    return post('/api/research', data, { signal })
+}
+
+export async function resumeResearch(
+    data: ResumeResearchRequest,
+    signal?: AbortSignal,
+): Promise<ResearchCommandResponse> {
+    return post('/api/research/resume', data, { signal })
 }
