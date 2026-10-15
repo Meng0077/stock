@@ -52,15 +52,15 @@ describe('subscribeResearchEvents', () => {
     expect(received).toEqual([event()])
   })
 
-  it('终态事件返回 false 结束 SSE', async () => {
+  it.each(['completed', 'failed', 'cancelled'] as const)('%s 终态事件返回 false 结束 SSE', async (type) => {
     streamMock.mockImplementation(async (_url, options) => {
       await expect(options.onEvent({
         id: '2',
-        event: 'completed',
+        event: type,
         data: JSON.stringify(event({
           event_id: 2,
-          type: 'completed',
-          data: { result: 'done' },
+          type,
+          data: type === 'completed' ? { result: 'done' } : {},
         })),
       })).resolves.toBe(false)
     })
@@ -78,6 +78,22 @@ describe('subscribeResearchEvents', () => {
         id: '1',
         event: 'workflow_started',
         data: JSON.stringify(event({ thread_id: 'thread-2' })),
+      })
+    })
+
+    await expect(subscribeResearchEvents(
+      'thread-1',
+      () => undefined,
+      new AbortController().signal,
+    )).rejects.toBeInstanceOf(RequestError)
+  })
+
+  it('拒绝未知的研究事件类型', async () => {
+    streamMock.mockImplementation(async (_url, options) => {
+      await options.onEvent({
+        id: '1',
+        event: 'unknown',
+        data: JSON.stringify(event({ type: 'unknown' })),
       })
     })
 

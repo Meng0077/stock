@@ -39,6 +39,7 @@ pnpm build
         -> POST /api/research
         -> 绑定后端 thread_id
         -> GET /api/research/{thread_id}/events
+        -> needs_input 时 POST /api/research/resume
         -> SSETaskQueue / TextBuffer / TextTask
      -> ResearchRound
 ```
@@ -50,12 +51,12 @@ pnpm build
 - `workflow_started`：进入研究状态；
 - `stage_changed`：展示 Target Resolution、Planning、Research、Checking 或 Answering 阶段；
 - `answer_delta`：按接收顺序缓冲并逐步展示文本；
-- `needs_input`：标记工作流等待用户输入，SSE 连接保持打开；
+- `needs_input`：SSE 连接保持打开，页面展示候选 ticker 和手动输入，并使用原 `thread_id` resume；
 - `completed`、`failed`、`cancelled`：在已缓冲文本展示完毕后更新终态；
 - 请求失败、SSE 中断和前端展示队列失败：显示各自的安全错误状态；
 - 新问题、清空页面或离开页面：中止旧的前端请求与展示任务，防止旧结果覆盖当前页面。
 
-`target_resolution` 事件目前只接收、不渲染。clarification/resume 交互、后端 cancel/continue 按钮、结构化 card 内容和断线后的页面恢复尚未实现。前端中止请求只停止当前浏览器的接收与展示，不等于取消后端任务。
+Cancel API 和按钮正在联调，取消失败会恢复研究状态并显示 Toast。Continue UI、页面恢复、`target_resolution` 详情卡片和六类结构化研究结果展示已移出 Day40 范围，后续处理。前端中止请求只停止当前浏览器的接收与展示，不等于取消后端任务。完整状态见 [`../docs/day40.md`](../docs/day40.md)。
 
 ## API 文件职责
 
@@ -65,7 +66,7 @@ src/api/request.ts          普通 JSON 请求入口、短时去重
 src/api/requestLifecycle.ts 超时、重试和请求生命周期
 src/api/stream.ts           SSE 连接、重连和 Last-Event-ID
 src/api/sseParser.ts        增量 SSE 解析
-src/api/runTransport.ts     POST /api/research
+src/api/runTransport.ts     研究启动、resume 与 cancel 命令
 src/api/researchStream.ts   研究事件解析和订阅
 ```
 
@@ -106,6 +107,6 @@ thread_id + event_id
 - useResearchRun 的 thread 绑定、流式文本与失败路径；
 - 路由、组件、SSE parser/stream、mock 契约和历史基础行为。
 
-本次验收结果为 `30 passed`，`typecheck`、`lint` 和 `build` 均通过。
+当前验收结果为 `96 passed`，`typecheck` 和 `build` 通过；Oxlint 无 error，`toast.tsx` 保留 1 条 Fast Refresh warning。
 
 更完整的阶段计划见 [`../docs/frontend-development-plan.md`](../docs/frontend-development-plan.md)。

@@ -37,6 +37,7 @@ export type ResearchRoundStatus =
     | 'request_failed'
     | 'stream_failed'
     | 'display_failed'
+    | 'cancelling'
 
 export interface ResearchTextContent {
     readonly type: 'text'

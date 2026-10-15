@@ -173,3 +173,8 @@ export interface ResumeResearchRequest {
     readonly thread_id: string
     readonly answer: string[]
 }
+
+export interface CancelResearchResponse {
+    readonly thread_id: string
+    readonly status: 'cancelling'
+}

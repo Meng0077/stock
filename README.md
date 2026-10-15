@@ -38,7 +38,8 @@
 | D37 Company Registry 与 TargetResolver | 已完成核心链路 | SEC Registry、Longbridge fallback、Alias、Coverage Check、受限 LLM fallback，以及 `resolved / ambiguous / unresolved / absent` 四种状态；`resolved_targets` 可保留多个已验证 ticker，见 `docs/day37.md` |
 | D38 Company Workflow 与恢复流程 | 进程内核心流程已完成 | Resolver 已放在 LangGraph Planner 之前；支持 `interrupt()` / resume、process-local Task Registry、cancel 和 Checkpoint continue；请求已升级到复数 `company_ids`，持久化 Checkpoint、分布式取消和多用户隔离尚未完成 |
 | D39 Research SSE | 已完成 | 结构化 workflow events、Answer delta、heartbeat、短线 replay、clarification / resume 保持连接、cancel、有界 subscriber queue 和 terminal TTL 已通过 HTTP 路由验收；使用 `thread_id + event_id` 契约，见 `docs/day39.md` |
-| D40–D46 | 待开发 | React 联调、完整评估、故障演示、部署与面试材料 |
+| D40 React 研究界面 | 当前范围已完成 | 已完成真实 SSE、阶段进度、流式回答、标的澄清/resume、cancel UI、失败回退和竞态验收；Continue UI、页面恢复和结构化结果展示移出 Day40 范围，见 `docs/day40.md` |
+| D41–D46 | 待开发 | 完整验收、评估、故障演示、部署与面试材料 |
 
 各开发日的设计、验收记录和已知限制位于 [`docs/`](docs/)。当前状态以对应 day 文档和测试结果为准，不把 fixture、历史数据或尚未联调的能力描述为实时生产能力。
 
@@ -105,7 +106,7 @@ backend/
   tests/          后端测试
 docs/             每日实现、验收和遗留项记录
 evals/            离线评估与真实 API 验证脚本
-frontend/         React 前端；当前使用本地 Mock，尚未完成真实后端联调
+frontend/         React 前端；已接入真实研究命令、SSE 与标的澄清，结构化研究展示后续处理
 ```
 
 `backend/src/stock_agent/company/` 已包含 SEC / Longbridge Security Registry、确定性 Alias、Coverage Check 和 TargetResolver。Resolver 已接入 LangGraph 起点和 `/api/research`；标的需要澄清时，工作流保存 thread 状态并通过 `/api/research/resume` 继续。完整边界见 [Day37 文档](docs/day37.md)、[Day38 文档](docs/day38.md) 和 [开发计划](stock-agent-python-development-plan.md#12-company-registrytarget-resolver-与-workflow-接入)。
@@ -166,7 +167,7 @@ pnpm install
 pnpm dev
 ```
 
-前端研究页已接入 `POST /api/research` 和 `GET /api/research/{thread_id}/events`，能够展示研究阶段、Answer 增量与终态。标的澄清/resume、后端取消按钮和结构化结果卡片仍待后续实现。更详细的命令、请求层和 SSE 边界见 [frontend/README.md](frontend/README.md)。
+前端研究页已接入 `POST /api/research` 和 `GET /api/research/{thread_id}/events`，能够展示研究阶段、Answer 增量与终态。标的澄清/resume、后端取消按钮、失败回退和竞态验收已经完成；Continue UI、页面恢复、`target_resolution` 详情卡片和六类结构化结果卡片后续处理。更详细的命令、请求层和 SSE 边界见 [frontend/README.md](frontend/README.md)。
 
 ## 测试与验收
 

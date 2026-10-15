@@ -1,9 +1,10 @@
 import { ResearchComposer } from '../features/research/ResearchComposer'
 import { ResearchRound } from '../features/research/ResearchRound'
+import { Toast } from '../features/research/toast'
 import { useResearchRun } from '../features/research/useResearchRun'
 
 export function ResearchPage() {
-  const { rounds, submit, reset, submitAnswer } = useResearchRun()
+  const { rounds, toastMessage, submit, reset, submitAnswer, cancel } = useResearchRun()
 
   const isSubmitting = rounds[rounds.length - 1]?.status === 'submitting'
 
@@ -28,7 +29,7 @@ export function ResearchPage() {
             </p>
           ) : (
             rounds.map((round) => (
-              <ResearchRound key={round.id} round={round} submitAnswer={submitAnswer} />
+              <ResearchRound key={round.id} round={round} submitAnswer={submitAnswer} cancel={cancel} />
             ))
           )
         }
@@ -49,6 +50,7 @@ export function ResearchPage() {
             onSubmit={submit}
           />
         </section>
+        <Toast message={toastMessage} />
       </div>
     </main>
   )

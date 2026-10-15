@@ -45,4 +45,50 @@ describe('ResearchClarification', () => {
 
     expect(onSubmit).toHaveBeenCalledWith(['GOOGL'])
   })
+
+  it('多个歧义标的可以独立选择并手动覆盖', () => {
+    const onSubmit = vi.fn()
+    render(
+      <ResearchClarification
+        clarification={{
+          ...clarification,
+          ambiguous_targets: [
+            { mention: 'Google', candidates: ['GOOG', 'GOOGL'] },
+            { mention: 'Berkshire', candidates: ['BRK.A', 'BRK.B'] },
+          ],
+        }}
+        submitting={false}
+        errorMessage={null}
+        onSubmit={onSubmit}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'GOOG' }))
+    fireEvent.click(screen.getByRole('button', { name: 'BRK.B' }))
+    fireEvent.change(screen.getByLabelText('Google的股票代号'), { target: { value: 'GOOGL' } })
+    fireEvent.click(screen.getByRole('button', { name: '确认' }))
+
+    expect(onSubmit).toHaveBeenCalledWith(['GOOGL', 'BRK.B'])
+  })
+
+  it('未识别标的可以手动补充股票代号', () => {
+    const onSubmit = vi.fn()
+    render(
+      <ResearchClarification
+        clarification={{
+          ...clarification,
+          ambiguous_targets: [],
+          unresolved_mentions: ['那家芯片公司'],
+        }}
+        submitting={false}
+        errorMessage={null}
+        onSubmit={onSubmit}
+      />,
+    )
+
+    fireEvent.change(screen.getByLabelText('未识别股票的股票代号'), { target: { value: ' NVDA ' } })
+    fireEvent.click(screen.getByRole('button', { name: '确认' }))
+
+    expect(onSubmit).toHaveBeenCalledWith(['NVDA'])
+  })
 })

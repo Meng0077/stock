@@ -499,7 +499,7 @@ FRED 只返回某次经济数据发布的日期，并不足以独立支持 T+5m 
 | D37 | 实现 CompanyRegistry 与 TargetResolver | 已完成核心链路：SEC Registry 与 Longbridge fallback 统一验证证券；旧 SEC Documents / Financial 入口复用 Registry；完整扫描显式 ticker 与 Alias；Coverage Check 只在必要时触发 LLM；LLM candidate 再经 Registry 验证；固定案例覆盖 `resolved / ambiguous / unresolved / absent`，其中 resolved 可包含多个 ticker，见 `docs/day37.md` |
 | D38 | 将 TargetResolver 接入 LangGraph，并加入 Checkpoint、澄清、取消及恢复 | 进程内核心流程已完成：Resolver 已位于 Planner 之前；`ambiguous / unresolved` 会 `interrupt()` 并使用同一 thread resume；`absent` 可继续纯宏观计划；已接入内存 Checkpoint、process-local Task Registry、cancel 与 continue，ResearchRequest 已升级为 `company_ids`。持久化 Checkpoint、分布式取消、thread 所有权和多用户隔离按分阶段计划后置，见 `docs/day38.md` |
 | D39 | 实现研究工作流 SSE | 已完成：结构化 workflow events、Answer delta、heartbeat、`Last-Event-ID` 短时 replay、clarification / resume 保持连接、cancel、有界 subscriber queue 和 terminal TTL 已通过 HTTP 路由验收；事件契约保持 `thread_id + event_id`，`stage_changed` 只表示进入阶段，见 `docs/day39.md` |
-| D40 | 完善 React 对话界面、标的澄清与结构化研究可视化 | 展示标的解析状态与候选项，以及行情时间、技术指标、财报引用、宏观统计期、数据质量、均线、关键价位、失效条件和市场反应窗口 |
+| D40 | 完善 React 对话界面与工作流交互 | 当前范围已完成：真实 SSE、阶段进度、标的澄清/resume、cancel UI、失败回退和竞态已经验收；Continue UI、页面恢复、`target_resolution` 详情卡片及六类结构化研究结果展示移出本日范围，后续处理，见 `docs/day40.md` |
 
 D39 使用有界的进程内 replay buffer，不在这一天提前实现分布式事件总线。验收至少覆盖：
 

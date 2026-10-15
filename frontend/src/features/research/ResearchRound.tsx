@@ -5,6 +5,7 @@ import { ResearchClarification } from './ResearchClarification'
 interface ResearchRoundProps {
     readonly round: ResearchRound
     readonly submitAnswer: (roundId: number, answer: string[]) => void
+    readonly cancel: (roundId: number) => void
 }
 
 function UserMessage({ question }: { question: string }) {
@@ -53,7 +54,7 @@ function AssistantMessage({round}: { round: ResearchRound }) {
     }
 }
 
-export function ResearchRound({ round, submitAnswer }: ResearchRoundProps) {
+export function ResearchRound({ round, submitAnswer, cancel }: ResearchRoundProps) {
     return (
         <section
         aria-label="一轮研究"
@@ -63,6 +64,17 @@ export function ResearchRound({ round, submitAnswer }: ResearchRoundProps) {
             <UserMessage question={round.question} />
 
             <ResearchProgress status={round.status} stage={round.stage || null} />
+
+            {(round.status === 'researching' || round.status === 'cancelling') && (
+                <button
+                    type="button"
+                    disabled={round.status === 'cancelling'}
+                    onClick={() => {cancel(round.id)}}
+                    className="justify-self-start rounded-lg border border-white/10 px-3 py-1.5 text-sm text-slate-400 hover:border-red-400/30 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                    {round.status === 'cancelling' ? '取消中...' : '停止研究'}
+                </button>
+            )}
 
             <div className="flex justify-start">
                 <div className="min-w-0 max-w-full space-y-4 rounded-2xl rounded-bl-sm bg-slate-900 px-5 py-4 text-slate-100 sm:max-w-[85%]">
@@ -79,6 +91,11 @@ export function ResearchRound({ round, submitAnswer }: ResearchRoundProps) {
                     />
                 )
             }
+            {round.status === 'cancelled' && (
+                <p role="status" className="text-sm text-slate-500">
+                    任务已取消。
+                </p>
+            )}
         </section>
     )
 }

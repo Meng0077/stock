@@ -1,15 +1,18 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ResearchEvent, ResearchStage, StartResearchRequest } from '../../api/contracts'
-import { resumeResearch, startResearch } from '../../api/runTransport'
+import { cancelResearch, resumeResearch, startResearch } from '../../api/runTransport'
 import type { ResearchRound } from './type'
 import { subscribeResearchEvents } from '../../api/researchStream'
 import { SSETaskQueue, TextBuffer, TextTask, type ResearchDisplayRuntime } from './sseTaskQueue'
+import { useToast } from './toast'
 
 export function useResearchRun(): {
     readonly rounds: ResearchRound[]
+    readonly toastMessage: string | null
     readonly submit: (request: StartResearchRequest) => Promise<void>
     readonly reset: () => void
     readonly submitAnswer: (roundId: number, answer: string[]) => void
+    readonly cancel: (roundId: number) => Promise<void>
 } {
     const [rounds, setRounds] = useState<ResearchRound[]>([])
 
@@ -18,6 +21,7 @@ export function useResearchRun(): {
     const networkControllerRef = useRef(new AbortController())
     const displayControllerRef = useRef<AbortController | null>(null)
     const roundSequence = useRef(0)
+    const { message: toastMessage, showToast } = useToast()
 
 
     useEffect(() => {
@@ -90,15 +94,19 @@ export function useResearchRun(): {
                     const stage = execution !== 'start' ? round.stage : null
                     const clarification = execution === 'resume' ? null : round.clarification
                     const contents = [...round.contents]
-                    round.pendingClarificationAnswer && contents.push({ type: 'clarification_answer', text: round.pendingClarificationAnswer })
+                    if (round.pendingClarificationAnswer) {
+                        contents.push({ type: 'clarification_answer', text: round.pendingClarificationAnswer })
+                    }
                     return {
                         ...round,
                         status: "researching",
                         errorMessage: null,
                         stage,
+                        contents,
                         clarification,
                         clarificationSubmitting: false,
-                        clarificationErrorMessage: null
+                        clarificationErrorMessage: null,
+                        pendingClarificationAnswer: null,
                     }
                 })
                 return
@@ -154,17 +162,16 @@ export function useResearchRun(): {
                 })
                 return
             case 'cancelled':
-                sealTextSegment(runtime)
-                runtime.queue.enqueue({
-                    run: () => {
-                        sealTextSegment(runtime)
-                        updateRound(roundId, (round) => ({
-                            ...round,
-                            status: "cancelled",
-                            stage: null,
-                        }))
-                    }
-                })
+                runtime.controller.abort()
+                runtime.textBuffer = null
+                updateRound(
+                    roundId,
+                    (round) => ({
+                        ...round,
+                        status: 'cancelled',
+                        stage: null,
+                    }),
+                )
                 return
             case 'target_resolution':
                 // D40.7 再处理标的确认。
@@ -225,6 +232,7 @@ export function useResearchRun(): {
                     errorMessage: '暂时无法完成请求，请稍后重试。',
                 }
             }))
+            return
         }
 
         /**
@@ -255,7 +263,7 @@ export function useResearchRun(): {
                     controller.signal,
                 )
             }
-        } catch(err){
+        } catch (error) {
             // round -> stream_failed
             if (controller.signal.aborted) {
                 runtime.controller.abort()
@@ -267,7 +275,7 @@ export function useResearchRun(): {
              * 立即停止正在执行的 TextTask，
              * 并丢弃尚未展示的 Buffer 内容。
              */
-            console.error('research stream failed', err)
+            console.error('research stream failed', error)
 
             runtime.controller.abort()
             runtime.textBuffer = null
@@ -282,6 +290,7 @@ export function useResearchRun(): {
         try {
             await runtime.queue.flush()
         } catch (error) {
+            if (runtime.controller.signal.aborted) return
             runtime.controller.abort()
 
             updateRound(
@@ -312,7 +321,7 @@ export function useResearchRun(): {
             await resumeResearch({ answer: answer, thread_id: round.threadId }, signal)
             if (signal.aborted) return
             // 等 SSE workflow_started(resume) 再真正恢复 Round
-        } catch (error) {
+        } catch {
             if (signal.aborted) return
             updateRound(roundId, (round) => ({
                 ...round,
@@ -320,6 +329,26 @@ export function useResearchRun(): {
                 clarificationErrorMessage: '补充信息提交失败，请重试。',
                 pendingClarificationAnswer: null,
             }))
+        }
+    }
+
+    const cancel = async (roundId: number) => {
+        const round = rounds.find(r => r.id === roundId)
+        if (!round?.threadId) return
+        const signal = networkControllerRef.current.signal
+        updateRound(roundId, (round) => ({
+            ...round,
+            status: 'cancelling',
+            errorMessage: null,
+        }))
+        try {
+            await cancelResearch(round.threadId, signal)
+            if (signal.aborted) return
+        } catch {
+            if (signal.aborted) return
+            updateRound(roundId, (round) => round.status === 'cancelling' ? { ...round, status: 'researching' } : round)
+            // 提示取消失败
+            showToast('取消研究请求失败，请稍后重试。')
         }
     }
 
@@ -332,5 +361,5 @@ export function useResearchRun(): {
         setRounds([])
     }
 
-    return {rounds, submit, reset, submitAnswer}
+    return { rounds, toastMessage, submit, reset, submitAnswer, cancel }
 }

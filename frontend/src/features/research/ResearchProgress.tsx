@@ -26,8 +26,11 @@ export const ResearchProgress = ({ status, stage }: { status: ResearchRoundStatu
         return null
     }
 
-    if(status === 'submitting'){
-        return <div>正在启动研究…</div>
+    if (status === 'submitting') {
+        return <div>启动中…</div>
+    }
+    if (status === 'cancelling') {
+        return <div role="status">取消中…</div>
     }
     if (stage === null) {
         // 'needs_input'
