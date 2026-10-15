@@ -50,9 +50,9 @@ class ResearchResumeInput(BaseModel):
         min_length=1,
     )
 
-    answer: str = Field(
+    answer: list[Annotated[str, Field(min_length=1, max_length=2000)]] = Field(
         min_length=1,
-        max_length=2000,
+        max_length=20,
     )
 
 

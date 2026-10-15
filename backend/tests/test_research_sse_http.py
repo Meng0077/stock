@@ -78,7 +78,7 @@ class ClarificationGraph:
     async def astream(self, graph_input, **kwargs):
         if isinstance(graph_input, Command):
             assert self.request.question == QUESTION
-            self.request = self.request.model_copy(update={"company_ids": [graph_input.resume]})
+            self.request = self.request.model_copy(update={"company_ids": graph_input.resume})
             self.phase = "completed"
             yield "messages", (
                 SimpleNamespace(content=self.output),
@@ -195,7 +195,7 @@ def test_http_sse_keeps_connection_through_needs_input_and_resume(monkeypatch) -
 
             resume_response = await client.post(
                 "/api/research/resume",
-                json={"thread_id": thread_id, "answer": "NVDA"},
+                json={"thread_id": thread_id, "answer": ["NVDA"]},
             )
             stream_response = await asyncio.wait_for(stream_task, timeout=1)
 

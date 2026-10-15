@@ -75,7 +75,7 @@ async def run_case(
 async def resume_case(
     *,
     graph: Any,
-    answer: str,
+    answer: list[str],
     context: ResearchContext,
     graph_config: RunnableConfig,
 ) -> dict[str, Any]:
@@ -272,7 +272,7 @@ async def main() -> int:
 
     quote_completed = await resume_case(
         graph=graph,
-        answer="NVDA",
+        answer=["NVDA"],
         context=quote_context,
         graph_config=quote_config,
     )
@@ -319,7 +319,7 @@ async def main() -> int:
 
     google_completed = await resume_case(
         graph=graph,
-        answer="GOOGL",
+        answer=["GOOGL"],
         context=google_context,
         graph_config=google_config,
     )
@@ -365,7 +365,7 @@ async def main() -> int:
 
     multiple_completed = await resume_case(
         graph=graph,
-        answer="AAPL",
+        answer=["AAPL"],
         context=multiple_context,
         graph_config=multiple_config,
     )
@@ -399,7 +399,7 @@ async def main() -> int:
 
     invalid_resumed = await resume_case(
         graph=graph,
-        answer="就那个",
+        answer=["就那个"],
         context=invalid_context,
         graph_config=invalid_config,
     )

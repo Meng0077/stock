@@ -285,11 +285,6 @@ class ResearchState(TypedDict):
     # 用户在 target clarification 中
     # 已经补充的证券信息。
     #
-    # None：
-    #   尚未发生 target clarification。
-    #
-    # 非 None：
-    #   累积保存历次 clarification 回答，
-    #   resolve_target_node 会将它与
-    #   原始 question 一起重新解析。
-    target_clarification: str | None
+    # None：没有待验证的结构化目标。
+    # list：用户本次提交的完整目标列表。
+    target_clarification: list[str] | None

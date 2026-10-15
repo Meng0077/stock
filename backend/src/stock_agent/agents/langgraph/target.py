@@ -6,6 +6,7 @@ from langgraph.types import interrupt
 
 from stock_agent.agents.context import ResearchContext
 from stock_agent.agents.langgraph.state import ResearchState
+from stock_agent.company.registry import lookup_security
 from stock_agent.company.resolver import TargetResolution, resolve_targets
 
 
@@ -37,11 +38,11 @@ async def resolve_target_node(
         解析原始 question。
 
     clarification 后再次进入：
-        将原始 question 与历次用户补充一起解析。
+        验证用户本次提交的结构化 ticker 列表。
 
     resolved_targets 可以包含一个或多个 ticker。
     """
-    text = state["target_clarification"]
+    answer = state["target_clarification"]
 
     request = state["request"]
 
@@ -50,7 +51,7 @@ async def resolve_target_node(
     # 自然语言 API 创建的请求 company_ids=[]，
     # 仍会走完整 Target Resolver。
     request_company_ids = request.company_ids
-    if text is None and request_company_ids:
+    if answer is None and request_company_ids:
         company_ids = merge_company_ids([], request_company_ids)
         return {
             "request": state["request"].model_copy(
@@ -59,15 +60,36 @@ async def resolve_target_node(
             "target_resolution": TargetResolution(resolved_targets=company_ids),
         }
 
-    if text is None:
-        target_text = state["request"].question
-    else:
-        target_text = (
-            f"{request.question}\n\n"
-            "用户后续补充的证券信息：\n"
-            f"{text}"
+    # resume
+    if answer is not None:
+        symbols = list(dict.fromkeys(item.strip().upper() for item in answer))
+        resolved = []
+        unresolved = []
+        for symbol in symbols:
+            security = lookup_security(
+                symbol,
+                fallback_provider_factory=runtime.context.market_provider_factory,
+            )
+
+            if security is None:
+                unresolved.append(symbol)
+            elif security.symbol not in resolved:
+                resolved.append(security.symbol)
+        company_ids = merge_company_ids(request_company_ids, resolved)
+
+        resolution = TargetResolution(
+            resolved_targets=company_ids,
+            unresolved_mentions=unresolved,
         )
 
+        return {
+            "request": request.model_copy(update={"company_ids": company_ids}),
+            "target_resolution": resolution,
+            "target_clarification": answer if unresolved else None,
+        }
+
+    # 首次请求
+    target_text = request.question
     resolution = await resolve_targets(
         target_text,
         model=model,
@@ -130,9 +152,8 @@ def clarify_target_node(
     暂停 Workflow，
     请求用户补充仍未确定的证券 target。
 
-    clarification 会累计保存，
-    下一轮 resolve_target_node
-    会与原始 question 一起重新解析。
+    resume answer 是用户本次提交的完整 ticker 列表，
+    下一轮 resolve_target_node 会逐个验证。
     """
     resolution = state["target_resolution"]
     if resolution is None:
@@ -165,17 +186,10 @@ def clarify_target_node(
             "unresolved_mentions": unresolved_mentions,
         }
     )
-
-    if not isinstance(answer, str) or not answer.strip():
-        raise RuntimeError("target clarification must be a non-empty string")
-
-    answer = answer.strip()
-
-    previous = state["target_clarification"]
-
-    if previous is None:
-        clarification = answer
-    else:
-        clarification = f"{previous}\n{answer}"
-
-    return {"target_clarification": clarification}
+    if (
+        not isinstance(answer, list)
+        or not answer
+        or any(not isinstance(item, str) or not item.strip() for item in answer)
+    ):
+        raise RuntimeError("target clarification must be a non-empty list of tickers")
+    return {"target_clarification": answer}

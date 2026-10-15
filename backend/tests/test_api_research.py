@@ -419,11 +419,23 @@ def test_resume_returns_404_for_unknown_workflow():
     with client_for(graph) as client:
         response = client.post(
             "/api/research/resume",
-            json={"thread_id": "missing", "answer": "NVDA"},
+            json={"thread_id": "missing", "answer": ["NVDA"]},
         )
 
     assert response.status_code == 404
     assert response.json() == {"detail": "Research workflow does not exist"}
+    assert graph.calls == []
+
+
+def test_resume_rejects_legacy_string_answer():
+    graph = FakeResearchGraph()
+    with client_for(graph) as client:
+        response = client.post(
+            "/api/research/resume",
+            json={"thread_id": "thread-1", "answer": "NVDA"},
+        )
+
+    assert response.status_code == 422
     assert graph.calls == []
 
 
@@ -442,7 +454,7 @@ def test_resume_uses_saved_request_and_same_thread_id():
     with client_for(graph) as client:
         response = client.post(
             "/api/research/resume",
-            json={"thread_id": "thread-1", "answer": "NVDA"},
+            json={"thread_id": "thread-1", "answer": ["NVDA"]},
         )
         graph.wait_for_calls(1)
 
@@ -452,7 +464,7 @@ def test_resume_uses_saved_request_and_same_thread_id():
         "status": "accepted",
     }
     command, kwargs = graph.calls[0]
-    assert command.resume == "NVDA"
+    assert command.resume == ["NVDA"]
     assert kwargs["config"] == {
         "configurable": {"thread_id": "thread-1"}
     }
@@ -475,7 +487,7 @@ def test_resume_runtime_failure_returns_safe_public_error():
     with client_for(graph, event_store) as client:
         response = client.post(
             "/api/research/resume",
-            json={"thread_id": "thread-1", "answer": "GOOGL"},
+            json={"thread_id": "thread-1", "answer": ["GOOGL"]},
         )
         failed = wait_for_event(event_store, "thread-1", "failed")
 
